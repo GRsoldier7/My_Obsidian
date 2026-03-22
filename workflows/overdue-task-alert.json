@@ -1,0 +1,296 @@
+{
+  "name": "Overdue Task Alert",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every Day at 8AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 460],
+      "notes": "Fires every day at 8:00 AM to scan for overdue tasks and send a summary notification."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─────────────────────────────────────────────────────────────\n// SCAN VAULT FOR OVERDUE TASKS\n// Recursively reads all .md files in the vault, finds tasks\n// matching: - [ ] ... [due:: YYYY-MM-DD] where due < today.\n// ─────────────────────────────────────────────────────────────\nconst fs = require('fs');\nconst path = require('path');\n\nconst vaultPath = $env.OBSIDIAN_VAULT_PATH || 'C:/Users/Admin/Desktop/Desktop Folders/Obsidian/Homelab';\n\nconst now = new Date();\nconst todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;\nconst todayDate = new Date(todayStr + 'T00:00:00');\n\n// Recursively collect all .md files\nfunction getMarkdownFiles(dir) {\n  let results = [];\n  try {\n    const entries = fs.readdirSync(dir, { withFileTypes: true });\n    for (const entry of entries) {\n      const fullPath = path.join(dir, entry.name);\n      // Skip hidden directories and .obsidian\n      if (entry.name.startsWith('.')) continue;\n      if (entry.name === 'node_modules') continue;\n      if (entry.isDirectory()) {\n        results = results.concat(getMarkdownFiles(fullPath));\n      } else if (entry.isFile() && entry.name.endsWith('.md')) {\n        results.push(fullPath);\n      }\n    }\n  } catch (err) {\n    // Skip directories that can't be read\n  }\n  return results;\n}\n\nconst taskPattern = /^\\s*- \\[ \\]\\s+(.+)$/gm;\nconst duePattern = /\\[due::\\s*(\\d{4}-\\d{2}-\\d{2})\\s*\\]/;\nconst areaPattern = /\\[area::\\s*(\\w+)\\s*\\]/;\nconst priorityPattern = /\\[priority::\\s*([A-C])\\s*\\]/;\n\nconst overdueTasks = [];\nconst mdFiles = getMarkdownFiles(vaultPath);\n\nfor (const filePath of mdFiles) {\n  try {\n    const content = fs.readFileSync(filePath, 'utf8');\n    let match;\n\n    // Reset regex lastIndex\n    taskPattern.lastIndex = 0;\n\n    while ((match = taskPattern.exec(content)) !== null) {\n      const taskLine = match[1];\n      const dueMatch = taskLine.match(duePattern);\n\n      if (!dueMatch) continue;\n\n      const dueDateStr = dueMatch[1];\n      const dueDate = new Date(dueDateStr + 'T00:00:00');\n\n      if (dueDate >= todayDate) continue;\n\n      // This task is overdue\n      const areaMatch = taskLine.match(areaPattern);\n      const priorityMatch = taskLine.match(priorityPattern);\n\n      // Extract clean task title (remove inline fields)\n      const cleanTitle = taskLine\n        .replace(/\\[area::\\s*\\w+\\s*\\]/g, '')\n        .replace(/\\[priority::\\s*[A-C]\\s*\\]/g, '')\n        .replace(/\\[due::\\s*\\d{4}-\\d{2}-\\d{2}\\s*\\]/g, '')\n        .replace(/\\s{2,}/g, ' ')\n        .trim();\n\n      const relativePath = path.relative(vaultPath, filePath).replace(/\\\\/g, '/');\n\n      overdueTasks.push({\n        title: cleanTitle,\n        area: areaMatch ? areaMatch[1] : 'unknown',\n        priority: priorityMatch ? priorityMatch[1] : 'none',\n        due: dueDateStr,\n        daysOverdue: Math.floor((todayDate.getTime() - dueDate.getTime()) / 86400000),\n        sourceFile: relativePath\n      });\n    }\n  } catch (err) {\n    // Skip files that can't be read\n    continue;\n  }\n}\n\n// Sort by priority (A first), then by days overdue (most overdue first)\noverdueTasks.sort((a, b) => {\n  const priorityOrder = { 'A': 0, 'B': 1, 'C': 2, 'none': 3 };\n  const pDiff = (priorityOrder[a.priority] || 3) - (priorityOrder[b.priority] || 3);\n  if (pDiff !== 0) return pDiff;\n  return b.daysOverdue - a.daysOverdue;\n});\n\nreturn [{\n  json: {\n    todayStr,\n    totalOverdue: overdueTasks.length,\n    tasks: overdueTasks,\n    hasOverdue: overdueTasks.length > 0\n  }\n}];"
+      },
+      "id": "scan-overdue-tasks",
+      "name": "Scan Overdue Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 460],
+      "notes": "Recursively scans all .md files in the vault for unchecked tasks (- [ ]) with a [due:: YYYY-MM-DD] field where the due date is before today. Extracts area, priority, and computes days overdue. Results sorted by priority then overdue days."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-overdue",
+              "leftValue": "={{ $json.hasOverdue }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "has-overdue-check",
+      "name": "Has Overdue?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [700, 460],
+      "notes": "Routes to the formatting node if overdue tasks exist, or to the 'all clear' node if none are found."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─────────────────────────────────────────────────────────────\n// FORMAT OVERDUE TASKS SUMMARY\n// Groups tasks by area, counts by priority, builds a markdown\n// summary suitable for notification delivery.\n// ─────────────────────────────────────────────────────────────\nconst { todayStr, totalOverdue, tasks } = $input.item.json;\n\n// Group by area\nconst byArea = {};\nfor (const task of tasks) {\n  const area = task.area || 'unknown';\n  if (!byArea[area]) byArea[area] = [];\n  byArea[area].push(task);\n}\n\n// Count by priority\nconst byPriority = { A: 0, B: 0, C: 0, none: 0 };\nfor (const task of tasks) {\n  const p = task.priority || 'none';\n  byPriority[p] = (byPriority[p] || 0) + 1;\n}\n\n// Build markdown summary\nlet md = `# Overdue Task Alert -- ${todayStr}\\n\\n`;\nmd += `**${totalOverdue} overdue task${totalOverdue !== 1 ? 's' : ''} found.**\\n\\n`;\n\n// Priority breakdown\nmd += `### Priority Breakdown\\n`;\nif (byPriority.A > 0) md += `- **Priority A (Urgent):** ${byPriority.A}\\n`;\nif (byPriority.B > 0) md += `- **Priority B (Important):** ${byPriority.B}\\n`;\nif (byPriority.C > 0) md += `- **Priority C (Backlog):** ${byPriority.C}\\n`;\nif (byPriority.none > 0) md += `- **No Priority:** ${byPriority.none}\\n`;\nmd += `\\n`;\n\n// Tasks by area\nmd += `### Tasks by Area\\n\\n`;\nconst areaNames = Object.keys(byArea).sort();\nfor (const area of areaNames) {\n  const areaTasks = byArea[area];\n  md += `#### ${area.charAt(0).toUpperCase() + area.slice(1)} (${areaTasks.length})\\n\\n`;\n  for (const t of areaTasks) {\n    const priorityTag = t.priority !== 'none' ? ` [${t.priority}]` : '';\n    md += `- ${t.title}${priorityTag} -- due ${t.due} (${t.daysOverdue}d overdue)\\n`;\n  }\n  md += `\\n`;\n}\n\n// Most critical (top 5 priority-A tasks)\nconst criticalTasks = tasks.filter(t => t.priority === 'A').slice(0, 5);\nif (criticalTasks.length > 0) {\n  md += `### Most Critical\\n\\n`;\n  for (const t of criticalTasks) {\n    md += `- **${t.title}** -- ${t.daysOverdue}d overdue (${t.sourceFile})\\n`;\n  }\n  md += `\\n`;\n}\n\nreturn [{\n  json: {\n    todayStr,\n    totalOverdue,\n    byPriority,\n    areaCount: areaNames.length,\n    summary: md,\n    hasOverdue: true\n  }\n}];"
+      },
+      "id": "format-summary",
+      "name": "Format Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [940, 360],
+      "notes": "Groups overdue tasks by area and counts by priority. Builds a structured markdown summary with priority breakdown, tasks listed per area, and a 'most critical' section highlighting top 5 priority-A tasks."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─────────────────────────────────────────────────────────────\n// ALL CLEAR: No overdue tasks\n// Generates a positive 'all clear' message for notification.\n// ─────────────────────────────────────────────────────────────\nconst { todayStr } = $input.item.json;\n\nconst md = `# Overdue Task Alert -- ${todayStr}\\n\\nAll clear! No overdue tasks found. Great job staying on top of things.\\n`;\n\nreturn [{\n  json: {\n    todayStr,\n    totalOverdue: 0,\n    summary: md,\n    hasOverdue: false\n  }\n}];"
+      },
+      "id": "all-clear",
+      "name": "All Clear Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [940, 560],
+      "notes": "Generates a positive 'all clear' notification when no overdue tasks are found in the vault."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.NOTIFICATION_WEBHOOK_URL || 'https://your-webhook-url.example.com/notify' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"source\": \"obsidian-overdue-task-alert\",\n  \"date\": \"{{ $json.todayStr }}\",\n  \"has_overdue\": {{ $json.hasOverdue }},\n  \"total_overdue\": {{ $json.totalOverdue }},\n  \"text\": {{ JSON.stringify($json.summary) }}\n}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "send-notification",
+      "name": "Send Notification (Webhook)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 460],
+      "notes": "Sends the summary to a generic webhook URL. Configure NOTIFICATION_WEBHOOK_URL env var to point to Slack, email relay, Pushover, ntfy, or any other notification service.",
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─────────────────────────────────────────────────────────────\n// COMPLETION SUMMARY\n// Logs the final result of the overdue task scan and notification.\n// ─────────────────────────────────────────────────────────────\nconst webhookResponse = $input.item.json;\n\n// Pull data from earlier nodes\nlet summaryData;\ntry {\n  summaryData = $('Format Summary').item.json;\n} catch (e) {\n  try {\n    summaryData = $('All Clear Message').item.json;\n  } catch (e2) {\n    summaryData = { todayStr: new Date().toISOString().slice(0, 10), totalOverdue: 0 };\n  }\n}\n\nconst webhookStatus = webhookResponse.statusCode || 'unknown';\nconst webhookSuccess = webhookResponse.statusCode && webhookResponse.statusCode >= 200 && webhookResponse.statusCode < 300;\n\nconst summary = {\n  timestamp: new Date().toISOString(),\n  date: summaryData.todayStr,\n  totalOverdue: summaryData.totalOverdue,\n  notificationSent: webhookSuccess,\n  webhookStatus: webhookStatus,\n  message: webhookSuccess\n    ? `Notification sent successfully. ${summaryData.totalOverdue} overdue task(s) reported.`\n    : `Notification delivery may have failed (HTTP ${webhookStatus}). ${summaryData.totalOverdue} overdue task(s) found.`\n};\n\nconsole.log(`Overdue Task Alert: ${summary.message}`);\n\nreturn [{ json: summary }];"
+      },
+      "id": "completion-summary",
+      "name": "Log Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 460],
+      "notes": "Final summary node. Logs the number of overdue tasks found and whether the webhook notification was delivered successfully."
+    },
+    {
+      "parameters": {
+        "content": "## Overdue Task Alert\n\n**Schedule:** Every day at 8:00 AM\n**Scans:** All `.md` files in vault recursively\n**Pattern:** `- [ ] ... [due:: YYYY-MM-DD]` where due < today\n\n### Environment Variables Required\n- `OBSIDIAN_VAULT_PATH` -- Path to Obsidian vault root\n- `NOTIFICATION_WEBHOOK_URL` -- Webhook URL for notifications\n  (Slack, email relay, Pushover, ntfy, etc.)\n\n### Flow\n1. Trigger fires at 8:00 AM daily\n2. Recursively scan all .md files for overdue tasks\n3. Group by area, count by priority\n4. Format markdown summary\n5. Send via webhook (or \"all clear\" if none)\n6. Log summary\n\n### Task Format Expected\n```\n- [ ] Task [area:: work] [priority:: A] [due:: 2026-03-20]\n```\n\n### Error Handling\n- Unreadable files/dirs are silently skipped\n- Webhook retries once on failure\n- Execution continues even if webhook fails",
+        "height": 680,
+        "width": 420,
+        "color": 4
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-60, 180]
+    },
+    {
+      "parameters": {
+        "content": "### 1. TRIGGER & SCAN\nCron: `0 8 * * *` (8:00 AM daily).\nRecursively finds all `- [ ]` tasks with `[due:: ...]` inline field where date is in the past. Skips `.obsidian/` and hidden dirs.",
+        "height": 180,
+        "width": 480,
+        "color": 6
+      },
+      "id": "sticky-trigger",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [180, 640]
+    },
+    {
+      "parameters": {
+        "content": "### 2. FORMAT\nGroups tasks by area (work, consulting, business, personal). Counts by priority (A/B/C). Highlights top 5 most critical. If none overdue, sends \"all clear\".",
+        "height": 160,
+        "width": 380,
+        "color": 6
+      },
+      "id": "sticky-format",
+      "name": "Sticky Note2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [900, 740]
+    },
+    {
+      "parameters": {
+        "content": "### 3. NOTIFY\nSends POST to webhook URL with JSON payload containing the markdown summary. Retries once on failure. Configure `NOTIFICATION_WEBHOOK_URL` env var.",
+        "height": 160,
+        "width": 340,
+        "color": 7
+      },
+      "id": "sticky-notify",
+      "name": "Sticky Note3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1160, 640]
+    },
+    {
+      "parameters": {
+        "content": "### 4. SUMMARY\nLogs total overdue count and webhook delivery status to n8n execution log.",
+        "height": 120,
+        "width": 280,
+        "color": 5
+      },
+      "id": "sticky-summary",
+      "name": "Sticky Note4",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1400, 640]
+    }
+  ],
+  "connections": {
+    "Every Day at 8AM": {
+      "main": [
+        [
+          {
+            "node": "Scan Overdue Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scan Overdue Tasks": {
+      "main": [
+        [
+          {
+            "node": "Has Overdue?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Overdue?": {
+      "main": [
+        [
+          {
+            "node": "Format Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "All Clear Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Summary": {
+      "main": [
+        [
+          {
+            "node": "Send Notification (Webhook)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "All Clear Message": {
+      "main": [
+        [
+          {
+            "node": "Send Notification (Webhook)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Notification (Webhook)": {
+      "main": [
+        [
+          {
+            "node": "Log Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "obsidian",
+      "id": "obsidian-tag"
+    },
+    {
+      "name": "overdue-tasks",
+      "id": "overdue-tasks-tag"
+    },
+    {
+      "name": "automation",
+      "id": "automation-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-21T00:00:00.000Z",
+  "versionId": "1"
+}

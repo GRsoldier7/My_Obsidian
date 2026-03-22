@@ -1,0 +1,236 @@
+{
+  "name": "Daily Note Creator",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every Day at 6AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 460],
+      "notes": "Fires every day at 6:00 AM to create the daily note before the day begins."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─────────────────────────────────────────────────────────────\n// CHECK IF TODAY'S DAILY NOTE ALREADY EXISTS\n// Looks for a file named YYYY-MM-DD.md in the daily notes folder.\n// ─────────────────────────────────────────────────────────────\nconst fs = require('fs');\nconst path = require('path');\n\nconst vaultPath = $env.OBSIDIAN_VAULT_PATH || 'C:/Users/Admin/Desktop/Desktop Folders/Obsidian/Homelab';\n\nconst now = new Date();\nconst year = now.getFullYear();\nconst month = String(now.getMonth() + 1).padStart(2, '0');\nconst day = String(now.getDate()).padStart(2, '0');\nconst dateStr = `${year}-${month}-${day}`;\n\n// Daily notes location\nconst dailyNotesDir = path.join(vaultPath, '40_Timeline_Weekly');\nconst dailyNoteFile = path.join(dailyNotesDir, `${dateStr}.md`);\n\nconst exists = fs.existsSync(dailyNoteFile);\n\n// Compute day-of-week name\nconst dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];\nconst dayName = dayNames[now.getDay()];\n\n// Compute ISO week number\nconst janFirst = new Date(year, 0, 1);\nconst dayOfYear = Math.ceil((now.getTime() - janFirst.getTime()) / 86400000);\nconst weekNumber = Math.ceil((dayOfYear + janFirst.getDay()) / 7);\nconst weekStr = `${year}-W${String(weekNumber).padStart(2, '0')}`;\n\nreturn [{\n  json: {\n    exists,\n    dateStr,\n    dayName,\n    weekStr,\n    dailyNoteFile,\n    dailyNotesDir,\n    vaultPath\n  }\n}];"
+      },
+      "id": "check-note-exists",
+      "name": "Check If Note Exists",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 460],
+      "notes": "Checks if YYYY-MM-DD.md already exists in 40_Timeline_Weekly/. Also computes day name, ISO week number, and all date metadata needed for the template."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "note-missing",
+              "leftValue": "={{ $json.exists }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "note-exists-check",
+      "name": "Note Missing?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [700, 460],
+      "notes": "If the daily note already exists, skip creation (exit via false branch). Only proceeds if the file does not exist."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─────────────────────────────────────────────────────────────\n// CREATE THE DAILY NOTE\n// Generates the daily note with frontmatter and standard sections\n// matching the vault's Daily Note template format.\n// ─────────────────────────────────────────────────────────────\nconst fs = require('fs');\nconst path = require('path');\n\nconst { dateStr, dayName, weekStr, dailyNoteFile, dailyNotesDir } = $input.item.json;\n\n// Ensure directory exists\nif (!fs.existsSync(dailyNotesDir)) {\n  fs.mkdirSync(dailyNotesDir, { recursive: true });\n}\n\n// Determine focus theme based on day of week\nconst focusThemes = {\n  'Monday': 'Planning & Priorities',\n  'Tuesday': 'Deep Work',\n  'Wednesday': 'Collaboration & Meetings',\n  'Thursday': 'Deep Work',\n  'Friday': 'Review & Wrap-Up',\n  'Saturday': 'Personal & Projects',\n  'Sunday': 'Rest & Reflection'\n};\nconst focusTheme = focusThemes[dayName] || 'General';\n\nconst content = `---\ndate: ${dateStr}\nday: ${dayName}\nweek: ${weekStr}\nfocus_theme: \"${focusTheme}\"\ntags:\n  - daily-note\n---\n\n# ${dayName}, ${dateStr}\n\n> **Focus Theme:** ${focusTheme}\n\n---\n\n## Top 3 Priorities\n\n- [ ] \n- [ ] \n- [ ] \n\n---\n\n## Tasks Captured\n\n\n\n---\n\n## Notes\n\n\n\n---\n\n## End of Day\n\n**What went well today?**\n\n\n**What could be improved?**\n\n\n**Carry forward to tomorrow:**\n\n- [ ] \n`;\n\ntry {\n  fs.writeFileSync(dailyNoteFile, content, 'utf8');\n  return [{\n    json: {\n      success: true,\n      file: dailyNoteFile,\n      dateStr,\n      dayName,\n      weekStr,\n      focusTheme,\n      message: `Daily note created: ${dateStr}.md`\n    }\n  }];\n} catch (err) {\n  return [{\n    json: {\n      success: false,\n      file: dailyNoteFile,\n      dateStr,\n      error: true,\n      errorMessage: `Failed to create daily note: ${err.message}`\n    }\n  }];\n}"
+      },
+      "id": "create-daily-note",
+      "name": "Create Daily Note",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [940, 360],
+      "notes": "Creates the daily note with frontmatter (date, day, week, focus_theme) and standard sections: Top 3 Priorities, Tasks Captured, Notes, End of Day. Focus theme is auto-assigned based on day of week."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─────────────────────────────────────────────────────────────\n// LOG: NOTE ALREADY EXISTS\n// Logs that the daily note was already present — no action taken.\n// ─────────────────────────────────────────────────────────────\nconst { dateStr, dailyNoteFile } = $input.item.json;\n\nconsole.log(`Daily note already exists for ${dateStr}, skipping creation.`);\n\nreturn [{\n  json: {\n    success: true,\n    skipped: true,\n    file: dailyNoteFile,\n    dateStr,\n    message: `Daily note already exists: ${dateStr}.md — no action taken`\n  }\n}];"
+      },
+      "id": "already-exists-log",
+      "name": "Already Exists (Skip)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [940, 560],
+      "notes": "Logs that the daily note already existed. No file is written. This is the expected path if the workflow runs more than once per day or if the user created the note manually."
+    },
+    {
+      "parameters": {
+        "jsCode": "// ─────────────────────────────────────────────────────────────\n// COMPLETION SUMMARY\n// Logs the final result of the daily note creation attempt.\n// ─────────────────────────────────────────────────────────────\nconst item = $input.item.json;\n\nconst summary = {\n  timestamp: new Date().toISOString(),\n  dateStr: item.dateStr,\n  file: item.file,\n  created: !item.skipped && item.success && !item.error,\n  skipped: item.skipped || false,\n  error: item.error || false,\n  message: item.message || item.errorMessage || 'Unknown'\n};\n\nconsole.log(`Daily Note Creator: ${summary.message}`);\n\nreturn [{ json: summary }];"
+      },
+      "id": "completion-summary",
+      "name": "Log Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 460],
+      "notes": "Final summary node. Logs whether the note was created, skipped (already existed), or failed with an error."
+    },
+    {
+      "parameters": {
+        "content": "## Daily Note Creator\n\n**Schedule:** Every day at 6:00 AM\n**Target:** `40_Timeline_Weekly/YYYY-MM-DD.md`\n\n### Environment Variables Required\n- `OBSIDIAN_VAULT_PATH` -- Path to Obsidian vault root\n\n### Flow\n1. Trigger fires at 6:00 AM daily\n2. Check if today's note (`YYYY-MM-DD.md`) already exists\n3. If missing: create with frontmatter + standard sections\n4. If exists: skip gracefully\n5. Log summary\n\n### Daily Note Sections\n- **Frontmatter:** date, day, week, focus_theme\n- **Top 3 Priorities** (empty checkboxes)\n- **Tasks Captured** (blank)\n- **Notes** (blank)\n- **End of Day** (reflection prompts + carry-forward)\n\n### Focus Themes by Day\n| Day | Theme |\n|-----|-------|\n| Mon | Planning & Priorities |\n| Tue/Thu | Deep Work |\n| Wed | Collaboration & Meetings |\n| Fri | Review & Wrap-Up |\n| Sat | Personal & Projects |\n| Sun | Rest & Reflection |",
+        "height": 660,
+        "width": 420,
+        "color": 4
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-60, 200]
+    },
+    {
+      "parameters": {
+        "content": "### 1. TRIGGER\nCron: `0 6 * * *` (6:00 AM daily).\nCreates the note before the workday starts.",
+        "height": 160,
+        "width": 300,
+        "color": 6
+      },
+      "id": "sticky-trigger",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [180, 640]
+    },
+    {
+      "parameters": {
+        "content": "### 2. CHECK & CREATE\nUses `fs.existsSync()` to avoid overwriting existing notes.\nComputes all date metadata (day name, ISO week) for frontmatter.",
+        "height": 160,
+        "width": 380,
+        "color": 6
+      },
+      "id": "sticky-check",
+      "name": "Sticky Note2",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [420, 640]
+    },
+    {
+      "parameters": {
+        "content": "### 3. SUMMARY\nLogs whether the note was created, skipped, or errored.\nIdempotent -- safe to run multiple times per day.",
+        "height": 140,
+        "width": 300,
+        "color": 5
+      },
+      "id": "sticky-summary",
+      "name": "Sticky Note3",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [1160, 640]
+    }
+  ],
+  "connections": {
+    "Every Day at 6AM": {
+      "main": [
+        [
+          {
+            "node": "Check If Note Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check If Note Exists": {
+      "main": [
+        [
+          {
+            "node": "Note Missing?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Note Missing?": {
+      "main": [
+        [
+          {
+            "node": "Create Daily Note",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Already Exists (Skip)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Daily Note": {
+      "main": [
+        [
+          {
+            "node": "Log Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already Exists (Skip)": {
+      "main": [
+        [
+          {
+            "node": "Log Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "obsidian",
+      "id": "obsidian-tag"
+    },
+    {
+      "name": "daily-note",
+      "id": "daily-note-tag"
+    },
+    {
+      "name": "automation",
+      "id": "automation-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-21T00:00:00.000Z",
+  "versionId": "1"
+}
