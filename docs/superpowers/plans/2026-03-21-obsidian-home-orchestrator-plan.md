@@ -16,6 +16,33 @@
 
 ---
 
+## Task 0: Pre-Implementation Checklist
+
+- [ ] **Step 1: Backup vault via Remotely-Save**
+
+Open Obsidian → Settings → Remotely Save → "Run Sync Now". Wait for sync to complete. This creates a cloud backup of the current vault state before any changes.
+
+- [ ] **Step 2: Baseline Dataview verification**
+
+Open each existing dashboard in Obsidian and confirm all Dataview queries render correctly:
+- Mission Control — all sections render
+- Work - Parallon — tasks show
+- Work - Consulting — queries render (may be empty)
+- Work - BusinessStartup — tasks show
+- Personal & Life — tasks show
+- The Catch All — untagged tasks show
+
+Screenshot or note any existing issues so they are not confused with implementation problems.
+
+- [ ] **Step 3: Confirm vault path accessible**
+
+Verify the vault path is reachable from both the local machine and the MiniPC:
+```bash
+ls "C:/Users/Admin/Desktop/Desktop Folders/Obsidian/Homelab/000_Master Dashboard/"
+```
+
+---
+
 ## File Structure
 
 ### Vault Files (Obsidian — existing, enhanced)
@@ -66,6 +93,7 @@ Use the Obsidian MCP `create_directory` tool or filesystem to create:
 09_Archives/legacy/
 10_Active Projects/Active Consulting/
 10_Active Projects/Active Business/
+20_Domains (Life and Work)/Career/Consulting/
 ```
 
 - [ ] **Step 2: Verify folders exist**
@@ -471,8 +499,10 @@ Use Obsidian MCP `read_file` on `05_Templates/Daily Note.md`.
 In the frontmatter section (between `---` markers), add:
 
 ```yaml
-focus_theme::
+focus_theme:
 ```
+
+Note: Single colon for YAML frontmatter, not double-colon (which is for inline fields in note body).
 
 - [ ] **Step 3: Add brain dump link**
 
@@ -927,7 +957,59 @@ git commit -m "docs: add ADR-001 brain dump output strategy"
 
 ---
 
-## Task 12: End-to-End Brain Dump Test
+## Task 12: Create n8n Brain Dump Processor Workflow
+
+**Files:**
+- Create: `Z:\MiniPC_Docker_Automation\Projects_Repos\ObsidianHomeOrchestrator\workflows\brain-dump-processor.json`
+
+**Vault Access Strategy:** The n8n Docker container on MiniPC needs filesystem access to the Obsidian vault. Choose ONE during this task:
+- **Option A (SMB share):** Mount the vault folder from the Windows desktop as a network share in the Docker container. Add to `docker-compose.yml` volumes.
+- **Option B (Shared NAS):** If the vault is on the NAS at `\\192.168.1.240`, mount that path in Docker.
+- **Option C (Remotely-Save cloud):** Use n8n to read/write via the same cloud storage Remotely-Save uses.
+
+- [ ] **Step 1: Determine vault access path for n8n Docker**
+
+Check where n8n can reach the vault. If the vault is on the NAS (the project repo is at `//192.168.1.240/home/`), the vault may also be accessible from there. Otherwise, set up an SMB mount.
+
+Determine the vault path as seen from inside the n8n Docker container and set it as env var `OBSIDIAN_VAULT_PATH`.
+
+- [ ] **Step 2: Create n8n workflow**
+
+In n8n UI (http://YOUR_MINIPC_IP:5678):
+
+1. **Schedule Trigger** node: Interval = 5 minutes
+2. **Execute Command** node:
+   - Command: `python /path/to/scripts/process_brain_dump.py --vault-path $OBSIDIAN_VAULT_PATH`
+   - Working Directory: project scripts directory
+   - Environment: `ANTHROPIC_API_KEY` from n8n credentials
+3. **IF** node: Check if stdout contains "ERROR"
+4. **Success path:** No-op (logging)
+5. **Error path:** Optional notification (Slack/email/webhook)
+
+Alternative approach if Python not available in n8n container:
+- Use **HTTP Request** nodes to call Claude API directly from n8n
+- Use **Read/Write File** nodes for vault access
+- Use **Code** node for JSON parsing and task extraction
+
+- [ ] **Step 3: Export workflow JSON**
+
+In n8n: select the workflow → Menu → Export → save as `brain-dump-processor.json`.
+Copy to `Z:\MiniPC_Docker_Automation\Projects_Repos\ObsidianHomeOrchestrator\workflows\brain-dump-processor.json`
+
+- [ ] **Step 4: Test workflow fires on schedule**
+
+Activate the workflow in n8n. Wait 5 minutes. Check n8n execution log — should show "No unprocessed brain dumps found." on first run.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add workflows/brain-dump-processor.json
+git commit -m "feat: add n8n Brain Dump Processor workflow export"
+```
+
+---
+
+## Task 13: End-to-End Brain Dump Test
 
 - [ ] **Step 1: Create a test brain dump in the vault**
 
