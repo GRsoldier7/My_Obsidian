@@ -33,9 +33,11 @@ AREA_FOLDER_MAP: dict[str, str] = {
     "work": "20_Domains (Life and Work)/Career/Parallon",
     "consulting": "20_Domains (Life and Work)/Career/Consulting",
     "business": "20_Domains (Life and Work)/Personal/Business Ideas & Projects",
+    "family": "20_Domains (Life and Work)/Personal/Family",
     "personal": "20_Domains (Life and Work)/Personal",
     "faith": "30_Knowledge Library/Bible Studies & Notes",
     "health": "30_Knowledge Library/Biohacking",
+    "home": "20_Domains (Life and Work)/Personal/Home",
 }
 
 VALID_AREAS = set(AREA_FOLDER_MAP.keys())
@@ -51,11 +53,13 @@ You are an assistant that processes brain dumps for Aaron.
 
 Context about Aaron:
 - Business Analytics Manager at Parallon (area: work)
-- AI automation consultant (area: consulting)
-- Business ventures including Echelon Seven (area: business)
-- Person of faith with Bible study work (area: faith)
-- Biohacking / supplements / fitness (area: health)
-- Family / parenting / homelab / social media (area: personal)
+- AI automation consultant with active engagements (area: consulting)
+- Business ventures including Echelon Seven startup (area: business)
+- Husband and father — family decisions and relationships (area: family)
+- Person of faith with Bible study and social media ministry (area: faith)
+- Biohacking / supplements / fitness / hip health (area: health)
+- Home projects, MI property, homelab tech tinkering (area: home)
+- AI hobby projects, general life admin, miscellaneous (area: personal)
 
 Given a brain dump, extract:
 1. **Tasks** - actionable items with a short description, an area, a priority, \
@@ -63,7 +67,7 @@ and an optional due date.
 2. **Notes** - non-actionable information, ideas, or reference material, each \
 tagged with an area.
 
-Valid areas: work, consulting, business, personal, faith, health
+Valid areas: work, consulting, business, family, personal, faith, health, home
 Valid priorities: A, B, C
 If uncertain, default to area=personal and priority=B.
 

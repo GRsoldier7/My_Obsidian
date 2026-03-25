@@ -28,5 +28,8 @@ node_modules/
 .vscode/
 .idea/
 
+# Claude Code (contains session permissions, may log sensitive command args)
+.claude/settings.local.json
+
 # Logs
 *.log

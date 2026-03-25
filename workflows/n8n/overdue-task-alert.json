@@ -1,0 +1,203 @@
+{
+  "name": "⚠️ Overdue Task Alert — 8AM Daily",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## ⚠️ Overdue Task Alert\n\n**Schedule:** 8:00 AM every day\n**Scans:** Master Task List + processed inbox in MinIO\n**Output:** Email to aaron.deyoung@gmail.com\n\n### Setup\n- Credential `MinIO — obsidian-vault` must exist\n- Credential `Gmail SMTP` must exist\n\n### Task Format Detected\n```\n- [ ] Task [area:: work] [priority:: A] [due:: 2026-03-20]\n```",
+        "height": 380,
+        "width": 360,
+        "color": 2
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every Day at 8AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define the files to scan for overdue tasks.\nconst BUCKET = 'obsidian-vault';\nconst filesToScan = [\n  { bucket: BUCKET, fileKey: 'Homelab/10_Active Projects/Active Personal/!!! MASTER TASK LIST.md', label: 'Master Task List' }\n];\n\n// Today in Central Time\nconst TZ = 'America/Chicago';\nconst now = new Date();\nconst fmt = (opts) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...opts });\nconst y = parseInt(fmt({ year: 'numeric' }).format(now));\nconst m = fmt({ month: '2-digit' }).format(now);\nconst d = fmt({ day: '2-digit' }).format(now);\nconst todayStr = `${y}-${m}-${d}`;\n\nreturn filesToScan.map(f => ({ json: { ...f, todayStr } }));"
+      },
+      "id": "define-scan-targets",
+      "name": "Define Files to Scan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "bucketName": "={{ $json.bucket }}",
+        "fileKey": "={{ $json.fileKey }}",
+        "options": {}
+      },
+      "id": "download-file",
+      "name": "S3: Download File",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        700,
+        460
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Scan file content for overdue tasks\nconst meta = $('Define Files to Scan').item.json;\nconst todayStr = meta.todayStr;\nconst todayDate = new Date(todayStr + 'T00:00:00');\n\nconst binaryKey = Object.keys($input.item.binary || {})[0] || 'data';\nconst binaryData = $input.item.binary?.[binaryKey];\nif (!binaryData?.data) {\n  return [{ json: { overdueTasks: [], fileLabel: meta.label, error: 'Could not read file' } }];\n}\n\nconst content = Buffer.from(binaryData.data, 'base64').toString('utf-8');\n\nconst taskPattern = /^\\s*- \\[ \\]\\s+(.+)$/gm;\nconst duePattern = /\\[due::\\s*(\\d{4}-\\d{2}-\\d{2})\\s*\\]/;\nconst areaPattern = /\\[area::\\s*(\\w+)\\s*\\]/;\nconst priorityPattern = /\\[priority::\\s*([A-C])\\s*\\]/i;\n\nconst overdueTasks = [];\nlet match;\ntaskPattern.lastIndex = 0;\n\nwhile ((match = taskPattern.exec(content)) !== null) {\n  const taskLine = match[1];\n  const dueMatch = taskLine.match(duePattern);\n  if (!dueMatch) continue;\n\n  const dueDateStr = dueMatch[1];\n  const dueDate = new Date(dueDateStr + 'T00:00:00');\n  if (dueDate >= todayDate) continue;\n\n  const areaMatch = taskLine.match(areaPattern);\n  const priorityMatch = taskLine.match(priorityPattern);\n  const daysOverdue = Math.floor((todayDate - dueDate) / 86400000);\n\n  const cleanTitle = taskLine\n    .replace(/\\[area::[^\\]]+\\]/g, '')\n    .replace(/\\[priority::[^\\]]+\\]/g, '')\n    .replace(/\\[due::[^\\]]+\\]/g, '')\n    .replace(/\\s{2,}/g, ' ')\n    .trim();\n\n  const AREA_EMOJI = { faith:'🙏', family:'💒', business:'🚀', consulting:'💼', work:'🏥', health:'💪', home:'🏠', personal:'🤖' };\n  const area = areaMatch ? areaMatch[1] : 'unknown';\n\n  overdueTasks.push({\n    title: cleanTitle,\n    area,\n    emoji: AREA_EMOJI[area] || '📌',\n    priority: priorityMatch ? priorityMatch[1].toUpperCase() : 'none',\n    due: dueDateStr,\n    daysOverdue,\n    sourceFile: meta.label\n  });\n}\n\noverdueTasks.sort((a, b) => {\n  const po = { A:0, B:1, C:2, none:3 };\n  const pd = (po[a.priority] || 3) - (po[b.priority] || 3);\n  return pd !== 0 ? pd : b.daysOverdue - a.daysOverdue;\n});\n\nreturn [{ json: { overdueTasks, fileLabel: meta.label, todayStr } }];"
+      },
+      "id": "scan-overdue",
+      "name": "Scan for Overdue Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build HTML digest email for overdue tasks\nconst items = $input.all();\nconst todayStr = items[0]?.json.todayStr || new Date().toISOString().split('T')[0];\n\nconst allTasks = items.flatMap(i => i.json.overdueTasks || []);\n\nallTasks.sort((a, b) => {\n  const po = { A:0, B:1, C:2, none:3 };\n  return (po[a.priority]||3) - (po[b.priority]||3) || b.daysOverdue - a.daysOverdue;\n});\n\nif (allTasks.length === 0) {\n  const html = `<html><body style=\"font-family:system-ui;max-width:600px;margin:0 auto;padding:24px\">\n    <h1>✅ All Clear — ${todayStr}</h1>\n    <p style=\"color:#4caf50;font-size:1.1em\">No overdue tasks found. Great work staying on top of things!</p>\n  </body></html>`;\n  return [{ json: { subject: `✅ All Clear — No Overdue Tasks · ${todayStr}`, html, totalOverdue: 0 } }];\n}\n\nconst byPriority = allTasks.reduce((acc, t) => { acc[t.priority] = (acc[t.priority]||0)+1; return acc; }, {});\n\nconst PRIORITY_COLOR = { A:'#ff6b6b', B:'#f5a623', C:'#4ecdc4', none:'#888' };\n\nconst taskRows = allTasks.map(t => `\n  <tr style=\"border-bottom:1px solid #2a2a3e\">\n    <td style=\"padding:10px 8px\">${t.emoji} ${t.title}</td>\n    <td style=\"padding:10px 8px;text-align:center\"><span style=\"background:${PRIORITY_COLOR[t.priority]||'#888'};color:#000;padding:2px 8px;border-radius:12px;font-weight:700\">${t.priority}</span></td>\n    <td style=\"padding:10px 8px;color:#f5a623\">${t.due}</td>\n    <td style=\"padding:10px 8px;color:#ff6b6b;font-weight:700\">${t.daysOverdue}d</td>\n    <td style=\"padding:10px 8px;color:#888;font-size:0.85em\">${t.area}</td>\n  </tr>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"background:#13131f;color:#e0e0f0;font-family:system-ui,sans-serif;max-width:680px;margin:0 auto;padding:24px\">\n  <div style=\"background:linear-gradient(135deg,#ff6b6b,#ee0979);border-radius:16px;padding:28px 32px;margin-bottom:24px\">\n    <h1 style=\"margin:0;color:#fff\">⚠️ Overdue Task Alert</h1>\n    <p style=\"margin:8px 0 0;color:rgba(255,255,255,0.8)\">${todayStr} &bull; ${allTasks.length} overdue item${allTasks.length!==1?'s':''}</p>\n  </div>\n  <div style=\"display:flex;gap:12px;margin-bottom:24px\">\n    ${['A','B','C'].filter(p=>byPriority[p]).map(p=>`\n    <div style=\"flex:1;background:#1e1e2e;border-radius:12px;padding:16px;text-align:center\">\n      <div style=\"font-size:2em;font-weight:700;color:${PRIORITY_COLOR[p]}\">${byPriority[p]}</div>\n      <div style=\"color:#888\">Priority ${p}</div>\n    </div>`).join('')}\n  </div>\n  <table style=\"width:100%;border-collapse:collapse;background:#1e1e2e;border-radius:12px;overflow:hidden\">\n    <thead><tr style=\"background:#2a2a3e\">\n      <th style=\"padding:12px 8px;text-align:left\">Task</th>\n      <th style=\"padding:12px 8px\">P</th>\n      <th style=\"padding:12px 8px;text-align:left\">Due</th>\n      <th style=\"padding:12px 8px;text-align:left\">Overdue</th>\n      <th style=\"padding:12px 8px;text-align:left\">Area</th>\n    </tr></thead>\n    <tbody>${taskRows}</tbody>\n  </table>\n  <p style=\"color:#555;margin-top:24px;font-size:0.85em\">These tasks have passed their due date. Open Obsidian to update or complete them.</p>\n</body></html>`;\n\nreturn [{ json: { subject: `⚠️ ${allTasks.length} Overdue Task${allTasks.length!==1?'s':''} — ${byPriority.A||0} Priority A · ${todayStr}`, html, totalOverdue: allTasks.length } }];"
+      },
+      "id": "build-email",
+      "name": "Build Alert Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "aaron.deyoung@gmail.com",
+        "toEmail": "aaron.deyoung@gmail.com",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1420,
+        460
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lWGOwsktldwb3iEj",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Day at 8AM": {
+      "main": [
+        [
+          {
+            "node": "Define Files to Scan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Define Files to Scan": {
+      "main": [
+        [
+          {
+            "node": "S3: Download File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Download File": {
+      "main": [
+        [
+          {
+            "node": "Scan for Overdue Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scan for Overdue Tasks": {
+      "main": [
+        [
+          {
+            "node": "Build Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert Email": {
+      "main": [
+        [
+          {
+            "node": "Send Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "America/Chicago"
+  },
+  "tags": [
+    {
+      "name": "obsidian",
+      "id": "obsidian-tag"
+    },
+    {
+      "name": "overdue-tasks",
+      "id": "overdue-tasks-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-24T00:00:00.000Z",
+  "versionId": "2"
+}

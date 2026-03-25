@@ -1,0 +1,245 @@
+{
+  "name": "📊 Weekly Needle Mover Digest — Sunday 6PM",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📊 Weekly Needle Mover Digest\n\n**Schedule:** Every Sunday at 6:00 PM CT\n**Source:** Reads North Star.md + Master Task List from MinIO\n**Output:** Full HTML digest email with rock statuses, Priority A tasks, and reflection prompts\n\n### Setup\n- Credential `MinIO — obsidian-vault` must exist\n- Credential `Gmail SMTP` must exist\n- North Star.md must have `nm-progress-[area]::` inline fields\n\n### Expected North Star.md Fields\n```\n[nm-progress-faith:: 35%]\n[nm-progress-family:: 0%]\n[nm-progress-business:: 25%]\n[nm-progress-work:: 0%]\n[nm-progress-health:: 0%]\n```\n\n### Test\nRun manually any time to preview the email.",
+        "height": 500,
+        "width": 400,
+        "color": 5
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * 0"
+            }
+          ]
+        }
+      },
+      "id": "schedule-sunday",
+      "name": "Every Sunday at 6PM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        380,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "Homelab/000_Master Dashboard/North Star.md",
+        "options": {}
+      },
+      "id": "get-north-star",
+      "name": "S3: Get North Star",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        620,
+        360
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "Homelab/10_Active Projects/Active Personal/!!! MASTER TASK LIST.md",
+        "options": {}
+      },
+      "id": "get-master-list",
+      "name": "S3: Get Master Task List",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        620,
+        560
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      },
+      "id": "merge-downloads",
+      "name": "Merge Downloads",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        750,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ════════════════════════════════════════════════════════\n// PARSE NORTH STAR + MASTER TASK LIST\n// Extracts rock statuses, Priority A tasks, and builds\n// all data needed for the weekly digest email.\n// ════════════════════════════════════════════════════════\n\nconst nsBinary = $('S3: Get North Star').first().binary;\nconst mtlBinary = $('S3: Get Master Task List').first().binary;\n\nfunction extractText(binaryObj) {\n  const key = Object.keys(binaryObj || {})[0];\n  if (!key || !binaryObj[key]?.data) return '';\n  return Buffer.from(binaryObj[key].data, 'base64').toString('utf-8');\n}\n\nconst nsContent = extractText(nsBinary);\nconst mtlContent = extractText(mtlBinary);\n\nconst ROCKS = [\n  { area: 'faith',      emoji: '🙏', pillar: 'Faith & Spiritual Growth',     rock: 'Launch the Social Media Bible Study',      field: 'nm-progress-faith' },\n  { area: 'family',     emoji: '💒', pillar: 'Marriage & Family',             rock: 'Marriage Alignment with Christy',           field: 'nm-progress-family' },\n  { area: 'business',   emoji: '🚀', pillar: 'Business & Consulting',         rock: 'Ship the MVP — Echelon Seven',             field: 'nm-progress-business' },\n  { area: 'work',       emoji: '🏥', pillar: 'Career (Parallon)',             rock: 'Deliver Union Project + Position for Exit', field: 'nm-progress-work' },\n  { area: 'health',     emoji: '💪', pillar: 'Health & Home',                 rock: 'Hip Decision + 3x/week Gym for 8 Weeks',   field: 'nm-progress-health' }\n];\n\n// Extract progress from North Star inline fields\nfunction getProgress(content, field) {\n  const rx = new RegExp(`\\\\[${field}::\\\\s*([\\\\d]+)%?\\\\s*\\\\]`, 'i');\n  const m = content.match(rx);\n  return m ? parseInt(m[1]) : 0;\n}\n\nconst rocks = ROCKS.map(r => ({\n  ...r,\n  progress: getProgress(nsContent, r.field),\n  status: (() => {\n    const p = getProgress(nsContent, r.field);\n    if (p === 0) return { label: 'Not Started', color: '#555' };\n    if (p < 25) return { label: 'Just Starting', color: '#f5a623' };\n    if (p < 75) return { label: 'In Progress', color: '#4ecdc4' };\n    if (p < 100) return { label: 'Almost Done', color: '#667eea' };\n    return { label: 'Complete! 🎉', color: '#4caf50' };\n  })()\n}));\n\n// Extract open Priority A tasks from MTL\nconst taskRx = /^\\s*- \\[ \\]\\s+(.+)$/gm;\nconst areaRx = /\\[area::\\s*(\\w+)\\s*\\]/;\nconst priorityRx = /\\[priority::\\s*A\\s*\\]/i;\nconst dueRx = /\\[due::\\s*(\\d{4}-\\d{2}-\\d{2})\\s*\\]/;\n\nconst AREA_EMOJI = { faith:'🙏', family:'💒', business:'🚀', consulting:'💼', work:'🏥', health:'💪', home:'🏠', personal:'🤖' };\nconst today = new Date();\nconst todayStr = today.toISOString().split('T')[0];\n\nconst priorityATasks = [];\nlet taskMatch;\ntaskRx.lastIndex = 0;\n\nwhile ((taskMatch = taskRx.exec(mtlContent)) !== null) {\n  const line = taskMatch[1];\n  if (!priorityRx.test(line)) continue;\n  const areaMatch = line.match(areaRx);\n  const dueMatch = line.match(dueRx);\n  const area = areaMatch ? areaMatch[1] : 'personal';\n  const cleanTitle = line.replace(/\\[[^\\]]+::[^\\]]+\\]/g, '').trim();\n  const due = dueMatch ? dueMatch[1] : null;\n  const isOverdue = due && new Date(due + 'T00:00:00') < today;\n  priorityATasks.push({ title: cleanTitle, area, emoji: AREA_EMOJI[area] || '📌', due, isOverdue });\n}\n\nreturn [{ json: { rocks, priorityATasks, todayStr, nsContent: nsContent.slice(0, 200) } }];"
+      },
+      "id": "parse-data",
+      "name": "Parse North Star + Task List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ════════════════════════════════════════════════════════\n// BUILD WEEKLY DIGEST HTML EMAIL\n// ════════════════════════════════════════════════════════\nconst { rocks, priorityATasks, todayStr } = $input.item.json;\n\nfunction progressBar(pct, color) {\n  const w = Math.min(100, Math.max(0, pct));\n  return `<div style=\"background:#2a2a3e;border-radius:8px;height:12px;width:100%;overflow:hidden;margin:8px 0\">\n    <div style=\"width:${w}%;background:${color};height:100%;border-radius:8px;transition:width 0.3s\"></div>\n  </div><span style=\"font-size:0.8em;color:#888\">${w}% complete</span>`;\n}\n\nconst rockCards = rocks.map(r => `\n  <div style=\"background:#1e1e2e;border-radius:12px;padding:20px;margin:12px 0;border-left:4px solid ${r.status.color}\">\n    <div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:8px\">\n      <h3 style=\"margin:0;color:#e0e0f0\">${r.emoji} ${r.pillar}</h3>\n      <span style=\"background:${r.status.color};color:#000;font-size:0.75em;padding:3px 10px;border-radius:12px;font-weight:700\">${r.status.label}</span>\n    </div>\n    <p style=\"margin:0 0 8px;color:#a0a0b0;font-style:italic\">&ldquo;${r.rock}&rdquo;</p>\n    ${progressBar(r.progress, r.status.color)}\n  </div>`).join('');\n\nconst taskRowsByArea = {};\nfor (const t of priorityATasks) {\n  if (!taskRowsByArea[t.area]) taskRowsByArea[t.area] = [];\n  taskRowsByArea[t.area].push(t);\n}\n\nconst taskSection = priorityATasks.length === 0\n  ? '<p style=\"color:#888\">No open Priority A tasks. Clean slate! 🎉</p>'\n  : Object.entries(taskRowsByArea).map(([area, tasks]) => `\n    <h4 style=\"color:#a0a0b0;margin:16px 0 8px\">${tasks[0].emoji} ${area.charAt(0).toUpperCase()+area.slice(1)}</h4>\n    ${tasks.map(t => `\n      <div style=\"background:#1e1e2e;border-radius:8px;padding:10px 14px;margin:6px 0;${t.isOverdue?'border-left:3px solid #ff6b6b':''}\">     \n        ${t.isOverdue ? '🔴 ' : ''}${t.title}${t.due ? ` <span style=\"color:#888;font-size:0.8em\">(${t.isOverdue?'OVERDUE — ':''}${t.due})</span>` : ''}\n      </div>`).join('')}`).join('');\n\nconst overallPct = Math.round(rocks.reduce((s, r) => s + r.progress, 0) / rocks.length);\n\nconst weekNumber = Math.ceil((new Date() - new Date(new Date().getFullYear(), 0, 1)) / 604800000);\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"background:#13131f;color:#e0e0f0;font-family:system-ui,sans-serif;max-width:700px;margin:0 auto;padding:24px\">\n  <div style=\"background:linear-gradient(135deg,#667eea,#764ba2);border-radius:20px;padding:32px;margin-bottom:28px\">\n    <h1 style=\"margin:0;color:#fff;font-size:1.8em\">📊 Weekly Needle Mover Digest</h1>\n    <p style=\"margin:8px 0 0;color:rgba(255,255,255,0.8)\">Week ${weekNumber} · ${todayStr} · Q2 2026</p>\n    <div style=\"margin-top:16px\">\n      <span style=\"color:rgba(255,255,255,0.7)\">Overall Q2 Progress:</span>\n      <div style=\"background:rgba(255,255,255,0.2);border-radius:8px;height:16px;margin-top:6px;overflow:hidden\">\n        <div style=\"width:${overallPct}%;background:#fff;height:100%;border-radius:8px\"></div>\n      </div>\n      <span style=\"color:rgba(255,255,255,0.9);font-weight:700\">${overallPct}% across all 5 rocks</span>\n    </div>\n  </div>\n\n  <h2 style=\"color:#e0e0f0;border-bottom:1px solid #2a2a3e;padding-bottom:8px\">🎯 Q2 Quarterly Rocks</h2>\n  ${rockCards}\n\n  <h2 style=\"color:#e0e0f0;border-bottom:1px solid #2a2a3e;padding-bottom:8px;margin-top:32px\">🔴 Open Priority A Tasks (${priorityATasks.length})</h2>\n  ${taskSection}\n\n  <div style=\"background:#1e1e2e;border-radius:12px;padding:20px;margin-top:28px\">\n    <h3 style=\"margin:0 0 12px;color:#667eea\">📋 Weekly Review Prompts</h3>\n    <ol style=\"color:#a0a0b0;margin:0;padding-left:20px\">\n      <li style=\"margin:8px 0\">Which rock moved this week — and what drove it?</li>\n      <li style=\"margin:8px 0\">Which rock is stalling — and what's the one next action?</li>\n      <li style=\"margin:8px 0\">What are your Top 3 needle movers for next week?</li>\n      <li style=\"margin:8px 0\">Did you live according to your faith and values?</li>\n      <li style=\"margin:8px 0\">Is there anything to celebrate or be grateful for?</li>\n    </ol>\n  </div>\n\n  <hr style=\"border:1px solid #2a2a3e;margin:28px 0\">\n  <p style=\"color:#444;font-size:0.8em\">Sent every Sunday at 6PM CT · ObsidianHomeOrchestrator</p>\n</body></html>`;\n\nreturn [{\n  json: {\n    subject: `📊 Weekly Digest — ${overallPct}% Q2 Progress · ${priorityATasks.length} Priority A Open · ${todayStr}`,\n    html\n  }\n}];"
+      },
+      "id": "build-digest",
+      "name": "Build Weekly Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "aaron.deyoung@gmail.com",
+        "toEmail": "aaron.deyoung@gmail.com",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-digest",
+      "name": "Send Weekly Digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        1360,
+        460
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lWGOwsktldwb3iEj",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Sunday at 6PM": {
+      "main": [
+        [
+          {
+            "node": "S3: Get North Star",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S3: Get Master Task List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Get North Star": {
+      "main": [
+        [
+          {
+            "node": "Merge Downloads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Get Master Task List": {
+      "main": [
+        [
+          {
+            "node": "Merge Downloads",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Downloads": {
+      "main": [
+        [
+          {
+            "node": "Parse North Star + Task List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse North Star + Task List": {
+      "main": [
+        [
+          {
+            "node": "Build Weekly Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Weekly Digest": {
+      "main": [
+        [
+          {
+            "node": "Send Weekly Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "America/Chicago"
+  },
+  "tags": [
+    {
+      "name": "obsidian",
+      "id": "obsidian-tag"
+    },
+    {
+      "name": "weekly-digest",
+      "id": "weekly-digest-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-24T00:00:00.000Z",
+  "versionId": "1"
+}

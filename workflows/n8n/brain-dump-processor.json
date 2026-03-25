@@ -1,0 +1,487 @@
+{
+  "name": "🧠 Brain Dump Processor — Daily 7AM",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🧠 Brain Dump Processor\n\n**Schedule:** 7:00 AM daily\n**Source:** MinIO `obsidian-vault` bucket, 8 brain dump files\n**Output:** Tasks appended to Master Task List; brain dumps cleared; digest email sent\n\n### ⚙️ SETUP REQUIRED BEFORE FIRST RUN\n1. **MinIO S3 credential** in n8n → Settings → Credentials:\n   - Name: `MinIO — obsidian-vault`\n   - Type: AWS\n   - Region: `us-east-1`\n   - Access Key: (from .env MINIO_ACCESS_KEY)\n   - Secret: (from .env MINIO_SECRET_KEY)\n   - Custom Endpoint: http://192.168.1.240:9000\n   - Force path style: ✅\n2. **SMTP credential** in n8n → Settings → Credentials:\n   - Name: `Gmail SMTP`\n   - Type: SMTP\n   - Host/Port: smtp.gmail.com:587\n   - User: aaron.deyoung@gmail.com\n   - Password: Gmail App Password\n3. **Verify** Remotely Save syncs to `obsidian-vault` bucket\n4. **Verify** 8 brain dump files exist in vault with `domain:` frontmatter\n5. Toggle workflow **Active**\n\n### Brain Dump File → Domain Map\n| File | Domain |\n|------|--------|\n| BrainDump — Faith.md | Faith |\n| BrainDump — Family.md | Family |\n| BrainDump — Business (Echelon Seven).md | Business |\n| BrainDump — Consulting.md | Consulting |\n| BrainDump — Work (Parallon).md | Work |\n| BrainDump — Health.md | Health |\n| BrainDump — Home.md | Home |\n| BrainDump — Personal.md | Personal |",
+        "height": 820,
+        "width": 480,
+        "color": 4
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every Day at 7AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        460,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the list of 8 brain dump file configs\nconst BUCKET = 'obsidian-vault';\nconst PREFIX = 'Homelab';\n\nconst domains = [\n  { domain: 'Faith',     area: 'faith',     emoji: '🙏', rock: 'Launch the Social Media Bible Study',      file: 'BrainDump — Faith.md' },\n  { domain: 'Family',    area: 'family',    emoji: '💒', rock: 'Marriage Alignment with Christy',           file: 'BrainDump — Family.md' },\n  { domain: 'Business',  area: 'business',  emoji: '🚀', rock: 'Ship the MVP — Echelon Seven',              file: 'BrainDump — Business (Echelon Seven).md' },\n  { domain: 'Consulting',area: 'consulting',emoji: '💼', rock: null,                                        file: 'BrainDump — Consulting.md' },\n  { domain: 'Work',      area: 'work',      emoji: '🏥', rock: 'Deliver Union Project + Position for Exit', file: 'BrainDump — Work (Parallon).md' },\n  { domain: 'Health',    area: 'health',    emoji: '💪', rock: 'Hip Decision + 3x/week Gym for 8 Weeks',   file: 'BrainDump — Health.md' },\n  { domain: 'Home',      area: 'home',      emoji: '🏠', rock: null,                                        file: 'BrainDump — Home.md' },\n  { domain: 'Personal',  area: 'personal',  emoji: '🤖', rock: null,                                        file: 'BrainDump — Personal.md' }\n];\n\nreturn domains.map(d => ({\n  json: {\n    ...d,\n    bucket: BUCKET,\n    fileKey: `${PREFIX}/00_Inbox/brain-dumps/${d.file}`,\n    masterTaskListKey: `${PREFIX}/10_Active Projects/Active Personal/!!! MASTER TASK LIST.md`\n  }\n}));"
+      },
+      "id": "define-files",
+      "name": "Define Brain Dump Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-read",
+      "name": "Loop: Read Each File",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        940,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "bucketName": "={{ $json.bucket }}",
+        "fileKey": "={{ $json.fileKey }}",
+        "options": {}
+      },
+      "id": "s3-download-dump",
+      "name": "S3: Download Brain Dump",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        360
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract text content from the S3 binary download, merge with metadata from loop\nconst loopItem = $('Loop: Read Each File').item.json;\nconst binaryKey = Object.keys($input.item.binary || {})[0] || 'data';\nconst binaryData = $input.item.binary?.[binaryKey];\n\nlet fileContent = '';\nif (binaryData?.data) {\n  fileContent = Buffer.from(binaryData.data, 'base64').toString('utf-8');\n}\n\n// Check if download failed (no content = file probably doesn't exist yet)\nconst hasContent = fileContent.trim().length > 10;\n\nreturn [{\n  json: {\n    ...loopItem,\n    rawContent: fileContent,\n    downloadSuccess: hasContent\n  }\n}];"
+      },
+      "id": "extract-text",
+      "name": "Extract Text from Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        560
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect items across loop iterations using staticData.\n// Guard: if collected has stale data from a prior failed run, check timestamp.\nconst item = $input.item.json;\nconst state = $workflow.staticData;\n\n// Initialize or reset stale data (>2h old = stale from a failed prior run)\nconst now = Date.now();\nif (!state.collected || !state.collectedAt || (now - state.collectedAt) > 7200000) {\n  state.collected = [];\n}\nstate.collectedAt = now;\n\nif (item.downloadSuccess !== false) {\n  state.collected.push(item);\n}\n\nreturn [{ json: item }];"
+      },
+      "id": "accumulate",
+      "name": "Accumulate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ═══════════════════════════════════════════════════════════\n// PARSE & ANALYZE — the brain of the workflow\n// Reads all accumulated brain dump content from static data,\n// classifies tasks vs review items, builds output schema.\n// ═══════════════════════════════════════════════════════════\n\nconst state = $workflow.staticData;\nconst files = state.collected || [];\n\n// Clear for next run\nstate.collected = [];\n\nconst today = new Date().toISOString().split('T')[0];\n\nconst MASTER_TASK_LIST_KEY = 'Homelab/10_Active Projects/Active Personal/!!! MASTER TASK LIST.md';\n\n// Section heading keywords (case-insensitive)\nconst SECTION_KEYWORDS = {\n  needleMovers:  /needle\\s*movers?|🎯/i,\n  todos:         /to\\s*do|tasks?|action/i,\n  notes:         /notes?|quick\\s*notes?/i,\n  articles:      /articles?|resources?|links?|reading/i,\n  ideas:         /ideas?|possibilities/i,\n  organize:      /organize|to\\s*organize|things\\s*to\\s*organize/i,\n  recurring:     /recurring|rhythms?|habits?/i\n};\n\nfunction parseContent(text) {\n  if (!text || text.trim().length < 5) return null;\n  const sections = { needleMovers: [], todos: [], notes: [], articles: [], ideas: [], organize: [], recurring: [] };\n  let currentSection = null;\n\n  for (const line of text.split('\\n')) {\n    const trimmed = line.trim();\n    if (trimmed.startsWith('#')) {\n      currentSection = null;\n      for (const [key, rx] of Object.entries(SECTION_KEYWORDS)) {\n        if (rx.test(trimmed)) { currentSection = key; break; }\n      }\n      continue;\n    }\n    if (currentSection && trimmed && !trimmed.match(/^<!--|^---$|^\\*Only/)) {\n      const cleanLine = trimmed.replace(/^-\\s*/, '').trim();\n      if (cleanLine.length > 2) sections[currentSection].push(cleanLine);\n    }\n  }\n  const hasAny = Object.values(sections).some(arr => arr.length > 0);\n  return hasAny ? sections : null;\n}\n\nfunction buildTaskLine(text, area, priority, due, rock) {\n  let line = `- [ ] ${text} [area:: ${area}] [priority:: ${priority}]`;\n  if (due) line += ` [due:: ${due}]`;\n  return line;\n}\n\nfunction extractDue(text) {\n  const m = text.match(/\\[due::\\s*(\\d{4}-\\d{2}-\\d{2})\\s*\\]/);\n  return m ? m[1] : null;\n}\n\nfunction cleanTaskText(text) {\n  return text\n    .replace(/\\[area::[^\\]]+\\]/g, '')\n    .replace(/\\[priority::[^\\]]+\\]/g, '')\n    .replace(/\\[due::[^\\]]+\\]/g, '')\n    .trim();\n}\n\nconst priorityATasks = [];\nconst priorityBTasks = [];\nconst reviewItems = { notes: [], articles: [], ideas: [], organize: [], recurring: [] };\nconst clearedDumps = [];\nconst processedDomains = [];\n\nfor (const file of files) {\n  const sections = parseContent(file.rawContent);\n  if (!sections) continue;\n\n  processedDomains.push({ domain: file.domain, area: file.area, emoji: file.emoji });\n\n  // Needle Movers → Priority A with rock\n  for (const item of sections.needleMovers) {\n    const due = extractDue(item);\n    const text = cleanTaskText(item);\n    const line = buildTaskLine(text, file.area, 'A', due, file.rock);\n    priorityATasks.push({ domain: file.domain, area: file.area, emoji: file.emoji, raw: text, due, rock: file.rock, line });\n  }\n\n  // To-Do items → respect inline priority, default B\n  for (const item of sections.todos) {\n    const pMatch = item.match(/\\[priority::\\s*([A-C])\\s*\\]/i);\n    const priority = pMatch ? pMatch[1].toUpperCase() : 'B';\n    const due = extractDue(item);\n    const text = cleanTaskText(item);\n    const line = buildTaskLine(text, file.area, priority, due, priority === 'A' ? file.rock : null);\n    const task = { domain: file.domain, area: file.area, emoji: file.emoji, raw: text, due, priority, rock: priority === 'A' ? file.rock : null, line };\n    if (priority === 'A') priorityATasks.push(task);\n    else priorityBTasks.push(task);\n  }\n\n  // Review items (email only, never auto-filed)\n  for (const key of ['notes', 'articles', 'ideas', 'organize', 'recurring']) {\n    for (const item of sections[key]) {\n      reviewItems[key].push({ domain: file.domain, area: file.area, text: item });\n    }\n  }\n\n  // Build cleared template for this domain\n  const clearedContent = `---\ndomain: ${file.domain}\nstatus: empty\nlast_processed: ${today}\n---\n\n## 🎯 Needle Movers\n<!-- Tasks that directly advance your Q2 quarterly rock for ${file.domain} -->\n\n\n## ✅ To-Do's\n<!-- Actionable tasks. Add [priority:: A/B/C] and [due:: YYYY-MM-DD] -->\n\n\n## 📝 Quick Notes\n<!-- Non-actionable observations, thoughts, reference material -->\n\n\n## 📚 Articles & Resources\n<!-- Links and resources to review -->\n\n\n## 🗂️ Things to Organize\n<!-- Items that need filing or organizing -->\n\n\n## 💡 Ideas & Possibilities\n<!-- Ideas, concepts, things to explore -->\n\n\n## 🔄 Recurring / Rhythms\n<!-- Regular commitments, habits, routines -->\n`;\n  clearedDumps.push({ fileKey: file.fileKey, domain: file.domain, content: clearedContent });\n}\n\nconst hasContent = processedDomains.length > 0;\n\n// Store for downstream nodes\nconst output = {\n  hasContent,\n  processedDomains,\n  priorityATasks,\n  priorityBTasks,\n  reviewItems,\n  clearedDumps,\n  masterTaskListKey: MASTER_TASK_LIST_KEY,\n  today\n};\n\n// Store in static data for cross-node access\n$workflow.staticData.parseOutput = output;\n\nreturn [{ json: output }];"
+      },
+      "id": "parse-analyze",
+      "name": "Parse & Analyze All",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-content",
+              "leftValue": "={{ $json.hasContent }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-has-content",
+      "name": "Has Content?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1420,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "={{ $json.masterTaskListKey }}",
+        "options": {}
+      },
+      "id": "get-master-task-list",
+      "name": "S3: Get Master Task List",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        760
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ═══════════════════════════════════════════════════════════\n// BUILD ALL UPDATES\n// Reads MTL binary, appends tasks, packages all files to write\n// ═══════════════════════════════════════════════════════════\n\nconst parsed = $workflow.staticData.parseOutput;\nconst { priorityATasks, priorityBTasks, clearedDumps, masterTaskListKey, today } = parsed;\n\n// Extract MTL content from binary\nconst binaryKey = Object.keys($input.item.binary || {})[0] || 'data';\nconst binaryData = $input.item.binary?.[binaryKey];\nlet mtlContent = binaryData?.data ? Buffer.from(binaryData.data, 'base64').toString('utf-8') : '';\n\n// Section header map for Priority A (by area)\nconst PRI_A_HEADERS = {\n  faith:      '### 🙏 Faith',\n  family:     '### 💒 Marriage & Family',\n  business:   '### 🚀 Business',\n  consulting: '### 💼 Consulting',\n  work:       '### 🏥 Work (Parallon)',\n  health:     '### 💪 Health',\n  home:       '### 🏠 Home',\n  personal:   '### 🤖 Personal'\n};\n\nconst PRI_B_HEADER = '## 🟡 Priority B';\n\nfunction insertAfterHeader(content, header, newLines) {\n  const idx = content.indexOf(header);\n  if (idx === -1) {\n    // Header not found — append at end\n    return content.trimEnd() + '\\n\\n' + newLines.join('\\n') + '\\n';\n  }\n  const afterHeader = content.indexOf('\\n', idx);\n  const insertPoint = afterHeader !== -1 ? afterHeader + 1 : content.length;\n  return content.slice(0, insertPoint) + newLines.join('\\n') + '\\n' + content.slice(insertPoint);\n}\n\n// Group Priority A tasks by area\nconst aTasksByArea = {};\nfor (const task of priorityATasks) {\n  if (!aTasksByArea[task.area]) aTasksByArea[task.area] = [];\n  aTasksByArea[task.area].push(task.line);\n}\n\n// Insert Priority A tasks under their area headers\nfor (const [area, lines] of Object.entries(aTasksByArea)) {\n  const header = PRI_A_HEADERS[area];\n  if (header) mtlContent = insertAfterHeader(mtlContent, header, lines);\n}\n\n// Insert Priority B tasks\nif (priorityBTasks.length > 0) {\n  const bLines = priorityBTasks.map(t => t.line);\n  mtlContent = insertAfterHeader(mtlContent, PRI_B_HEADER, bLines);\n}\n\n// Build file write array: MTL first, then cleared brain dumps\nconst filesToWrite = [\n  { fileKey: masterTaskListKey, content: mtlContent, label: 'Master Task List' },\n  ...clearedDumps\n];\n\nreturn [{ json: { filesToWrite, count: filesToWrite.length } }];"
+      },
+      "id": "build-updates",
+      "name": "Build All Updates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-write",
+      "name": "Loop: Write Each File",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2140,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convert string content to base64 binary for S3 upload\nconst item = $input.item.json;\nconst contentStr = item.content || '';\nconst base64 = Buffer.from(contentStr, 'utf-8').toString('base64');\n\nreturn [{\n  json: { fileKey: item.fileKey, label: item.label },\n  binary: {\n    data: {\n      data: base64,\n      mimeType: 'text/markdown',\n      fileName: item.fileKey.split('/').pop() || 'file.md'\n    }\n  }\n}];"
+      },
+      "id": "prepare-binary",
+      "name": "Prepare Binary for Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2380,
+        660
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.fileKey }}",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "s3-upload",
+      "name": "S3: Upload File",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        2620,
+        660
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// ═══════════════════════════════════════\n// BUILD HTML DIGEST EMAIL\n// ═══════════════════════════════════════\nconst d = $workflow.staticData.parseOutput;\nconst { processedDomains, priorityATasks, priorityBTasks, reviewItems, today } = d;\n\nconst totalReview = Object.values(reviewItems).reduce((s, a) => s + a.length, 0);\n\nfunction taskCards(tasks, color) {\n  if (!tasks.length) return '<p style=\"color:#888\">None today.</p>';\n  return tasks.map(t => `\n    <div style=\"background:#1e1e2e;border-left:4px solid ${color};border-radius:8px;padding:12px 16px;margin:8px 0\">\n      <span style=\"font-size:1.1em\">${t.emoji} ${t.raw}</span>\n      ${t.rock ? `<span style=\"background:#f5a623;color:#000;font-size:0.75em;padding:2px 8px;border-radius:12px;margin-left:8px\">${t.rock}</span>` : ''}\n      ${t.due ? `<span style=\"color:#888;font-size:0.8em;margin-left:8px\">📅 ${t.due}</span>` : ''}\n    </div>`).join('');\n}\n\nfunction reviewSection(title, items) {\n  if (!items.length) return '';\n  return `<h3 style=\"color:#a0a0b0;margin:16px 0 8px\">${title}</h3><ul style=\"color:#c8c8d8\">${\n    items.map(i => `<li><strong>${i.emoji || i.domain}:</strong> ${i.text}</li>`).join('')\n  }</ul>`;\n}\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"background:#13131f;color:#e0e0f0;font-family:system-ui,sans-serif;max-width:680px;margin:0 auto;padding:24px\">\n  <div style=\"background:linear-gradient(135deg,#667eea,#764ba2);border-radius:16px;padding:28px 32px;margin-bottom:24px\">\n    <h1 style=\"margin:0;color:#fff\">🧠 Brain Dump Processed</h1>\n    <p style=\"margin:8px 0 0;color:rgba(255,255,255,0.8)\">${today} &bull; ${processedDomains.map(d=>d.emoji+' '+d.domain).join(' &bull; ')}</p>\n  </div>\n  <div style=\"display:flex;gap:12px;margin-bottom:24px\">\n    <div style=\"flex:1;background:#1e1e2e;border-radius:12px;padding:16px;text-align:center\">\n      <div style=\"font-size:2em;font-weight:700;color:#ff6b6b\">${priorityATasks.length}</div>\n      <div style=\"color:#888\">Priority A</div>\n    </div>\n    <div style=\"flex:1;background:#1e1e2e;border-radius:12px;padding:16px;text-align:center\">\n      <div style=\"font-size:2em;font-weight:700;color:#f5a623\">${priorityBTasks.length}</div>\n      <div style=\"color:#888\">Priority B</div>\n    </div>\n    <div style=\"flex:1;background:#1e1e2e;border-radius:12px;padding:16px;text-align:center\">\n      <div style=\"font-size:2em;font-weight:700;color:#4ecdc4\">${totalReview}</div>\n      <div style=\"color:#888\">For Review</div>\n    </div>\n  </div>\n  <h2 style=\"color:#ff6b6b\">🔴 Priority A — Filed to Master List</h2>\n  ${taskCards(priorityATasks, '#ff6b6b')}\n  <h2 style=\"color:#f5a623\">🟡 Priority B — Filed to Master List</h2>\n  ${taskCards(priorityBTasks, '#f5a623')}\n  ${reviewSection('📝 Notes (Review Only)', reviewItems.notes)}\n  ${reviewSection('📚 Articles & Resources (Review Only)', reviewItems.articles)}\n  ${reviewSection('💡 Ideas (Review Only)', reviewItems.ideas)}\n  ${reviewSection('🗂️ To Organize (Review Only)', reviewItems.organize)}\n  ${reviewSection('🔄 Recurring / Rhythms (Review Only)', reviewItems.recurring)}\n  <hr style=\"border:1px solid #2a2a3e;margin:24px 0\">\n  <p style=\"color:#555;font-size:0.85em\">Brain dumps cleared and ready for tomorrow &bull; Processed at ${new Date().toLocaleTimeString('en-US', {timeZone:'America/Chicago'})}</p>\n</body></html>`;\n\nreturn [{\n  json: {\n    subject: `🧠 Brain Dump Processed — ${priorityATasks.length + priorityBTasks.length} new tasks · ${today}`,\n    html\n  }\n}];"
+      },
+      "id": "build-email",
+      "name": "Build Digest Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2620,
+        860
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "aaron.deyoung@gmail.com",
+        "toEmail": "aaron.deyoung@gmail.com",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Brain Dump Digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2860,
+        860
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lWGOwsktldwb3iEj",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Day at 7AM": {
+      "main": [
+        [
+          {
+            "node": "Define Brain Dump Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Define Brain Dump Files": {
+      "main": [
+        [
+          {
+            "node": "Loop: Read Each File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop: Read Each File": {
+      "main": [
+        [
+          {
+            "node": "S3: Download Brain Dump",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Parse & Analyze All",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Download Brain Dump": {
+      "main": [
+        [
+          {
+            "node": "Extract Text from Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text from Binary": {
+      "main": [
+        [
+          {
+            "node": "Accumulate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Accumulate Results": {
+      "main": [
+        [
+          {
+            "node": "Loop: Read Each File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Analyze All": {
+      "main": [
+        [
+          {
+            "node": "Has Content?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Content?": {
+      "main": [
+        [
+          {
+            "node": "S3: Get Master Task List",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "S3: Get Master Task List": {
+      "main": [
+        [
+          {
+            "node": "Build All Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build All Updates": {
+      "main": [
+        [
+          {
+            "node": "Loop: Write Each File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop: Write Each File": {
+      "main": [
+        [
+          {
+            "node": "Prepare Binary for Upload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Digest Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Binary for Upload": {
+      "main": [
+        [
+          {
+            "node": "S3: Upload File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Upload File": {
+      "main": [
+        [
+          {
+            "node": "Loop: Write Each File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Digest Email": {
+      "main": [
+        [
+          {
+            "node": "Send Brain Dump Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "",
+    "timezone": "America/Chicago"
+  },
+  "staticData": {
+    "node": {
+      "Loop: Read Each File": {}
+    }
+  },
+  "tags": [
+    {
+      "name": "obsidian",
+      "id": "obsidian-tag"
+    },
+    {
+      "name": "brain-dump",
+      "id": "brain-dump-tag"
+    },
+    {
+      "name": "automation",
+      "id": "automation-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-24T00:00:00.000Z",
+  "versionId": "2"
+}

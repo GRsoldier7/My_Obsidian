@@ -1,0 +1,276 @@
+{
+  "name": "📓 Daily Note Creator — 6AM",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📓 Daily Note Creator\n\n**Schedule:** 6:00 AM every day\n**Creates:** `Homelab/40_Timeline_Weekly/Daily/YYYY-MM-DD.md` in MinIO\n**Idempotent:** Skips creation if note already exists\n\n### ⚙️ SETUP\n- MinIO credential `MinIO — obsidian-vault` must exist in n8n\n- Remotely Save must be syncing vault ↔ MinIO\n\n### Focus Themes by Day\n| Day | Theme |\n|-----|-------|\n| Mon | Planning & Priorities |\n| Tue/Thu | Deep Work |\n| Wed | Collaboration & Meetings |\n| Fri | Review & Wrap-Up |\n| Sat | Personal & Projects |\n| Sun | Rest & Reflection |",
+        "height": 440,
+        "width": 380,
+        "color": 4
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every Day at 6AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Use Central Time explicitly so date is correct regardless of server TZ\nconst TZ = 'America/Chicago';\nconst now = new Date();\nconst fmt = (opts) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...opts });\nconst year = parseInt(fmt({ year: 'numeric' }).format(now));\nconst month = fmt({ month: '2-digit' }).format(now);\nconst day = fmt({ day: '2-digit' }).format(now);\nconst dateStr = `${year}-${month}-${day}`;\n\nconst dayName = fmt({ weekday: 'long' }).format(now);\n\nconst janFirst = new Date(year, 0, 1);\nconst dayOfYear = Math.ceil((now - janFirst) / 86400000);\nconst weekNumber = Math.ceil((dayOfYear + janFirst.getDay()) / 7);\nconst weekStr = `${year}-W${String(weekNumber).padStart(2, '0')}`;\n\nconst focusThemes = {\n  Monday: 'Planning & Priorities',\n  Tuesday: 'Deep Work',\n  Wednesday: 'Collaboration & Meetings',\n  Thursday: 'Deep Work',\n  Friday: 'Review & Wrap-Up',\n  Saturday: 'Personal & Projects',\n  Sunday: 'Rest & Reflection'\n};\nconst focusTheme = focusThemes[dayName] || 'General';\n\nconst fileKey = `Homelab/40_Timeline_Weekly/Daily/${dateStr}.md`;\n\nreturn [{ json: { dateStr, dayName, weekStr, focusTheme, fileKey, bucket: 'obsidian-vault' } }];"
+      },
+      "id": "compute-date",
+      "name": "Compute Date & File Path",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "={{ $json.fileKey }}",
+        "options": {}
+      },
+      "id": "check-exists",
+      "name": "S3: Check If Note Exists",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        700,
+        460
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "no-binary",
+              "leftValue": "={{ Object.keys($json.binary || {}).length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "note-missing-check",
+      "name": "Note Missing?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        940,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { dateStr, dayName, weekStr, focusTheme, fileKey } = $('Compute Date & File Path').first().json;\n\nconst content = `---\ndate: ${dateStr}\nday: ${dayName}\nweek: ${weekStr}\nfocus_theme: \"${focusTheme}\"\ntags:\n  - daily-note\n---\n\n# ${dayName}, ${dateStr}\n\n> **Focus Theme:** ${focusTheme}\n\n---\n\n## Top 3 Priorities\n\n- [ ] [area:: work] [priority:: A]\n- [ ] [area:: work] [priority:: A]\n- [ ] [area:: work] [priority:: A]\n\n---\n\n## Tasks Captured Today\n\n\n\n---\n\n## Notes\n\n\n\n---\n\n## End of Day Reflection\n\n**What went well?**\n\n\n**What could be better?**\n\n\n**Carry forward tomorrow:**\n\n- [ ]\n`;\n\nconst base64 = Buffer.from(content, 'utf-8').toString('base64');\n\nreturn [{\n  json: { fileKey, dateStr, dayName, focusTheme, created: true },\n  binary: {\n    data: {\n      data: base64,\n      mimeType: 'text/markdown',\n      fileName: `${dateStr}.md`\n    }\n  }\n}];"
+      },
+      "id": "build-note",
+      "name": "Build Daily Note Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.fileKey }}",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "upload-note",
+      "name": "S3: Upload Daily Note",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        360
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const { dateStr, fileKey } = $('Compute Date & File Path').first().json;\nconsole.log(`Daily note already exists for ${dateStr} — skipped`);\nreturn [{ json: { skipped: true, dateStr, fileKey, message: `Note already exists: ${dateStr}.md` } }];"
+      },
+      "id": "already-exists",
+      "name": "Already Exists — Skip",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item.json;\nconsole.log(`Daily Note Creator: ${item.message || (item.created ? 'Created' : 'Skipped')} ${item.dateStr}`);\nreturn [{ json: { timestamp: new Date().toISOString(), ...item } }];"
+      },
+      "id": "log-summary",
+      "name": "Log Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        460
+      ]
+    }
+  ],
+  "connections": {
+    "Every Day at 6AM": {
+      "main": [
+        [
+          {
+            "node": "Compute Date & File Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Date & File Path": {
+      "main": [
+        [
+          {
+            "node": "S3: Check If Note Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Check If Note Exists": {
+      "main": [
+        [
+          {
+            "node": "Note Missing?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Note Missing?": {
+      "main": [
+        [
+          {
+            "node": "Build Daily Note Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Already Exists — Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Daily Note Content": {
+      "main": [
+        [
+          {
+            "node": "S3: Upload Daily Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Upload Daily Note": {
+      "main": [
+        [
+          {
+            "node": "Log Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already Exists — Skip": {
+      "main": [
+        [
+          {
+            "node": "Log Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "America/Chicago"
+  },
+  "tags": [
+    {
+      "name": "obsidian",
+      "id": "obsidian-tag"
+    },
+    {
+      "name": "daily-note",
+      "id": "daily-note-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-24T00:00:00.000Z",
+  "versionId": "2"
+}
