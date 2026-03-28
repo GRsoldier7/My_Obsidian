@@ -1,0 +1,121 @@
+{
+  "name": "🧠 AI Brain — Shared Intelligence Layer",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🧠 AI Brain — Shared Intelligence Layer\n\nReusable sub-workflow called by all Life OS workflows.\n\n**Input:** JSON with `job` (classify|summarize|brief|triage|review), `content`, and optional `context`.\n**Output:** Structured JSON via OpenRouter (Llama 3.3 70B).\n\n**Jobs:**\n- `classify` — Brain dump → tasks, notes, articles, decisions\n- `summarize` — Article text → summary, takeaways, area\n- `brief` — Daily context → focus items, nudges\n- `triage` — Overdue tasks → act/reschedule/drop/escalate\n- `review` — Weekly data → scorecard, balance, wins, honest question\n\n**n8n Credentials Required:**\n- `OpenRouter API` — HTTP Header Auth, header `Authorization: Bearer <OPENROUTER_API_KEY>`",
+        "height": 540,
+        "width": 460,
+        "color": 4
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [180, 60]
+    },
+    {
+      "parameters": {},
+      "id": "sub-workflow-trigger",
+      "name": "When Called By Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [460, 340]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build the prompt for the LLM based on job type\nconst input = $input.first().json;\nconst job = input.job;\nconst content = input.content;\nconst context = input.context || {};\n\nconst SYSTEM_PROMPT = `You are the AI Brain for Aaron's Life Operating System. You process personal knowledge management content and return structured JSON only.\n\nCONTEXT:\n- 8 life domains: faith, family, business, consulting, work, health, home, personal\n- Task format: - [ ] Description [area:: X] [priority:: A/B/C] [due:: YYYY-MM-DD]\n- Priority A = needle-mover (advances North Star quarterly rocks or annual goals)\n- Priority B = important but not a needle-mover\n- Priority C = nice-to-have\n\nNEEDLE-MOVER DEFINITION:\nA needle-mover directly advances one of Aaron's quarterly rocks or annual goals. Urgent != important. \"Reply to Slack\" is not a needle-mover. \"Draft Echelon Seven offer page\" is.\n\nRULES:\n- Return valid JSON only. No markdown fences. No explanatory text. Just the JSON object.\n- Be concise. Summaries are 3-4 sentences max.\n- Rewrite raw shorthand into clear, complete sentences that future-Aaron can understand in 2 weeks.\n- When content crosses domains (e.g., \"pray about consulting deal\"), tag the primary area and list secondary in connections array.\n- If uncertain about area, default to personal. If uncertain about priority, default to B.`;\n\nconst JOB_PROMPTS = {\n  classify: `TASK: Classify this brain dump content into structured items.\\n\\nFor each item found, determine its type:\\n- \"task\" — an actionable to-do with a clear completion state\\n- \"note\" — information, thought, or reference to file away\\n- \"article\" — a URL or article reference to read/summarize later\\n- \"decision\" — something requiring deliberation with pros/cons (always Priority A)\\n\\nReturn JSON:\\n{\"results\": [{\"type\": \"task|note|article|decision\", \"title\": \"string\", \"content\": \"string\", \"area\": \"string\", \"priority\": \"A|B|C\", \"needle_mover\": true|false, \"due\": \"YYYY-MM-DD|null\", \"connections\": [\"area1\", \"area2\"], \"url\": \"string|null\", \"source_domain\": \"string\"}]}`,\n\n  summarize: `TASK: Summarize this article content.\\n\\nReturn JSON:\\n{\"results\": {\"title\": \"string\", \"summary\": \"3-4 sentence summary\", \"key_takeaways\": [\"takeaway1\", \"takeaway2\", \"takeaway3\"], \"area\": \"string\", \"needle_mover\": true|false, \"action_items\": [{\"task\": \"string\", \"area\": \"string\", \"priority\": \"A|B|C\", \"due\": \"YYYY-MM-DD|null\"}]}}`,\n\n  brief: `TASK: Generate a concise daily briefing (50-80 words max).\\n\\nYou will receive: overdue tasks, inbox count, and this week's needle-movers.\\nReturn the top 3 focus items (needle-movers first), and one domain nudge if any life area has been neglected.\\n\\nReturn JSON:\\n{\"results\": {\"focus_items\": [\"item1\", \"item2\", \"item3\"], \"domain_nudge\": \"string|null\", \"overdue_count\": 0}}`,\n\n  triage: `TASK: Triage overdue tasks with actionable recommendations.\\n\\nFor each overdue task, recommend one of:\\n- \"escalate\" — This is a needle-mover being ignored. Do it today.\\n- \"act\" — Important, do it today.\\n- \"reschedule\" — Push to a specific future date with reason.\\n- \"drop\" — Stale, low-priority, not advancing any goal. Delete or move to someday/maybe.\\n\\nUse the North Star context to identify needle-movers.\\n\\nReturn JSON:\\n{\"results\": [{\"task\": \"string\", \"area\": \"string\", \"days_overdue\": 0, \"recommendation\": \"escalate|act|reschedule|drop\", \"reason\": \"string\", \"suggested_date\": \"YYYY-MM-DD|null\"}]}`,\n\n  review: `TASK: Generate a strategic weekly review.\\n\\nYou will receive: North Star goals, completed tasks this week, open needle-movers, and inbox items.\\nAnalyze domain balance, needle-mover progress, and alignment between actions and stated goals.\\n\\nReturn JSON:\\n{\"results\": {\"needle_mover_scorecard\": {\"completed\": [{\"task\": \"string\", \"area\": \"string\"}], \"still_open\": [{\"task\": \"string\", \"area\": \"string\", \"next_action\": \"string\"}], \"completed_count\": 0, \"total_count\": 0}, \"domain_balance\": {\"faith\": 0, \"family\": 0, \"business\": 0, \"consulting\": 0, \"work\": 0, \"health\": 0, \"home\": 0, \"personal\": 0}, \"domain_warning\": \"string|null\", \"wins\": [\"string\"], \"next_week_focus\": [\"string\", \"string\", \"string\"], \"honest_question\": \"string\"}}`\n};\n\nconst jobPrompt = JOB_PROMPTS[job];\nif (!jobPrompt) {\n  return [{ json: { success: false, error: `Unknown job type: ${job}` } }];\n}\n\nlet userMessage = jobPrompt + '\\n\\nCONTENT:\\n' + content;\n\nif (context.north_star) {\n  userMessage += '\\n\\nNORTH STAR GOALS:\\n' + context.north_star;\n}\nif (context.overdue_tasks) {\n  userMessage += '\\n\\nOVERDUE TASKS:\\n' + context.overdue_tasks;\n}\nif (context.weekly_completions) {\n  userMessage += '\\n\\nCOMPLETED THIS WEEK:\\n' + context.weekly_completions;\n}\nif (context.open_needle_movers) {\n  userMessage += '\\n\\nOPEN NEEDLE-MOVERS:\\n' + context.open_needle_movers;\n}\n\nreturn [{\n  json: {\n    systemPrompt: SYSTEM_PROMPT,\n    userMessage: userMessage,\n    job: job\n  }\n}];"
+      },
+      "id": "build-prompt",
+      "name": "Build LLM Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 340]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "HTTP-Referer", "value": "https://github.com/ObsidianHomeOrchestrator" },
+            { "name": "X-Title", "value": "Life OS AI Brain" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000 }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "groq-request",
+      "name": "OpenRouter: Llama 3.3 70B",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 240],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Z7liUYc3Toq3q7W7",
+          "name": "OpenRouter API"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\ntry {\n  const content = input.choices[0].message.content;\n  // Strip markdown fences if present (some models add them)\n  const cleaned = content.replace(/^```json\\n?/i, '').replace(/\\n?```$/i, '').trim();\n  const parsed = JSON.parse(cleaned);\n  return [{ json: { success: true, ...parsed, source: 'openrouter' } }];\n} catch (e) {\n  return [{ json: { success: false, error: 'Failed to parse AI response: ' + e.message, raw: JSON.stringify(input).substring(0, 500) } }];\n}"
+      },
+      "id": "parse-groq",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge point — return whichever response we got\nconst input = $input.first().json;\nreturn [{ json: input }];"
+      },
+      "id": "return-result",
+      "name": "Return Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 240]
+    }
+  ],
+  "connections": {
+    "When Called By Another Workflow": {
+      "main": [
+        [{ "node": "Build LLM Prompt", "type": "main", "index": 0 }]
+      ]
+    },
+    "Build LLM Prompt": {
+      "main": [
+        [{ "node": "OpenRouter: Llama 3.3 70B", "type": "main", "index": 0 }]
+      ]
+    },
+    "OpenRouter: Llama 3.3 70B": {
+      "main": [
+        [{ "node": "Parse AI Response", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [{ "node": "Return Result", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Chicago"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2026-03-28T00:00:00.000Z",
+  "versionId": "1"
+}

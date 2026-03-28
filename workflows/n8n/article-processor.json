@@ -1,0 +1,556 @@
+{
+  "name": "📚 Article Processor — 8AM & 7PM",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📚 Article Processor\n\n**Schedule:** 8:00 AM and 7:00 PM daily\n**Source:** `Homelab/00_Inbox/articles-to-process.md` in MinIO\n**Output:** Article notes filed to domain folders; action items as task files; queue cleared\n\n### URL Format in articles-to-process.md\n```\nhttps://example.com/article — Optional context note\nhttps://another.com/post\n```\n\n### Setup\n- MinIO credential `MinIO S3` must exist\n- OpenRouter API credential must exist (free tier at openrouter.ai)\n- `articles-to-process.md` must exist in MinIO at the path above",
+        "height": 420,
+        "width": 400,
+        "color": 3
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            },
+            {
+              "triggerAtHour": 19
+            }
+          ]
+        }
+      },
+      "id": "schedule-articles",
+      "name": "8AM & 7PM Daily",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "Homelab/00_Inbox/articles-to-process.md",
+        "options": {}
+      },
+      "id": "read-article-queue",
+      "name": "S3: Read Article Queue",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        480,
+        340
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "let content = '';\ntry {\n  const binary = $input.first().binary;\n  const key = Object.keys(binary || {})[0] || 'data';\n  if (binary && binary[key]) {\n    content = Buffer.from(binary[key].data, 'base64').toString('utf-8');\n  }\n} catch (e) {}\n\n// Strip frontmatter\ncontent = content.replace(/^---[\\s\\S]*?---\\s*/m, '').trim();\n\nif (!content) {\n  return [{ json: { hasUrls: false, urls: [] } }];\n}\n\n// Parse URLs — one per line, optional context after \" — \"\nconst lines = content.split('\\n').filter(l => l.trim());\nconst urls = [];\n\nfor (const line of lines) {\n  const trimmed = line.trim();\n  if (!trimmed || trimmed.startsWith('#')) continue;\n\n  const parts = trimmed.split(' — ');\n  const urlPart = parts[0].trim();\n  const context = parts.length > 1 ? parts.slice(1).join(' — ').trim() : '';\n\n  // Basic URL validation\n  if (urlPart.startsWith('http://') || urlPart.startsWith('https://')) {\n    urls.push({ url: urlPart, context });\n  }\n}\n\nreturn [{ json: { hasUrls: urls.length > 0, urls, urlCount: urls.length } }];"
+      },
+      "id": "parse-urls",
+      "name": "Parse URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "has-urls", "leftValue": "={{ $json.hasUrls }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-has-urls",
+      "name": "Has URLs?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        340
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop-each-url",
+      "name": "Loop: Each URL",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1200,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract individual URL from the urls array for processing\nconst input = $input.first().json;\nconst urls = input.urls || [];\n// splitInBatches splits the array — get the current item's url\n// The loop gives us each url object directly from the split\nreturn [{ json: input }];"
+      },
+      "id": "get-current-url",
+      "name": "Get Current URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      },
+      "id": "fetch-page",
+      "name": "Fetch Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        140
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first();\nlet text = '';\n\ntry {\n  // Get response body as text\n  const body = input.json.data || input.json.body || '';\n\n  // Strip HTML tags, scripts, styles\n  text = body\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<nav[\\s\\S]*?<\\/nav>/gi, '')\n    .replace(/<footer[\\s\\S]*?<\\/footer>/gi, '')\n    .replace(/<header[\\s\\S]*?<\\/header>/gi, '')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/\\s+/g, ' ')\n    .trim();\n\n  // Limit to ~3000 chars to keep token usage low\n  if (text.length > 3000) {\n    text = text.substring(0, 3000) + '... [truncated]';\n  }\n} catch (e) {\n  text = 'Failed to extract text from page.';\n}\n\nconst urlData = $('Loop: Each URL').first().json;\nreturn [{ json: { extractedText: text, url: urlData.url, context: urlData.context } }];"
+      },
+      "id": "extract-text",
+      "name": "Extract Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst text = input.extractedText || '';\nconst url = input.url || '';\nconst context = input.context || '';\n\nconst SYSTEM = 'You are the AI Brain for Aaron\\'s Life Operating System. You process personal knowledge management content and return structured JSON only.\\n\\nCONTEXT:\\n- 8 life domains: faith, family, business, consulting, work, health, home, personal\\n- Task format: - [ ] Description [area:: X] [priority:: A/B/C] [due:: YYYY-MM-DD]\\n- Priority A = needle-mover, B = important, C = nice-to-have\\n\\nRULES:\\n- Return valid JSON only. No markdown fences. No explanatory text.\\n- Summaries are 3-4 sentences max.';\n\nconst USER = `TASK: Summarize this article content.\\n\\nReturn JSON:\\n{\"results\": {\"title\": \"string\", \"summary\": \"3-4 sentence summary\", \"key_takeaways\": [\"takeaway1\", \"takeaway2\", \"takeaway3\"], \"area\": \"string\", \"needle_mover\": true|false, \"action_items\": [{\"task\": \"string\", \"area\": \"string\", \"priority\": \"A|B|C\", \"due\": \"YYYY-MM-DD|null\"}]}}\\n\\nSOURCE URL: ${url}\\n${context ? 'CONTEXT: ' + context + '\\n' : ''}\\nARTICLE TEXT:\\n${text}`;\n\nreturn [{ json: { systemPrompt: SYSTEM, userMessage: USER } }];"
+      },
+      "id": "build-summarize-prompt",
+      "name": "Build Summarize Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "HTTP-Referer", "value": "https://github.com/ObsidianHomeOrchestrator" },
+            { "name": "X-Title", "value": "Life OS AI Brain" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000 }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "groq-summarize",
+      "name": "OpenRouter: Llama 3.3 70B",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2400,
+        140
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "Z7liUYc3Toq3q7W7",
+          "name": "OpenRouter API"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\ntry {\n  const content = input.choices[0].message.content;\n  // Strip markdown fences if present (some models add them)\n  const cleaned = content.replace(/^```json\\n?/i, '').replace(/\\n?```$/i, '').trim();\n  const parsed = JSON.parse(cleaned);\n  return [{ json: { success: true, ...parsed, source: 'openrouter' } }];\n} catch (e) {\n  return [{ json: { success: false, error: 'Failed to parse AI response: ' + e.message, raw: JSON.stringify(input).substring(0, 500) } }];\n}"
+      },
+      "id": "parse-groq-summary",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        140
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst r = input.results || input;\nconst BUCKET = 'obsidian-vault';\nconst PREFIX = 'Homelab';\n\nconst AREA_FOLDER_MAP = {\n  faith: '30_Knowledge Library/Bible Studies & Notes',\n  family: '20_Domains (Life and Work)/Personal/Family',\n  business: '20_Domains (Life and Work)/Personal/Business Ideas & Projects',\n  consulting: '20_Domains (Life and Work)/Career/Consulting',\n  work: '20_Domains (Life and Work)/Career/Parallon',\n  health: '30_Knowledge Library/Biohacking',\n  home: '20_Domains (Life and Work)/Personal/Home',\n  personal: '20_Domains (Life and Work)/Personal'\n};\n\nconst area = r.area || 'personal';\nconst folder = AREA_FOLDER_MAP[area] || AREA_FOLDER_MAP.personal;\nconst slug = (r.title || 'article').toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 50);\n\nconst TZ = 'America/Chicago';\nconst now = new Date();\nconst fmt = (opts) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...opts });\nconst y = parseInt(fmt({ year: 'numeric' }).format(now));\nconst m = fmt({ month: '2-digit' }).format(now);\nconst d = fmt({ day: '2-digit' }).format(now);\nconst dateStr = `${y}-${m}-${d}`;\n\n// Get original URL from the extract-text node context\nlet sourceUrl = '';\ntry {\n  sourceUrl = $('Extract Text').first().json.url || '';\n} catch (e) {}\n\nlet noteContent = `---\\ntype: article-note\\nsource_url: ${sourceUrl}\\ndate_captured: ${dateStr}\\narea: ${area}\\nneedle_mover: ${r.needle_mover || false}\\n---\\n\\n# ${r.title || 'Untitled Article'}\\n\\n## Summary\\n${r.summary || 'No summary available.'}\\n\\n## Key Takeaways\\n`;\n\nif (r.key_takeaways && r.key_takeaways.length > 0) {\n  r.key_takeaways.forEach(t => { noteContent += `- ${t}\\n`; });\n} else {\n  noteContent += '- No takeaways extracted.\\n';\n}\n\n// Action items as inline tasks\nif (r.action_items && r.action_items.length > 0) {\n  noteContent += '\\n## Action Items\\n';\n  r.action_items.forEach(a => {\n    const due = a.due ? ` [due:: ${a.due}]` : '';\n    noteContent += `- [ ] ${a.task} [area:: ${a.area || area}] [priority:: ${a.priority || 'B'}]${due}\\n`;\n  });\n}\n\nreturn [{ json: {\n  bucket: BUCKET,\n  fileKey: `${PREFIX}/${folder}/${dateStr}-${slug}.md`,\n  content: noteContent,\n  actionItems: r.action_items || [],\n  title: r.title\n} }];"
+      },
+      "id": "build-article-note",
+      "name": "Build Article Note",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convert string content to base64 binary for S3 upload\nconst item = $input.item.json;\nconst contentStr = item.content || '';\nconst base64 = Buffer.from(contentStr, 'utf-8').toString('base64');\n\nreturn [{\n  json: { fileKey: item.fileKey, label: item.title || 'article' },\n  binary: {\n    data: {\n      data: base64,\n      mimeType: 'text/markdown',\n      fileName: item.fileKey.split('/').pop() || 'article.md'\n    }\n  }\n}];"
+      },
+      "id": "prepare-article-binary",
+      "name": "Prepare Article Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.fileKey }}",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "upload-article-note",
+      "name": "S3: Upload Article Note",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        3840,
+        160
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Return to loop for next URL\nreturn [{ json: $input.first().json }];"
+      },
+      "id": "loop-return",
+      "name": "Loop Return",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4080,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// After all URLs processed, clear the articles-to-process.md file\nconst BUCKET = 'obsidian-vault';\nconst PREFIX = 'Homelab';\n\nconst clearedContent = `---\\ntype: article-queue\\n---\\n\\n`;\n\nreturn [{ json: {\n  bucket: BUCKET,\n  fileKey: `${PREFIX}/00_Inbox/articles-to-process.md`,\n  content: clearedContent,\n  label: 'Clear article queue'\n} }];"
+      },
+      "id": "build-clear-queue",
+      "name": "Build Clear Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convert string content to base64 binary for S3 upload\nconst item = $input.item.json;\nconst contentStr = item.content || '';\nconst base64 = Buffer.from(contentStr, 'utf-8').toString('base64');\n\nreturn [{\n  json: { fileKey: item.fileKey, label: item.label },\n  binary: {\n    data: {\n      data: base64,\n      mimeType: 'text/markdown',\n      fileName: item.fileKey.split('/').pop() || 'file.md'\n    }\n  }\n}];"
+      },
+      "id": "prepare-clear-binary",
+      "name": "Prepare Clear Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.fileKey }}",
+        "binaryPropertyName": "data",
+        "options": {}
+      },
+      "id": "upload-clear-queue",
+      "name": "S3: Clear Article Queue",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        440
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "8AM & 7PM Daily": {
+      "main": [
+        [
+          {
+            "node": "S3: Read Article Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read Article Queue": {
+      "main": [
+        [
+          {
+            "node": "Parse URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse URLs": {
+      "main": [
+        [
+          {
+            "node": "Has URLs?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has URLs?": {
+      "main": [
+        [
+          {
+            "node": "Loop: Each URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Loop: Each URL": {
+      "main": [
+        [
+          {
+            "node": "Get Current URL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Clear Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Current URL": {
+      "main": [
+        [
+          {
+            "node": "Fetch Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Page": {
+      "main": [
+        [
+          {
+            "node": "Extract Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text": {
+      "main": [
+        [
+          {
+            "node": "Build Summarize Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Summarize Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenRouter: Llama 3.3 70B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter: Llama 3.3 70B": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Build Article Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Article Note": {
+      "main": [
+        [
+          {
+            "node": "Prepare Article Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Article Binary": {
+      "main": [
+        [
+          {
+            "node": "S3: Upload Article Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Upload Article Note": {
+      "main": [
+        [
+          {
+            "node": "Loop Return",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Return": {
+      "main": [
+        [
+          {
+            "node": "Loop: Each URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Clear Queue": {
+      "main": [
+        [
+          {
+            "node": "Prepare Clear Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Clear Binary": {
+      "main": [
+        [
+          {
+            "node": "S3: Clear Article Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "America/Chicago"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "name": "obsidian",
+      "id": "obsidian-tag"
+    },
+    {
+      "name": "article-processor",
+      "id": "article-processor-tag"
+    },
+    {
+      "name": "automation",
+      "id": "automation-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-28T00:00:00.000Z",
+  "versionId": "1"
+}
