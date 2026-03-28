@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## 🧠 AI Brain — Shared Intelligence Layer\n\nReusable sub-workflow called by all Life OS workflows.\n\n**Input:** JSON with `job` (classify|summarize|brief|triage|review), `content`, and optional `context`.\n**Output:** Structured JSON via Groq (primary) or Gemini Flash (fallback).\n\n**Jobs:**\n- `classify` — Brain dump → tasks, notes, articles, decisions\n- `summarize` — Article text → summary, takeaways, area\n- `brief` — Daily context → focus items, nudges\n- `triage` — Overdue tasks → act/reschedule/drop/escalate\n- `review` — Weekly data → scorecard, balance, wins, honest question\n\n**n8n Credentials Required:**\n- `Groq API` — HTTP Header Auth, header `Authorization: Bearer <GROQ_API_KEY>`\n- `Gemini API` — HTTP Header Auth, header `x-goog-api-key: <GEMINI_API_KEY>`",
+        "content": "## 🧠 AI Brain — Shared Intelligence Layer\n\nReusable sub-workflow called by all Life OS workflows.\n\n**Input:** JSON with `job` (classify|summarize|brief|triage|review), `content`, and optional `context`.\n**Output:** Structured JSON via OpenRouter (Llama 3.3 70B).\n\n**Jobs:**\n- `classify` — Brain dump → tasks, notes, articles, decisions\n- `summarize` — Article text → summary, takeaways, area\n- `brief` — Daily context → focus items, nudges\n- `triage` — Overdue tasks → act/reschedule/drop/escalate\n- `review` — Weekly data → scorecard, balance, wins, honest question\n\n**n8n Credentials Required:**\n- `OpenRouter API` — HTTP Header Auth, header `Authorization: Bearer <OPENROUTER_API_KEY>`",
         "height": 540,
         "width": 460,
         "color": 4
@@ -35,134 +35,44 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "HTTP-Referer", "value": "https://github.com/ObsidianHomeOrchestrator" },
+            { "name": "X-Title", "value": "Life OS AI Brain" }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' } }) }}",
-        "options": {
-          "timeout": 30000,
-          "response": {
-            "response": {
-              "fullResponse": false
-            }
-          }
-        }
+        "jsonBody": "={{ JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000 }) }}",
+        "options": { "timeout": 30000 }
       },
       "id": "groq-request",
-      "name": "Groq: Llama 3.3 70B",
+      "name": "OpenRouter: Llama 3.3 70B",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [900, 240],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "GROQ_CREDENTIAL_ID",
-          "name": "Groq API"
+          "id": "Z7liUYc3Toq3q7W7",
+          "name": "OpenRouter API"
         }
       },
       "continueOnFail": true
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "conditions": [
-            {
-              "id": "groq-ok",
-              "leftValue": "={{ $json.statusCode }}",
-              "rightValue": 429,
-              "operator": {
-                "type": "number",
-                "operation": "notEquals"
-              }
-            },
-            {
-              "id": "groq-has-choices",
-              "leftValue": "={{ $json.choices }}",
-              "rightValue": "",
-              "operator": {
-                "type": "exists",
-                "operation": "exists"
-              }
-            }
-          ],
-          "combinator": "and"
-        }
-      },
-      "id": "groq-ok-check",
-      "name": "Groq Succeeded?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
-      "position": [1120, 240]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Parse Groq response\nconst input = $input.first().json;\ntry {\n  const content = input.choices[0].message.content;\n  const parsed = JSON.parse(content);\n  return [{ json: { success: true, ...parsed, source: 'groq' } }];\n} catch (e) {\n  return [{ json: { success: false, error: 'Failed to parse Groq response: ' + e.message, raw: JSON.stringify(input) } }];\n}"
+        "jsCode": "const input = $input.first().json;\ntry {\n  const content = input.choices[0].message.content;\n  // Strip markdown fences if present (some models add them)\n  const cleaned = content.replace(/^```json\\n?/i, '').replace(/\\n?```$/i, '').trim();\n  const parsed = JSON.parse(cleaned);\n  return [{ json: { success: true, ...parsed, source: 'openrouter' } }];\n} catch (e) {\n  return [{ json: { success: false, error: 'Failed to parse AI response: ' + e.message, raw: JSON.stringify(input).substring(0, 500) } }];\n}"
       },
       "id": "parse-groq",
-      "name": "Parse Groq Response",
+      "name": "Parse AI Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1340, 140]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
-        "authentication": "genericCredentialType",
-        "genericAuthType": "httpHeaderAuth",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $('Build LLM Prompt').item.json.systemPrompt + '\\n\\n' + $('Build LLM Prompt').item.json.userMessage }] }], generationConfig: { temperature: 0.3, maxOutputTokens: 2000, responseMimeType: 'application/json' } }) }}",
-        "options": {
-          "timeout": 30000
-        }
-      },
-      "id": "gemini-fallback",
-      "name": "Gemini Flash Fallback",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [1340, 380],
-      "credentials": {
-        "httpHeaderAuth": {
-          "id": "GEMINI_CREDENTIAL_ID",
-          "name": "Gemini API"
-        }
-      },
-      "continueOnFail": true
-    },
-    {
-      "parameters": {
-        "jsCode": "// Parse Gemini response\nconst input = $input.first().json;\ntry {\n  let text;\n  if (input.candidates && input.candidates[0]) {\n    text = input.candidates[0].content.parts[0].text;\n  } else {\n    return [{ json: { success: false, error: 'No Gemini response', raw: JSON.stringify(input) } }];\n  }\n  // Strip markdown fences if present\n  text = text.replace(/^```json\\n?/i, '').replace(/\\n?```$/i, '').trim();\n  const parsed = JSON.parse(text);\n  return [{ json: { success: true, ...parsed, source: 'gemini' } }];\n} catch (e) {\n  return [{ json: { success: false, error: 'Failed to parse Gemini response: ' + e.message, raw: JSON.stringify(input) } }];\n}"
-      },
-      "id": "parse-gemini",
-      "name": "Parse Gemini Response",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [1560, 380]
+      "position": [1120, 240]
     },
     {
       "parameters": {
@@ -172,7 +82,7 @@
       "name": "Return Result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1780, 260]
+      "position": [1340, 240]
     }
   ],
   "connections": {
@@ -183,31 +93,15 @@
     },
     "Build LLM Prompt": {
       "main": [
-        [{ "node": "Groq: Llama 3.3 70B", "type": "main", "index": 0 }]
+        [{ "node": "OpenRouter: Llama 3.3 70B", "type": "main", "index": 0 }]
       ]
     },
-    "Groq: Llama 3.3 70B": {
+    "OpenRouter: Llama 3.3 70B": {
       "main": [
-        [{ "node": "Groq Succeeded?", "type": "main", "index": 0 }]
+        [{ "node": "Parse AI Response", "type": "main", "index": 0 }]
       ]
     },
-    "Groq Succeeded?": {
-      "main": [
-        [{ "node": "Parse Groq Response", "type": "main", "index": 0 }],
-        [{ "node": "Gemini Flash Fallback", "type": "main", "index": 0 }]
-      ]
-    },
-    "Gemini Flash Fallback": {
-      "main": [
-        [{ "node": "Parse Gemini Response", "type": "main", "index": 0 }]
-      ]
-    },
-    "Parse Groq Response": {
-      "main": [
-        [{ "node": "Return Result", "type": "main", "index": 0 }]
-      ]
-    },
-    "Parse Gemini Response": {
+    "Parse AI Response": {
       "main": [
         [{ "node": "Return Result", "type": "main", "index": 0 }]
       ]

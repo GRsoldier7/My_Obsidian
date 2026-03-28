@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## 📊 Weekly Strategic Review\n\n**Schedule:** Every Sunday at 6:00 PM CT\n**Source:** Reads North Star.md + Master Task List from MinIO\n**Output:** AI-powered strategic review email with domain balance, needle-mover scorecard, wins, and an honest question\n\n### Setup\n- Credential `MinIO — obsidian-vault` must exist\n- Credential `Gmail SMTP` must exist\n- Credential `Groq API` must exist (free tier)\n- North Star.md should contain quarterly rocks and goals\n\n### Test\nRun manually any time to preview the email.",
+        "content": "## 📊 Weekly Strategic Review\n\n**Schedule:** Every Sunday at 6:00 PM CT\n**Source:** Reads North Star.md + Master Task List from MinIO\n**Output:** AI-powered strategic review email with domain balance, needle-mover scorecard, wins, and an honest question\n\n### Setup\n- Credential `MinIO — obsidian-vault` must exist\n- Credential `Gmail SMTP` must exist\n- Credential `OpenRouter API` must exist (free tier at openrouter.ai)\n- North Star.md should contain quarterly rocks and goals\n\n### Test\nRun manually any time to preview the email.",
         "height": 500,
         "width": 400,
         "color": 5
@@ -129,16 +129,24 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "HTTP-Referer", "value": "https://github.com/ObsidianHomeOrchestrator" },
+            { "name": "X-Title", "value": "Life OS AI Brain" }
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' } }) }}",
+        "jsonBody": "={{ JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000 }) }}",
         "options": { "timeout": 30000 }
       },
       "id": "groq-review",
-      "name": "Groq: Weekly Review",
+      "name": "OpenRouter: Llama 3.3 70B",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -146,72 +154,24 @@
         460
       ],
       "credentials": {
-        "httpHeaderAuth": { "id": "GROQ_CREDENTIAL_ID", "name": "Groq API" }
+        "httpHeaderAuth": {
+          "id": "Z7liUYc3Toq3q7W7",
+          "name": "OpenRouter API"
+        }
       },
       "continueOnFail": true
     },
     {
       "parameters": {
-        "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
-          "conditions": [
-            { "id": "groq-ok", "leftValue": "={{ $json.choices }}", "rightValue": "", "operator": { "type": "exists", "operation": "exists" } }
-          ],
-          "combinator": "and"
-        }
+        "jsCode": "const input = $input.first().json;\ntry {\n  const content = input.choices[0].message.content;\n  // Strip markdown fences if present (some models add them)\n  const cleaned = content.replace(/^```json\\n?/i, '').replace(/\\n?```$/i, '').trim();\n  const parsed = JSON.parse(cleaned);\n  return [{ json: { success: true, ...parsed, source: 'openrouter' } }];\n} catch (e) {\n  return [{ json: { success: false, error: 'Failed to parse AI response: ' + e.message, raw: JSON.stringify(input).substring(0, 500) } }];\n}"
       },
-      "id": "groq-review-ok",
-      "name": "Groq Review OK?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.2,
+      "id": "parse-groq-review",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         1600,
         460
-      ]
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $('Build Review Prompt').item.json.systemPrompt + '\\n\\n' + $('Build Review Prompt').item.json.userMessage }] }], generationConfig: { temperature: 0.3, maxOutputTokens: 2000, responseMimeType: 'application/json' } }) }}",
-        "options": { "timeout": 30000 }
-      },
-      "id": "gemini-review-fallback",
-      "name": "Gemini Fallback: Review",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        1840,
-        600
-      ],
-      "continueOnFail": true
-    },
-    {
-      "parameters": {
-        "jsCode": "const input = $input.first().json;\ntry {\n  const content = input.choices[0].message.content;\n  const parsed = JSON.parse(content);\n  return [{ json: { success: true, results: parsed.results || parsed, source: 'groq' } }];\n} catch (e) {\n  return [{ json: { success: false, error: e.message, results: {} } }];\n}"
-      },
-      "id": "parse-groq-review",
-      "name": "Parse Groq Review",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1840,
-        360
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "const input = $input.first().json;\ntry {\n  let text = input.candidates[0].content.parts[0].text;\n  text = text.replace(/^```json\\n?/i, '').replace(/\\n?```$/i, '').trim();\n  const parsed = JSON.parse(text);\n  return [{ json: { success: true, results: parsed.results || parsed, source: 'gemini' } }];\n} catch (e) {\n  return [{ json: { success: false, error: e.message, results: {} } }];\n}"
-      },
-      "id": "parse-gemini-review",
-      "name": "Parse Gemini Review",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        2080,
-        600
       ]
     },
     {
@@ -317,65 +277,25 @@
       "main": [
         [
           {
-            "node": "Groq: Weekly Review",
+            "node": "OpenRouter: Llama 3.3 70B",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Groq: Weekly Review": {
+    "OpenRouter: Llama 3.3 70B": {
       "main": [
         [
           {
-            "node": "Groq Review OK?",
+            "node": "Parse AI Response",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Groq Review OK?": {
-      "main": [
-        [
-          {
-            "node": "Parse Groq Review",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Gemini Fallback: Review",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Gemini Fallback: Review": {
-      "main": [
-        [
-          {
-            "node": "Parse Gemini Review",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Parse Groq Review": {
-      "main": [
-        [
-          {
-            "node": "Build Weekly Digest",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Parse Gemini Review": {
+    "Parse AI Response": {
       "main": [
         [
           {

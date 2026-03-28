@@ -188,16 +188,24 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "HTTP-Referer", "value": "https://github.com/ObsidianHomeOrchestrator" },
+            { "name": "X-Title", "value": "Life OS AI Brain" }
+          ]
+        },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 500, response_format: { type: 'json_object' } }) }}",
+        "jsonBody": "={{ JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000 }) }}",
         "options": { "timeout": 30000 }
       },
       "id": "groq-brief",
-      "name": "Groq: Daily Brief",
+      "name": "OpenRouter: Llama 3.3 70B",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -205,16 +213,19 @@
         440
       ],
       "credentials": {
-        "httpHeaderAuth": { "id": "GROQ_CREDENTIAL_ID", "name": "Groq API" }
+        "httpHeaderAuth": {
+          "id": "Z7liUYc3Toq3q7W7",
+          "name": "OpenRouter API"
+        }
       },
       "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nlet briefing = null;\ntry {\n  if (input.choices) {\n    const parsed = JSON.parse(input.choices[0].message.content);\n    briefing = parsed.results || parsed;\n  }\n} catch (e) { /* AI failed, use null briefing */ }\n\nreturn [{ json: { briefing } }];"
+        "jsCode": "const input = $input.first().json;\ntry {\n  const content = input.choices[0].message.content;\n  // Strip markdown fences if present (some models add them)\n  const cleaned = content.replace(/^```json\\n?/i, '').replace(/\\n?```$/i, '').trim();\n  const parsed = JSON.parse(cleaned);\n  return [{ json: { success: true, ...parsed, source: 'openrouter' } }];\n} catch (e) {\n  return [{ json: { success: false, error: 'Failed to parse AI response: ' + e.message, raw: JSON.stringify(input).substring(0, 500) } }];\n}"
       },
       "id": "parse-brief",
-      "name": "Parse Brief Response",
+      "name": "Parse AI Response",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -224,7 +235,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const { dateStr, dayName, weekStr, focusTheme, fileKey } = $('Compute Date & File Path').first().json;\n\n// Try to get briefing data from AI if it ran\nlet briefSection = '## Today\\'s Focus\\n> Set your top 3 priorities for today.\\n\\n';\ntry {\n  const briefData = $('Parse Brief Response').first().json.briefing;\n  if (briefData) {\n    const focusItems = briefData.focus_items || [];\n    const nudge = briefData.domain_nudge;\n    briefSection = '## Today\\'s Focus\\n';\n    if (focusItems.length > 0) {\n      briefSection += `> **${focusItems.length} items need attention today:**\\n`;\n      focusItems.forEach((item, i) => {\n        briefSection += `> ${i + 1}. ${item}\\n`;\n      });\n      if (nudge) {\n        briefSection += `>\\n> *${nudge}*\\n`;\n      }\n    }\n    briefSection += '\\n';\n  }\n} catch (e) { /* no briefing available, use static */ }\n\nconst content = `---\\ndate: ${dateStr}\\nday: ${dayName}\\nweek: ${weekStr}\\nfocus_theme: \"${focusTheme}\"\\ntags:\\n  - daily-note\\n---\\n\\n# ${dayName}, ${dateStr}\\n\\n> **Focus Theme:** ${focusTheme}\\n\\n---\\n\\n${briefSection}---\\n\\n## Top 3 Priorities\\n\\n- [ ] [area:: work] [priority:: A]\\n- [ ] [area:: work] [priority:: A]\\n- [ ] [area:: work] [priority:: A]\\n\\n---\\n\\n## Tasks Captured Today\\n\\n\\n\\n---\\n\\n## Notes\\n\\n\\n\\n---\\n\\n## End of Day Reflection\\n\\n**What went well?**\\n\\n\\n**What could be better?**\\n\\n\\n**Carry forward tomorrow:**\\n\\n- [ ]\\n`;\n\nconst base64 = Buffer.from(content, 'utf-8').toString('base64');\n\nreturn [{\n  json: { fileKey, dateStr, dayName, focusTheme, created: true },\n  binary: {\n    data: {\n      data: base64,\n      mimeType: 'text/markdown',\n      fileName: `${dateStr}.md`\n    }\n  }\n}];"
+        "jsCode": "const { dateStr, dayName, weekStr, focusTheme, fileKey } = $('Compute Date & File Path').first().json;\n\n// Try to get briefing data from AI if it ran\nlet briefSection = '## Today\\'s Focus\\n> Set your top 3 priorities for today.\\n\\n';\ntry {\n  const briefData = $('Parse AI Response').first().json.results || $('Parse AI Response').first().json;\n  if (briefData) {\n    const focusItems = briefData.focus_items || [];\n    const nudge = briefData.domain_nudge;\n    briefSection = '## Today\\'s Focus\\n';\n    if (focusItems.length > 0) {\n      briefSection += `> **${focusItems.length} items need attention today:**\\n`;\n      focusItems.forEach((item, i) => {\n        briefSection += `> ${i + 1}. ${item}\\n`;\n      });\n      if (nudge) {\n        briefSection += `>\\n> *${nudge}*\\n`;\n      }\n    }\n    briefSection += '\\n';\n  }\n} catch (e) { /* no briefing available, use static */ }\n\nconst content = `---\\ndate: ${dateStr}\\nday: ${dayName}\\nweek: ${weekStr}\\nfocus_theme: \"${focusTheme}\"\\ntags:\\n  - daily-note\\n---\\n\\n# ${dayName}, ${dateStr}\\n\\n> **Focus Theme:** ${focusTheme}\\n\\n---\\n\\n${briefSection}---\\n\\n## Top 3 Priorities\\n\\n- [ ] [area:: work] [priority:: A]\\n- [ ] [area:: work] [priority:: A]\\n- [ ] [area:: work] [priority:: A]\\n\\n---\\n\\n## Tasks Captured Today\\n\\n\\n\\n---\\n\\n## Notes\\n\\n\\n\\n---\\n\\n## End of Day Reflection\\n\\n**What went well?**\\n\\n\\n**What could be better?**\\n\\n\\n**Carry forward tomorrow:**\\n\\n- [ ]\\n`;\n\nconst base64 = Buffer.from(content, 'utf-8').toString('base64');\n\nreturn [{\n  json: { fileKey, dateStr, dayName, focusTheme, created: true },\n  binary: {\n    data: {\n      data: base64,\n      mimeType: 'text/markdown',\n      fileName: `${dateStr}.md`\n    }\n  }\n}];"
       },
       "id": "build-note",
       "name": "Build Daily Note Content",
@@ -393,25 +404,25 @@
       "main": [
         [
           {
-            "node": "Groq: Daily Brief",
+            "node": "OpenRouter: Llama 3.3 70B",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Groq: Daily Brief": {
+    "OpenRouter: Llama 3.3 70B": {
       "main": [
         [
           {
-            "node": "Parse Brief Response",
+            "node": "Parse AI Response",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Parse Brief Response": {
+    "Parse AI Response": {
       "main": [
         [
           {

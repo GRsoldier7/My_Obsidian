@@ -2,7 +2,7 @@
 # ═══════════════════════════════════════════════════════════════════
 # ObsidianHomeOrchestrator — n8n Setup Script
 # Creates credentials, imports workflows, activates all 6 workflows
-# Credentials: MinIO S3, Gmail SMTP, Groq API, Gemini API
+# Credentials: MinIO S3, Gmail SMTP, OpenRouter API
 # ═══════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKFLOW_DIR="$SCRIPT_DIR/../workflows/n8n"
 
 # ── Validate required env vars ──────────────────────────────────
-required_vars=(N8N_API_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY SMTP_USER SMTP_PASS GROQ_API_KEY GEMINI_API_KEY)
+required_vars=(N8N_API_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY SMTP_USER SMTP_PASS OPENROUTER_API_KEY)
 missing=()
 for var in "${required_vars[@]}"; do
   [[ -z "${!var:-}" ]] && missing+=("$var")
@@ -29,8 +29,7 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   echo "  MINIO_SECRET_KEY  — MinIO Claude_Cowork service account secret key"
   echo "  SMTP_USER         — Gmail address (aaron.deyoung@gmail.com)"
   echo "  SMTP_PASS         — Gmail App Password (Google Account → Security → 2FA → App Passwords)"
-  echo "  GROQ_API_KEY      — Free at https://console.groq.com (primary LLM)"
-  echo "  GEMINI_API_KEY    — Free at https://aistudio.google.com (fallback LLM)"
+  echo "  OPENROUTER_API_KEY — Free tier at https://openrouter.ai (unified LLM gateway)"
   exit 1
 fi
 
@@ -113,72 +112,41 @@ else
 fi
 
 
-# ── Step 3: Create Groq API credential ──────────────────────────
+# ── Step 3: Create OpenRouter API credential ─────────────────────
 echo ""
-echo "🤖 Creating Groq API credential (primary LLM)..."
-GROQ_CRED_RESPONSE=$(curl -s -X POST "$API/credentials" \
+echo "🤖 Creating OpenRouter API credential..."
+OR_CRED_RESPONSE=$(curl -s -X POST "$API/credentials" \
   -H "X-N8N-API-KEY: $N8N_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "Groq API",
+    "name": "OpenRouter API",
     "type": "httpHeaderAuth",
     "data": {
       "name": "Authorization",
-      "value": "Bearer '"$GROQ_API_KEY"'"
+      "value": "Bearer '"$OPENROUTER_API_KEY"'"
     }
   }')
 
-GROQ_CRED_ID=$(echo "$GROQ_CRED_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
-if [[ -z "$GROQ_CRED_ID" ]]; then
-  echo "⚠️  Groq credential may already exist. Checking..."
-  GROQ_CRED_ID=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/credentials" | \
-    python3 -c "import sys,json; creds=json.load(sys.stdin).get('data',[]); print(next((c['id'] for c in creds if 'Groq' in c.get('name','')), ''))" 2>/dev/null)
-  if [[ -n "$GROQ_CRED_ID" ]]; then
-    echo "✅ Groq credential exists (ID: $GROQ_CRED_ID)"
+OR_CRED_ID=$(echo "$OR_CRED_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+if [[ -z "$OR_CRED_ID" ]]; then
+  echo "⚠️  OpenRouter credential may already exist. Checking..."
+  OR_CRED_ID=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/credentials" | \
+    python3 -c "import sys,json; creds=json.load(sys.stdin).get('data',[]); print(next((c['id'] for c in creds if 'OpenRouter' in c.get('name','')), ''))" 2>/dev/null)
+  if [[ -n "$OR_CRED_ID" ]]; then
+    echo "✅ OpenRouter credential exists (ID: $OR_CRED_ID)"
   else
-    echo "❌ Failed to create Groq credential. Response: $GROQ_CRED_RESPONSE"
+    echo "❌ Failed to create OpenRouter credential. Response: $OR_CRED_RESPONSE"
     exit 1
   fi
 else
-  echo "✅ Groq API credential created (ID: $GROQ_CRED_ID)"
-fi
-
-# ── Step 4: Create Gemini API credential ────────────────────────
-echo ""
-echo "✨ Creating Gemini API credential (fallback LLM)..."
-GEMINI_CRED_RESPONSE=$(curl -s -X POST "$API/credentials" \
-  -H "X-N8N-API-KEY: $N8N_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Gemini API",
-    "type": "httpHeaderAuth",
-    "data": {
-      "name": "x-goog-api-key",
-      "value": "'"$GEMINI_API_KEY"'"
-    }
-  }')
-
-GEMINI_CRED_ID=$(echo "$GEMINI_CRED_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
-if [[ -z "$GEMINI_CRED_ID" ]]; then
-  echo "⚠️  Gemini credential may already exist. Checking..."
-  GEMINI_CRED_ID=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/credentials" | \
-    python3 -c "import sys,json; creds=json.load(sys.stdin).get('data',[]); print(next((c['id'] for c in creds if 'Gemini' in c.get('name','')), ''))" 2>/dev/null)
-  if [[ -n "$GEMINI_CRED_ID" ]]; then
-    echo "✅ Gemini credential exists (ID: $GEMINI_CRED_ID)"
-  else
-    echo "❌ Failed to create Gemini credential. Response: $GEMINI_CRED_RESPONSE"
-    exit 1
-  fi
-else
-  echo "✅ Gemini API credential created (ID: $GEMINI_CRED_ID)"
+  echo "✅ OpenRouter API credential created (ID: $OR_CRED_ID)"
 fi
 
 echo ""
 echo "🔑 Credential IDs:"
-echo "   MinIO:  $MINIO_CRED_ID"
-echo "   SMTP:   $SMTP_CRED_ID"
-echo "   Groq:   $GROQ_CRED_ID"
-echo "   Gemini: $GEMINI_CRED_ID"
+echo "   MinIO:       $MINIO_CRED_ID"
+echo "   SMTP:        $SMTP_CRED_ID"
+echo "   OpenRouter:  $OR_CRED_ID"
 
 # ── Step 5: Get existing workflows ──────────────────────────────
 echo ""
@@ -209,8 +177,7 @@ for wf_file in "${WORKFLOWS[@]}"; do
   wf_json=$(cat "$wf_path" | \
     sed "s/\"id\": \"MINIO_CRED_ID\"/\"id\": \"$MINIO_CRED_ID\"/g" | \
     sed "s/\"id\": \"SMTP_CRED_ID\"/\"id\": \"$SMTP_CRED_ID\"/g" | \
-    sed "s/\"id\": \"GROQ_CREDENTIAL_ID\"/\"id\": \"$GROQ_CRED_ID\"/g" | \
-    sed "s/\"id\": \"GEMINI_CREDENTIAL_ID\"/\"id\": \"$GEMINI_CRED_ID\"/g")
+    sed "s/\"id\": \"OPENROUTER_CREDENTIAL_ID\"/\"id\": \"$OR_CRED_ID\"/g")
 
   wf_name=$(echo "$wf_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['name'])" 2>/dev/null)
 
@@ -283,8 +250,7 @@ echo ""
 echo "Credentials created:"
 echo "  ✅ MinIO S3 (obsidian-vault bucket)"
 echo "  ✅ Gmail SMTP"
-echo "  ✅ Groq API (Llama 3.3 70B — primary LLM)"
-echo "  ✅ Gemini API (2.0 Flash — fallback LLM)"
+echo "  ✅ OpenRouter API (Llama 3.3 70B free tier)"
 echo ""
 echo "Workflows imported (6 total):"
 echo "  ✅ 🧠 AI Brain — Shared Intelligence Layer"
