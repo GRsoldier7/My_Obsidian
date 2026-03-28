@@ -39,7 +39,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Build the list of 8 brain dump file configs\nconst BUCKET = 'obsidian-vault';\nconst PREFIX = 'Homelab';\n\nconst domains = [\n  { domain: 'Faith',     area: 'faith',     emoji: '🙏', rock: 'Launch the Social Media Bible Study',      file: 'BrainDump — Faith.md' },\n  { domain: 'Family',    area: 'family',    emoji: '💒', rock: 'Marriage Alignment with Christy',           file: 'BrainDump — Family.md' },\n  { domain: 'Business',  area: 'business',  emoji: '🚀', rock: 'Ship the MVP — Echelon Seven',              file: 'BrainDump — Business (Echelon Seven).md' },\n  { domain: 'Consulting',area: 'consulting',emoji: '💼', rock: null,                                        file: 'BrainDump — Consulting.md' },\n  { domain: 'Work',      area: 'work',      emoji: '🏥', rock: 'Deliver Union Project + Position for Exit', file: 'BrainDump — Work (Parallon).md' },\n  { domain: 'Health',    area: 'health',    emoji: '💪', rock: 'Hip Decision + 3x/week Gym for 8 Weeks',   file: 'BrainDump — Health.md' },\n  { domain: 'Home',      area: 'home',      emoji: '🏠', rock: null,                                        file: 'BrainDump — Home.md' },\n  { domain: 'Personal',  area: 'personal',  emoji: '🤖', rock: null,                                        file: 'BrainDump — Personal.md' }\n];\n\nreturn domains.map(d => ({\n  json: {\n    ...d,\n    bucket: BUCKET,\n    fileKey: `${PREFIX}/00_Inbox/brain-dumps/${d.file}`,\n    masterTaskListKey: `${PREFIX}/10_Active Projects/Active Personal/!!! MASTER TASK LIST.md`\n  }\n}));"
+        "jsCode": "// Build the list of 8 brain dump file configs\nconst BUCKET = 'obsidian-vault';\nconst PREFIX = 'Homelab';\n\nconst domains = [\n  { domain: 'Faith',     area: 'faith',     emoji: '🙏', rock: 'Launch the Social Media Bible Study',      file: 'BrainDump — Faith.md' },\n  { domain: 'Family',    area: 'family',    emoji: '💒', rock: 'Marriage Alignment with Christy',           file: 'BrainDump — Family.md' },\n  { domain: 'Business',  area: 'business',  emoji: '🚀', rock: 'Ship the MVP — Echelon Seven',              file: 'BrainDump — Business (Echelon Seven).md' },\n  { domain: 'Consulting',area: 'consulting',emoji: '💼', rock: null,                                        file: 'BrainDump — Consulting.md' },\n  { domain: 'Work',      area: 'work',      emoji: '🏥', rock: 'Deliver Union Project + Position for Exit', file: 'BrainDump — Work (Parallon).md' },\n  { domain: 'Health',    area: 'health',    emoji: '💪', rock: 'Hip Decision + 3x/week Gym for 8 Weeks',   file: 'BrainDump — Health.md' },\n  { domain: 'Home',      area: 'home',      emoji: '🏠', rock: null,                                        file: 'BrainDump — Home.md' },\n  { domain: 'Personal',  area: 'personal',  emoji: '🤖', rock: null,                                        file: 'BrainDump — Personal.md' }\n];\n\nreturn domains.map(d => ({\n  json: {\n    ...d,\n    bucket: BUCKET,\n    fileKey: `${PREFIX}/00_Inbox/brain-dumps/${d.file}`\n  }\n}));"
       },
       "id": "define-files",
       "name": "Define Brain Dump Files",
@@ -117,7 +117,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// ═══════════════════════════════════════════════════════════\n// PARSE & ANALYZE — the brain of the workflow\n// Reads all accumulated brain dump content from static data,\n// classifies tasks vs review items, builds output schema.\n// ═══════════════════════════════════════════════════════════\n\nconst state = $workflow.staticData;\nconst files = state.collected || [];\n\n// Clear for next run\nstate.collected = [];\n\nconst today = new Date().toISOString().split('T')[0];\n\nconst MASTER_TASK_LIST_KEY = 'Homelab/10_Active Projects/Active Personal/!!! MASTER TASK LIST.md';\n\n// Section heading keywords (case-insensitive)\nconst SECTION_KEYWORDS = {\n  needleMovers:  /needle\\s*movers?|🎯/i,\n  todos:         /to\\s*do|tasks?|action/i,\n  notes:         /notes?|quick\\s*notes?/i,\n  articles:      /articles?|resources?|links?|reading/i,\n  ideas:         /ideas?|possibilities/i,\n  organize:      /organize|to\\s*organize|things\\s*to\\s*organize/i,\n  recurring:     /recurring|rhythms?|habits?/i\n};\n\nfunction parseContent(text) {\n  if (!text || text.trim().length < 5) return null;\n  const sections = { needleMovers: [], todos: [], notes: [], articles: [], ideas: [], organize: [], recurring: [] };\n  let currentSection = null;\n\n  for (const line of text.split('\\n')) {\n    const trimmed = line.trim();\n    if (trimmed.startsWith('#')) {\n      currentSection = null;\n      for (const [key, rx] of Object.entries(SECTION_KEYWORDS)) {\n        if (rx.test(trimmed)) { currentSection = key; break; }\n      }\n      continue;\n    }\n    if (currentSection && trimmed && !trimmed.match(/^<!--|^---$|^\\*Only/)) {\n      const cleanLine = trimmed.replace(/^-\\s*/, '').trim();\n      if (cleanLine.length > 2) sections[currentSection].push(cleanLine);\n    }\n  }\n  const hasAny = Object.values(sections).some(arr => arr.length > 0);\n  return hasAny ? sections : null;\n}\n\nfunction buildTaskLine(text, area, priority, due, rock) {\n  let line = `- [ ] ${text} [area:: ${area}] [priority:: ${priority}]`;\n  if (due) line += ` [due:: ${due}]`;\n  return line;\n}\n\nfunction extractDue(text) {\n  const m = text.match(/\\[due::\\s*(\\d{4}-\\d{2}-\\d{2})\\s*\\]/);\n  return m ? m[1] : null;\n}\n\nfunction cleanTaskText(text) {\n  return text\n    .replace(/\\[area::[^\\]]+\\]/g, '')\n    .replace(/\\[priority::[^\\]]+\\]/g, '')\n    .replace(/\\[due::[^\\]]+\\]/g, '')\n    .trim();\n}\n\nconst priorityATasks = [];\nconst priorityBTasks = [];\nconst reviewItems = { notes: [], articles: [], ideas: [], organize: [], recurring: [] };\nconst clearedDumps = [];\nconst processedDomains = [];\n\nfor (const file of files) {\n  const sections = parseContent(file.rawContent);\n  if (!sections) continue;\n\n  processedDomains.push({ domain: file.domain, area: file.area, emoji: file.emoji });\n\n  // Needle Movers → Priority A with rock\n  for (const item of sections.needleMovers) {\n    const due = extractDue(item);\n    const text = cleanTaskText(item);\n    const line = buildTaskLine(text, file.area, 'A', due, file.rock);\n    priorityATasks.push({ domain: file.domain, area: file.area, emoji: file.emoji, raw: text, due, rock: file.rock, line });\n  }\n\n  // To-Do items → respect inline priority, default B\n  for (const item of sections.todos) {\n    const pMatch = item.match(/\\[priority::\\s*([A-C])\\s*\\]/i);\n    const priority = pMatch ? pMatch[1].toUpperCase() : 'B';\n    const due = extractDue(item);\n    const text = cleanTaskText(item);\n    const line = buildTaskLine(text, file.area, priority, due, priority === 'A' ? file.rock : null);\n    const task = { domain: file.domain, area: file.area, emoji: file.emoji, raw: text, due, priority, rock: priority === 'A' ? file.rock : null, line };\n    if (priority === 'A') priorityATasks.push(task);\n    else priorityBTasks.push(task);\n  }\n\n  // Review items (email only, never auto-filed)\n  for (const key of ['notes', 'articles', 'ideas', 'organize', 'recurring']) {\n    for (const item of sections[key]) {\n      reviewItems[key].push({ domain: file.domain, area: file.area, text: item });\n    }\n  }\n\n  // Build cleared template for this domain\n  const clearedContent = `---\ndomain: ${file.domain}\nstatus: empty\nlast_processed: ${today}\n---\n\n## 🎯 Needle Movers\n<!-- Tasks that directly advance your Q2 quarterly rock for ${file.domain} -->\n\n\n## ✅ To-Do's\n<!-- Actionable tasks. Add [priority:: A/B/C] and [due:: YYYY-MM-DD] -->\n\n\n## 📝 Quick Notes\n<!-- Non-actionable observations, thoughts, reference material -->\n\n\n## 📚 Articles & Resources\n<!-- Links and resources to review -->\n\n\n## 🗂️ Things to Organize\n<!-- Items that need filing or organizing -->\n\n\n## 💡 Ideas & Possibilities\n<!-- Ideas, concepts, things to explore -->\n\n\n## 🔄 Recurring / Rhythms\n<!-- Regular commitments, habits, routines -->\n`;\n  clearedDumps.push({ fileKey: file.fileKey, domain: file.domain, content: clearedContent });\n}\n\nconst hasContent = processedDomains.length > 0;\n\n// Store for downstream nodes\nconst output = {\n  hasContent,\n  processedDomains,\n  priorityATasks,\n  priorityBTasks,\n  reviewItems,\n  clearedDumps,\n  masterTaskListKey: MASTER_TASK_LIST_KEY,\n  today\n};\n\n// Store in static data for cross-node access\n$workflow.staticData.parseOutput = output;\n\nreturn [{ json: output }];"
+        "jsCode": "// Collect all accumulated brain dump content\nconst state = $workflow.staticData;\nconst files = state.collected || [];\n\n// Clear for next run\nstate.collected = [];\n\nlet allContent = '';\n\nfor (const item of files) {\n  const dumps = [item];\n  for (const dump of dumps) {\n    if (dump.rawContent && dump.rawContent.trim().length > 10) {\n      allContent += `\\n--- ${dump.domain} (${dump.area}) ---\\n${dump.rawContent}\\n`;\n    }\n  }\n}\n\nif (!allContent.trim()) {\n  return [{ json: { hasContent: false, results: [], allContent: '' } }];\n}\n\nreturn [{ json: { hasContent: true, allContent: allContent.trim() } }];"
       },
       "id": "parse-analyze",
       "name": "Parse & Analyze All",
@@ -161,38 +161,119 @@
     },
     {
       "parameters": {
-        "resource": "file",
-        "operation": "download",
-        "bucketName": "obsidian-vault",
-        "fileKey": "={{ $json.masterTaskListKey }}",
-        "options": {}
+        "jsCode": "const input = $input.first().json;\nif (!input.hasContent) {\n  return [{ json: { success: false, skip: true } }];\n}\n\nconst SYSTEM_PROMPT = 'You are the AI Brain for Aaron\\'s Life Operating System. You process personal knowledge management content and return structured JSON only.\\n\\nCONTEXT:\\n- 8 life domains: faith, family, business, consulting, work, health, home, personal\\n- Task format: - [ ] Description [area:: X] [priority:: A/B/C] [due:: YYYY-MM-DD]\\n- Priority A = needle-mover (advances North Star quarterly rocks or annual goals)\\n- Priority B = important but not a needle-mover\\n- Priority C = nice-to-have\\n\\nNEEDLE-MOVER DEFINITION:\\nA needle-mover directly advances one of Aaron\\'s quarterly rocks or annual goals. Urgent != important. \"Reply to Slack\" is not a needle-mover. \"Draft Echelon Seven offer page\" is.\\n\\nQUARTERLY ROCKS:\\n- Faith: Launch the Social Media Bible Study\\n- Family: Marriage Alignment with Christy\\n- Business: Ship the MVP — Echelon Seven\\n- Work: Deliver Union Project + Position for Exit\\n- Health: Hip Decision + 3x/week Gym for 8 Weeks\\n\\nRULES:\\n- Return valid JSON only. No markdown fences. No explanatory text. Just the JSON object.\\n- Be concise. Summaries are 3-4 sentences max.\\n- Rewrite raw shorthand into clear, complete sentences that future-Aaron can understand in 2 weeks.\\n- When content crosses domains (e.g., \"pray about consulting deal\"), tag the primary area and list secondary in connections array.\\n- If uncertain about area, default to personal. If uncertain about priority, default to B.';\n\nconst USER_MSG = 'TASK: Classify this brain dump content into structured items.\\n\\nFor each item found, determine its type:\\n- \"task\" — an actionable to-do with a clear completion state\\n- \"note\" — information, thought, or reference to file away\\n- \"article\" — a URL or article reference to read/summarize later\\n- \"decision\" — something requiring deliberation with pros/cons (always Priority A)\\n\\nReturn JSON:\\n{\"results\": [{\"type\": \"task|note|article|decision\", \"title\": \"string\", \"content\": \"string\", \"area\": \"string\", \"priority\": \"A|B|C\", \"needle_mover\": true|false, \"due\": \"YYYY-MM-DD|null\", \"connections\": [], \"url\": \"string|null\", \"source_domain\": \"string\"}]}\\n\\nCONTENT:\\n' + input.allContent;\n\nreturn [{ json: { systemPrompt: SYSTEM_PROMPT, userMessage: USER_MSG } }];"
       },
-      "id": "get-master-task-list",
-      "name": "S3: Get Master Task List",
-      "type": "n8n-nodes-base.awsS3",
+      "id": "build-ai-prompt",
+      "name": "Build AI Prompt",
+      "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         1660,
-        760
-      ],
-      "credentials": {
-        "aws": {
-          "id": "jscahbrUH2TCnnSx",
-          "name": "MinIO S3"
-        }
-      }
+        660
+      ]
     },
     {
       "parameters": {
-        "jsCode": "// ═══════════════════════════════════════════════════════════\n// BUILD ALL UPDATES\n// Reads MTL binary, appends tasks, packages all files to write\n// ═══════════════════════════════════════════════════════════\n\nconst parsed = $workflow.staticData.parseOutput;\nconst { priorityATasks, priorityBTasks, clearedDumps, masterTaskListKey, today } = parsed;\n\n// Extract MTL content from binary\nconst binaryKey = Object.keys($input.item.binary || {})[0] || 'data';\nconst binaryData = $input.item.binary?.[binaryKey];\nlet mtlContent = binaryData?.data ? Buffer.from(binaryData.data, 'base64').toString('utf-8') : '';\n\n// Section header map for Priority A (by area)\nconst PRI_A_HEADERS = {\n  faith:      '### 🙏 Faith',\n  family:     '### 💒 Marriage & Family',\n  business:   '### 🚀 Business',\n  consulting: '### 💼 Consulting',\n  work:       '### 🏥 Work (Parallon)',\n  health:     '### 💪 Health',\n  home:       '### 🏠 Home',\n  personal:   '### 🤖 Personal'\n};\n\nconst PRI_B_HEADER = '## 🟡 Priority B';\n\nfunction insertAfterHeader(content, header, newLines) {\n  const idx = content.indexOf(header);\n  if (idx === -1) {\n    // Header not found — append at end\n    return content.trimEnd() + '\\n\\n' + newLines.join('\\n') + '\\n';\n  }\n  const afterHeader = content.indexOf('\\n', idx);\n  const insertPoint = afterHeader !== -1 ? afterHeader + 1 : content.length;\n  return content.slice(0, insertPoint) + newLines.join('\\n') + '\\n' + content.slice(insertPoint);\n}\n\n// Group Priority A tasks by area\nconst aTasksByArea = {};\nfor (const task of priorityATasks) {\n  if (!aTasksByArea[task.area]) aTasksByArea[task.area] = [];\n  aTasksByArea[task.area].push(task.line);\n}\n\n// Insert Priority A tasks under their area headers\nfor (const [area, lines] of Object.entries(aTasksByArea)) {\n  const header = PRI_A_HEADERS[area];\n  if (header) mtlContent = insertAfterHeader(mtlContent, header, lines);\n}\n\n// Insert Priority B tasks\nif (priorityBTasks.length > 0) {\n  const bLines = priorityBTasks.map(t => t.line);\n  mtlContent = insertAfterHeader(mtlContent, PRI_B_HEADER, bLines);\n}\n\n// Build file write array: MTL first, then cleared brain dumps\nconst filesToWrite = [\n  { fileKey: masterTaskListKey, content: mtlContent, label: 'Master Task List' },\n  ...clearedDumps\n];\n\nreturn [{ json: { filesToWrite, count: filesToWrite.length } }];"
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' } }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "groq-classify",
+      "name": "Groq: Classify Brain Dump",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1900,
+        560
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "GROQ_CREDENTIAL_ID",
+          "name": "Groq API"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "has-choices", "leftValue": "={{ $json.choices }}", "rightValue": "", "operator": { "type": "exists", "operation": "exists" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "groq-classify-ok",
+      "name": "Groq OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2140,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $('Build AI Prompt').item.json.systemPrompt + '\\n\\n' + $('Build AI Prompt').item.json.userMessage }] }], generationConfig: { temperature: 0.3, maxOutputTokens: 2000, responseMimeType: 'application/json' } }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "gemini-classify-fallback",
+      "name": "Gemini Fallback: Classify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2380,
+        700
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse LLM response (Groq format)\nconst input = $input.first().json;\ntry {\n  const content = input.choices[0].message.content;\n  const parsed = JSON.parse(content);\n  return [{ json: { success: true, results: parsed.results || [], source: 'groq' } }];\n} catch (e) {\n  return [{ json: { success: false, error: e.message, results: [] } }];\n}"
+      },
+      "id": "parse-groq-classify",
+      "name": "Parse Groq Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2380,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse LLM response (Gemini format)\nconst input = $input.first().json;\ntry {\n  let text = input.candidates[0].content.parts[0].text;\n  text = text.replace(/^```json\\n?/i, '').replace(/\\n?```$/i, '').trim();\n  const parsed = JSON.parse(text);\n  return [{ json: { success: true, results: parsed.results || [], source: 'gemini' } }];\n} catch (e) {\n  return [{ json: { success: false, error: e.message, results: [] } }];\n}"
+      },
+      "id": "parse-gemini-classify",
+      "name": "Parse Gemini Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2620,
+        700
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Route AI-classified items to their destinations\nconst input = $input.first().json;\nconst results = input.results || [];\nconst BUCKET = 'obsidian-vault';\nconst PREFIX = 'Homelab';\n\nconst TZ = 'America/Chicago';\nconst now = new Date();\nconst fmt = (opts) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...opts });\nconst y = parseInt(fmt({ year: 'numeric' }).format(now));\nconst m = fmt({ month: '2-digit' }).format(now);\nconst d = fmt({ day: '2-digit' }).format(now);\nconst hh = fmt({ hour: '2-digit', hour12: false }).format(now).padStart(2, '0');\nconst mm = fmt({ minute: '2-digit' }).format(now).padStart(2, '0');\nconst dateStr = `${y}-${m}-${d}`;\nconst timeStr = `${hh}${mm}`;\n\nconst AREA_FOLDER_MAP = {\n  faith: '30_Knowledge Library/Bible Studies & Notes',\n  family: '20_Domains (Life and Work)/Personal/Family',\n  business: '20_Domains (Life and Work)/Personal/Business Ideas & Projects',\n  consulting: '20_Domains (Life and Work)/Career/Consulting',\n  work: '20_Domains (Life and Work)/Career/Parallon',\n  health: '30_Knowledge Library/Biohacking',\n  home: '20_Domains (Life and Work)/Personal/Home',\n  personal: '20_Domains (Life and Work)/Personal'\n};\n\nconst filesToUpload = [];\nconst articleUrls = [];\nlet itemIndex = 0;\n\nfor (const item of results) {\n  itemIndex++;\n  const slug = (item.title || 'item').toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 40);\n  const area = item.area || 'personal';\n  const priority = item.needle_mover ? 'A' : (item.priority || 'B');\n  const connections = (item.connections || []).filter(c => c !== area);\n  const connectionsStr = connections.length > 0 ? `\\nconnections: [${connections.join(', ')}]` : '';\n\n  if (item.type === 'task' || item.type === 'decision') {\n    const dueStr = item.due ? ` [due:: ${item.due}]` : '';\n    const typeLabel = item.type === 'decision' ? 'decision' : 'processed-task';\n\n    let body = '';\n    if (item.type === 'decision') {\n      body = `- [ ] ${item.title} [area:: ${area}] [priority:: A]${dueStr}\\n\\n## Context\\n${item.content}\\n\\n## Pros\\n- \\n\\n## Cons\\n- \\n\\n## Decision\\n*Pending*`;\n    } else {\n      body = `- [ ] ${item.title} [area:: ${area}] [priority:: ${priority}]${dueStr}\\n\\n${item.content || ''}`;\n    }\n\n    const content = `---\\ncreated: ${new Date().toISOString()}\\ntype: ${typeLabel}\\nsource: brain-dump\\nneedle_mover: ${item.needle_mover || false}${connectionsStr}\\n---\\n\\n${body.trim()}\\n`;\n\n    filesToUpload.push({\n      bucket: BUCKET,\n      fileKey: `${PREFIX}/00_Inbox/processed/${dateStr}-${timeStr}-${slug}.md`,\n      content: content,\n      label: `${item.type}: ${item.title}`\n    });\n  } else if (item.type === 'note') {\n    const folder = AREA_FOLDER_MAP[area] || AREA_FOLDER_MAP.personal;\n    const content = `---\\ncreated: ${new Date().toISOString()}\\ntype: brain-dump-note\\nsource: brain-dump\\narea: ${area}\\nneedle_mover: ${item.needle_mover || false}${connectionsStr}\\n---\\n\\n# ${item.title}\\n\\n${item.content || ''}\\n`;\n\n    filesToUpload.push({\n      bucket: BUCKET,\n      fileKey: `${PREFIX}/${folder}/${dateStr}-${slug}.md`,\n      content: content,\n      label: `note: ${item.title}`\n    });\n  } else if (item.type === 'article') {\n    articleUrls.push(`${item.url || item.content}${item.title ? ' — ' + item.title : ''}`);\n  }\n}\n\n// If there are article URLs, add them to the article queue file\nif (articleUrls.length > 0) {\n  filesToUpload.push({\n    bucket: BUCKET,\n    fileKey: `${PREFIX}/00_Inbox/articles-to-process.md`,\n    content: `---\\ntype: article-queue\\n---\\n\\n${articleUrls.join('\\n')}\\n`,\n    label: `article queue (${articleUrls.length} URLs)`,\n    isArticleQueue: true\n  });\n}\n\n// Add cleared brain dump templates\nconst domains = [\n  { file: 'BrainDump — Faith.md', area: 'faith' },\n  { file: 'BrainDump — Family.md', area: 'family' },\n  { file: 'BrainDump — Business (Echelon Seven).md', area: 'business' },\n  { file: 'BrainDump — Consulting.md', area: 'consulting' },\n  { file: 'BrainDump — Work (Parallon).md', area: 'work' },\n  { file: 'BrainDump — Health.md', area: 'health' },\n  { file: 'BrainDump — Home.md', area: 'home' },\n  { file: 'BrainDump — Personal.md', area: 'personal' }\n];\n\nfor (const dom of domains) {\n  filesToUpload.push({\n    bucket: BUCKET,\n    fileKey: `${PREFIX}/00_Inbox/brain-dumps/${dom.file}`,\n    content: `---\\narea: ${dom.area}\\nprocessed: false\\n---\\n\\nCapture your ${dom.area} thoughts here...\\n`,\n    label: `clear: ${dom.file}`\n  });\n}\n\nreturn [{ json: { filesToUpload, results, articleCount: articleUrls.length } }];"
       },
       "id": "build-updates",
       "name": "Build All Updates",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1900,
-        760
+        2860,
+        560
       ]
     },
     {
@@ -205,8 +286,8 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        2140,
-        760
+        3100,
+        560
       ]
     },
     {
@@ -218,8 +299,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2380,
-        660
+        3340,
+        460
       ]
     },
     {
@@ -236,8 +317,8 @@
       "type": "n8n-nodes-base.awsS3",
       "typeVersion": 2,
       "position": [
-        2620,
-        660
+        3580,
+        460
       ],
       "credentials": {
         "aws": {
@@ -248,15 +329,15 @@
     },
     {
       "parameters": {
-        "jsCode": "// ═══════════════════════════════════════\n// BUILD HTML DIGEST EMAIL\n// ═══════════════════════════════════════\nconst d = $workflow.staticData.parseOutput;\nconst { processedDomains, priorityATasks, priorityBTasks, reviewItems, today } = d;\n\nconst totalReview = Object.values(reviewItems).reduce((s, a) => s + a.length, 0);\n\nfunction taskCards(tasks, color) {\n  if (!tasks.length) return '<p style=\"color:#888\">None today.</p>';\n  return tasks.map(t => `\n    <div style=\"background:#1e1e2e;border-left:4px solid ${color};border-radius:8px;padding:12px 16px;margin:8px 0\">\n      <span style=\"font-size:1.1em\">${t.emoji} ${t.raw}</span>\n      ${t.rock ? `<span style=\"background:#f5a623;color:#000;font-size:0.75em;padding:2px 8px;border-radius:12px;margin-left:8px\">${t.rock}</span>` : ''}\n      ${t.due ? `<span style=\"color:#888;font-size:0.8em;margin-left:8px\">📅 ${t.due}</span>` : ''}\n    </div>`).join('');\n}\n\nfunction reviewSection(title, items) {\n  if (!items.length) return '';\n  return `<h3 style=\"color:#a0a0b0;margin:16px 0 8px\">${title}</h3><ul style=\"color:#c8c8d8\">${\n    items.map(i => `<li><strong>${i.emoji || i.domain}:</strong> ${i.text}</li>`).join('')\n  }</ul>`;\n}\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"background:#13131f;color:#e0e0f0;font-family:system-ui,sans-serif;max-width:680px;margin:0 auto;padding:24px\">\n  <div style=\"background:linear-gradient(135deg,#667eea,#764ba2);border-radius:16px;padding:28px 32px;margin-bottom:24px\">\n    <h1 style=\"margin:0;color:#fff\">🧠 Brain Dump Processed</h1>\n    <p style=\"margin:8px 0 0;color:rgba(255,255,255,0.8)\">${today} &bull; ${processedDomains.map(d=>d.emoji+' '+d.domain).join(' &bull; ')}</p>\n  </div>\n  <div style=\"display:flex;gap:12px;margin-bottom:24px\">\n    <div style=\"flex:1;background:#1e1e2e;border-radius:12px;padding:16px;text-align:center\">\n      <div style=\"font-size:2em;font-weight:700;color:#ff6b6b\">${priorityATasks.length}</div>\n      <div style=\"color:#888\">Priority A</div>\n    </div>\n    <div style=\"flex:1;background:#1e1e2e;border-radius:12px;padding:16px;text-align:center\">\n      <div style=\"font-size:2em;font-weight:700;color:#f5a623\">${priorityBTasks.length}</div>\n      <div style=\"color:#888\">Priority B</div>\n    </div>\n    <div style=\"flex:1;background:#1e1e2e;border-radius:12px;padding:16px;text-align:center\">\n      <div style=\"font-size:2em;font-weight:700;color:#4ecdc4\">${totalReview}</div>\n      <div style=\"color:#888\">For Review</div>\n    </div>\n  </div>\n  <h2 style=\"color:#ff6b6b\">🔴 Priority A — Filed to Master List</h2>\n  ${taskCards(priorityATasks, '#ff6b6b')}\n  <h2 style=\"color:#f5a623\">🟡 Priority B — Filed to Master List</h2>\n  ${taskCards(priorityBTasks, '#f5a623')}\n  ${reviewSection('📝 Notes (Review Only)', reviewItems.notes)}\n  ${reviewSection('📚 Articles & Resources (Review Only)', reviewItems.articles)}\n  ${reviewSection('💡 Ideas (Review Only)', reviewItems.ideas)}\n  ${reviewSection('🗂️ To Organize (Review Only)', reviewItems.organize)}\n  ${reviewSection('🔄 Recurring / Rhythms (Review Only)', reviewItems.recurring)}\n  <hr style=\"border:1px solid #2a2a3e;margin:24px 0\">\n  <p style=\"color:#555;font-size:0.85em\">Brain dumps cleared and ready for tomorrow &bull; Processed at ${new Date().toLocaleTimeString('en-US', {timeZone:'America/Chicago'})}</p>\n</body></html>`;\n\nreturn [{\n  json: {\n    subject: `🧠 Brain Dump Processed — ${priorityATasks.length + priorityBTasks.length} new tasks · ${today}`,\n    html\n  }\n}];"
+        "jsCode": "// Build smart digest email — grouped by type, needle-movers at top\nconst input = $input.first().json;\nconst results = input.results || [];\n\nconst needleMovers = results.filter(r => r.needle_mover && (r.type === 'task' || r.type === 'decision'));\nconst otherTasks = results.filter(r => !r.needle_mover && r.type === 'task');\nconst notes = results.filter(r => r.type === 'note');\nconst articles = results.filter(r => r.type === 'article');\nconst decisions = results.filter(r => r.type === 'decision' && !r.needle_mover);\n\nconst totalItems = results.length;\nconst nmCount = needleMovers.length;\n\nconst itemRow = (item) => {\n  const areaEmoji = { faith: '🙏', family: '💒', business: '🚀', consulting: '💼', work: '🏥', health: '💪', home: '🏠', personal: '🤖' };\n  const emoji = areaEmoji[item.area] || '📌';\n  const due = item.due ? ` (due ${item.due})` : '';\n  const conn = (item.connections || []).length > 0 ? ` [also: ${item.connections.join(', ')}]` : '';\n  return `<tr><td style=\"padding:8px;border-bottom:1px solid #eee;\">${emoji} <strong>${item.title}</strong>${due}${conn}</td><td style=\"padding:8px;border-bottom:1px solid #eee;text-align:center;\">${item.area}</td><td style=\"padding:8px;border-bottom:1px solid #eee;text-align:center;\">${item.priority || 'B'}</td></tr>`;\n};\n\nlet html = `<div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:600px;margin:0 auto;\">\\n`;\nhtml += `<h1 style=\"color:#1a1a2e;\">🧠 Brain Dump Digest</h1>\\n`;\nhtml += `<p style=\"color:#666;\">${totalItems} items processed • ${nmCount} needle-movers found</p>\\n`;\n\nif (needleMovers.length > 0) {\n  html += `<h2 style=\"color:#c0392b;\">🎯 Needle-Movers (Priority A)</h2>\\n`;\n  html += `<table style=\"width:100%;border-collapse:collapse;\">${needleMovers.map(itemRow).join('')}</table>\\n`;\n}\n\nif (otherTasks.length > 0) {\n  html += `<h2 style=\"color:#2c3e50;\">✅ Tasks</h2>\\n`;\n  html += `<table style=\"width:100%;border-collapse:collapse;\">${otherTasks.map(itemRow).join('')}</table>\\n`;\n}\n\nif (decisions.length > 0) {\n  html += `<h2 style=\"color:#8e44ad;\">🤔 Decisions to Make</h2>\\n`;\n  html += `<table style=\"width:100%;border-collapse:collapse;\">${decisions.map(itemRow).join('')}</table>\\n`;\n}\n\nif (notes.length > 0) {\n  html += `<h2 style=\"color:#27ae60;\">📝 Notes Filed</h2>\\n`;\n  html += `<ul>${notes.map(n => `<li><strong>${n.title}</strong> → ${n.area}</li>`).join('')}</ul>\\n`;\n}\n\nif (articles.length > 0) {\n  html += `<h2 style=\"color:#2980b9;\">📚 Articles Queued (${articles.length})</h2>\\n`;\n  html += `<p>These will be fetched and summarized automatically.</p>\\n`;\n  html += `<ul>${articles.map(a => `<li>${a.url || a.title}</li>`).join('')}</ul>\\n`;\n}\n\nhtml += `</div>`;\n\nconst subject = nmCount > 0\n  ? `🧠 Brain Dump: ${nmCount} needle-mover${nmCount > 1 ? 's' : ''} + ${totalItems - nmCount} items`\n  : `🧠 Brain Dump: ${totalItems} items processed`;\n\nreturn [{ json: { subject, html } }];"
       },
       "id": "build-email",
       "name": "Build Digest Email",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2620,
-        860
+        3580,
+        660
       ]
     },
     {
@@ -273,8 +354,8 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        2860,
-        860
+        3820,
+        660
       ],
       "credentials": {
         "smtp": {
@@ -373,7 +454,7 @@
       "main": [
         [
           {
-            "node": "S3: Get Master Task List",
+            "node": "Build AI Prompt",
             "type": "main",
             "index": 0
           }
@@ -381,7 +462,69 @@
         []
       ]
     },
-    "S3: Get Master Task List": {
+    "Build AI Prompt": {
+      "main": [
+        [
+          {
+            "node": "Groq: Classify Brain Dump",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq: Classify Brain Dump": {
+      "main": [
+        [
+          {
+            "node": "Groq OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq OK?": {
+      "main": [
+        [
+          {
+            "node": "Parse Groq Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gemini Fallback: Classify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Fallback: Classify": {
+      "main": [
+        [
+          {
+            "node": "Parse Gemini Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Groq Response": {
+      "main": [
+        [
+          {
+            "node": "Build All Updates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Gemini Response": {
       "main": [
         [
           {
@@ -482,6 +625,6 @@
     }
   ],
   "triggerCount": 1,
-  "updatedAt": "2026-03-24T00:00:00.000Z",
-  "versionId": "2"
+  "updatedAt": "2026-03-28T00:00:00.000Z",
+  "versionId": "3"
 }

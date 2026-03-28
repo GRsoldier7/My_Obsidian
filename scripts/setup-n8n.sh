@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
 # ObsidianHomeOrchestrator — n8n Setup Script
-# Creates credentials, imports workflows, activates all 4 workflows
+# Creates credentials, imports workflows, activates all 6 workflows
+# Credentials: MinIO S3, Gmail SMTP, Groq API, Gemini API
 # ═══════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -10,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKFLOW_DIR="$SCRIPT_DIR/../workflows/n8n"
 
 # ── Validate required env vars ──────────────────────────────────
-required_vars=(N8N_API_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY SMTP_USER SMTP_PASS)
+required_vars=(N8N_API_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY SMTP_USER SMTP_PASS GROQ_API_KEY GEMINI_API_KEY)
 missing=()
 for var in "${required_vars[@]}"; do
   [[ -z "${!var:-}" ]] && missing+=("$var")
@@ -28,6 +29,8 @@ if [[ ${#missing[@]} -gt 0 ]]; then
   echo "  MINIO_SECRET_KEY  — MinIO Claude_Cowork service account secret key"
   echo "  SMTP_USER         — Gmail address (aaron.deyoung@gmail.com)"
   echo "  SMTP_PASS         — Gmail App Password (Google Account → Security → 2FA → App Passwords)"
+  echo "  GROQ_API_KEY      — Free at https://console.groq.com (primary LLM)"
+  echo "  GEMINI_API_KEY    — Free at https://aistudio.google.com (fallback LLM)"
   exit 1
 fi
 
@@ -109,38 +112,105 @@ else
   echo "✅ Gmail SMTP credential created (ID: $SMTP_CRED_ID)"
 fi
 
+
+# ── Step 3: Create Groq API credential ──────────────────────────
+echo ""
+echo "🤖 Creating Groq API credential (primary LLM)..."
+GROQ_CRED_RESPONSE=$(curl -s -X POST "$API/credentials" \
+  -H "X-N8N-API-KEY: $N8N_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Groq API",
+    "type": "httpHeaderAuth",
+    "data": {
+      "name": "Authorization",
+      "value": "Bearer '"$GROQ_API_KEY"'"
+    }
+  }')
+
+GROQ_CRED_ID=$(echo "$GROQ_CRED_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+if [[ -z "$GROQ_CRED_ID" ]]; then
+  echo "⚠️  Groq credential may already exist. Checking..."
+  GROQ_CRED_ID=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/credentials" | \
+    python3 -c "import sys,json; creds=json.load(sys.stdin).get('data',[]); print(next((c['id'] for c in creds if 'Groq' in c.get('name','')), ''))" 2>/dev/null)
+  if [[ -n "$GROQ_CRED_ID" ]]; then
+    echo "✅ Groq credential exists (ID: $GROQ_CRED_ID)"
+  else
+    echo "❌ Failed to create Groq credential. Response: $GROQ_CRED_RESPONSE"
+    exit 1
+  fi
+else
+  echo "✅ Groq API credential created (ID: $GROQ_CRED_ID)"
+fi
+
+# ── Step 4: Create Gemini API credential ────────────────────────
+echo ""
+echo "✨ Creating Gemini API credential (fallback LLM)..."
+GEMINI_CRED_RESPONSE=$(curl -s -X POST "$API/credentials" \
+  -H "X-N8N-API-KEY: $N8N_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Gemini API",
+    "type": "httpHeaderAuth",
+    "data": {
+      "name": "x-goog-api-key",
+      "value": "'"$GEMINI_API_KEY"'"
+    }
+  }')
+
+GEMINI_CRED_ID=$(echo "$GEMINI_CRED_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+if [[ -z "$GEMINI_CRED_ID" ]]; then
+  echo "⚠️  Gemini credential may already exist. Checking..."
+  GEMINI_CRED_ID=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/credentials" | \
+    python3 -c "import sys,json; creds=json.load(sys.stdin).get('data',[]); print(next((c['id'] for c in creds if 'Gemini' in c.get('name','')), ''))" 2>/dev/null)
+  if [[ -n "$GEMINI_CRED_ID" ]]; then
+    echo "✅ Gemini credential exists (ID: $GEMINI_CRED_ID)"
+  else
+    echo "❌ Failed to create Gemini credential. Response: $GEMINI_CRED_RESPONSE"
+    exit 1
+  fi
+else
+  echo "✅ Gemini API credential created (ID: $GEMINI_CRED_ID)"
+fi
+
 echo ""
 echo "🔑 Credential IDs:"
-echo "   MinIO: $MINIO_CRED_ID"
-echo "   SMTP:  $SMTP_CRED_ID"
+echo "   MinIO:  $MINIO_CRED_ID"
+echo "   SMTP:   $SMTP_CRED_ID"
+echo "   Groq:   $GROQ_CRED_ID"
+echo "   Gemini: $GEMINI_CRED_ID"
 
-# ── Step 3: Get existing workflows ──────────────────────────────
+# ── Step 5: Get existing workflows ──────────────────────────────
 echo ""
 echo "📋 Checking existing workflows..."
 EXISTING_WORKFLOWS=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/workflows")
 
-# ── Step 4: Update credential IDs in workflows and import/update ─
+# ── Step 6: Update credential IDs in workflows and import/update ─
 echo ""
 echo "📥 Updating workflows with real credential IDs..."
 
 WORKFLOWS=(
+  "ai-brain.json"
   "brain-dump-processor.json"
   "daily-note-creator.json"
   "overdue-task-alert.json"
   "weekly-digest.json"
+  "article-processor.json"
 )
 
 for wf_file in "${WORKFLOWS[@]}"; do
   wf_path="$WORKFLOW_DIR/$wf_file"
   if [[ ! -f "$wf_path" ]]; then
-    echo "❌ Workflow file not found: $wf_path"
+    echo "   ⚠️  Workflow file not found: $wf_path — skipping"
     continue
   fi
 
   # Replace placeholder credential IDs with real ones
   wf_json=$(cat "$wf_path" | \
     sed "s/\"id\": \"MINIO_CRED_ID\"/\"id\": \"$MINIO_CRED_ID\"/g" | \
-    sed "s/\"id\": \"SMTP_CRED_ID\"/\"id\": \"$SMTP_CRED_ID\"/g")
+    sed "s/\"id\": \"SMTP_CRED_ID\"/\"id\": \"$SMTP_CRED_ID\"/g" | \
+    sed "s/\"id\": \"GROQ_CREDENTIAL_ID\"/\"id\": \"$GROQ_CRED_ID\"/g" | \
+    sed "s/\"id\": \"GEMINI_CREDENTIAL_ID\"/\"id\": \"$GEMINI_CRED_ID\"/g")
 
   wf_name=$(echo "$wf_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['name'])" 2>/dev/null)
 
@@ -191,28 +261,43 @@ for w in data:
   fi
 done
 
-# ── Step 5: Verify all workflows are active ─────────────────────
+# ── Step 7: Verify all workflows are active ─────────────────────
 echo ""
 echo "🔍 Verifying workflow status..."
 FINAL_WORKFLOWS=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/workflows")
 echo "$FINAL_WORKFLOWS" | python3 -c "
 import sys, json
 data = json.load(sys.stdin).get('data', [])
-targets = ['Brain Dump', 'Daily Note', 'Overdue Task', 'Weekly']
+targets = ['Brain Dump', 'Daily Note', 'Overdue Task', 'Weekly', 'AI Brain', 'Article']
 for w in data:
     name = w.get('name', '')
     if any(t in name for t in targets):
-        status = '✅ ACTIVE' if w.get('active') else '❌ INACTIVE'
+        status = '✅ ACTIVE  ' if w.get('active') else '❌ INACTIVE'
         print(f'   {status}  {name}')
 " 2>/dev/null
 
 echo ""
 echo "═══════════════════════════════════════════════════"
-echo "🎉 Setup complete!"
+echo "🎉 Setup complete! AI Brain is live."
+echo ""
+echo "Credentials created:"
+echo "  ✅ MinIO S3 (obsidian-vault bucket)"
+echo "  ✅ Gmail SMTP"
+echo "  ✅ Groq API (Llama 3.3 70B — primary LLM)"
+echo "  ✅ Gemini API (2.0 Flash — fallback LLM)"
+echo ""
+echo "Workflows imported (6 total):"
+echo "  ✅ 🧠 AI Brain — Shared Intelligence Layer"
+echo "  ✅ 🧠 Brain Dump Processor (7AM — AI classify)"
+echo "  ✅ 📓 Daily Note Creator (6AM — AI briefing)"
+echo "  ✅ ⚠️  Overdue Task Alert (8AM — AI triage)"
+echo "  ✅ 📊 Weekly Digest (Sun 6PM — AI review)"
+echo "  ✅ 📚 Article Processor (8AM + 7PM)"
 echo ""
 echo "Next steps:"
 echo "  1. Verify Remotely Save in Obsidian is syncing to:"
 echo "     Bucket: obsidian-vault | Prefix: Homelab/"
 echo "  2. Ensure 8 brain dump files exist in vault"
-echo "  3. Test: Run 'Daily Note Creator' manually in n8n"
+echo "  3. Test: Run '🧠 Brain Dump Processor' manually in n8n"
+echo "  4. Test: Run '📓 Daily Note Creator' manually in n8n"
 echo "═══════════════════════════════════════════════════"

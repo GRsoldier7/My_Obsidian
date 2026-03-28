@@ -107,15 +107,132 @@
     },
     {
       "parameters": {
-        "jsCode": "const { dateStr, dayName, weekStr, focusTheme, fileKey } = $('Compute Date & File Path').first().json;\n\nconst content = `---\ndate: ${dateStr}\nday: ${dayName}\nweek: ${weekStr}\nfocus_theme: \"${focusTheme}\"\ntags:\n  - daily-note\n---\n\n# ${dayName}, ${dateStr}\n\n> **Focus Theme:** ${focusTheme}\n\n---\n\n## Top 3 Priorities\n\n- [ ] [area:: work] [priority:: A]\n- [ ] [area:: work] [priority:: A]\n- [ ] [area:: work] [priority:: A]\n\n---\n\n## Tasks Captured Today\n\n\n\n---\n\n## Notes\n\n\n\n---\n\n## End of Day Reflection\n\n**What went well?**\n\n\n**What could be better?**\n\n\n**Carry forward tomorrow:**\n\n- [ ]\n`;\n\nconst base64 = Buffer.from(content, 'utf-8').toString('base64');\n\nreturn [{\n  json: { fileKey, dateStr, dayName, focusTheme, created: true },\n  binary: {\n    data: {\n      data: base64,\n      mimeType: 'text/markdown',\n      fileName: `${dateStr}.md`\n    }\n  }\n}];"
+        "jsCode": "// Read overdue tasks and needle-movers for gate check\n// We'll check the Master Task List for overdue items and Priority A tasks\nconst input = $input.first().json;\nreturn [{ json: { ...input, needsContextRead: true } }];"
+      },
+      "id": "prepare-context-read",
+      "name": "Prepare Context Read",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "Homelab/10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
+      },
+      "id": "read-mtl-for-briefing",
+      "name": "S3: Read Task List",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        540
+      ],
+      "credentials": {
+        "aws": {
+          "id": "jscahbrUH2TCnnSx",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Gate check: parse MTL for overdue tasks and needle-movers\n// If nothing interesting, skip AI call entirely\nconst dateInfo = $('Compute Date & File Path').first().json;\nconst todayStr = dateInfo.dateStr;\n\nlet mtlContent = '';\ntry {\n  const binary = $input.first().binary;\n  if (binary && binary.data) {\n    mtlContent = Buffer.from(binary.data.data, 'base64').toString('utf-8');\n  }\n} catch (e) { /* no MTL found, that's ok */ }\n\n// Parse overdue tasks\nconst taskRegex = /^\\s*- \\[ \\]\\s+(.+)$/gm;\nconst overdueItems = [];\nconst needleMovers = [];\nlet match;\n\nwhile ((match = taskRegex.exec(mtlContent)) !== null) {\n  const line = match[1];\n  const dueMatch = line.match(/\\[due::\\s*(\\d{4}-\\d{2}-\\d{2})\\s*\\]/);\n  const priorityMatch = line.match(/\\[priority::\\s*([A-C])\\s*\\]/i);\n  const areaMatch = line.match(/\\[area::\\s*(\\w+)\\s*\\]/);\n  \n  const priority = priorityMatch ? priorityMatch[1].toUpperCase() : 'B';\n  \n  if (dueMatch && dueMatch[1] < todayStr) {\n    overdueItems.push({ task: line.substring(0, 80), due: dueMatch[1], area: areaMatch ? areaMatch[1] : 'unknown', priority });\n  }\n  if (priority === 'A') {\n    needleMovers.push({ task: line.substring(0, 80), due: dueMatch ? dueMatch[1] : null, area: areaMatch ? areaMatch[1] : 'unknown' });\n  }\n}\n\nconst hasSignal = overdueItems.length > 0 || needleMovers.length > 0;\n\nreturn [{ json: {\n  hasSignal,\n  overdueItems,\n  needleMovers,\n  overdueCount: overdueItems.length,\n  needleMoverCount: needleMovers.length\n} }];"
+      },
+      "id": "gate-check",
+      "name": "Gate Check: Has Signal?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "has-signal", "leftValue": "={{ $json.hasSignal }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-has-signal",
+      "name": "Has Signal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1900,
+        540
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const gate = $input.first().json;\nconst overdueStr = gate.overdueItems.map(t => `- ${t.task} (${t.area}, ${t.priority}, due ${t.due})`).join('\\n');\nconst nmStr = gate.needleMovers.map(t => `- ${t.task} (${t.area}${t.due ? ', due ' + t.due : ''})`).join('\\n');\n\nconst content = `Overdue tasks (${gate.overdueCount}):\\n${overdueStr || 'None'}\\n\\nNeedle-movers this week (${gate.needleMoverCount}):\\n${nmStr || 'None'}`;\n\nconst SYSTEM = 'You are the AI Brain for Aaron\\'s Life Operating System. Return structured JSON only. Be extremely concise — 50-80 words max for the entire briefing.';\nconst USER = `TASK: Generate a concise daily briefing.\\n\\nReturn JSON:\\n{\"results\": {\"focus_items\": [\"item1\", \"item2\", \"item3\"], \"domain_nudge\": \"string|null\", \"overdue_count\": 0}}\\n\\nCONTENT:\\n${content}`;\n\nreturn [{ json: { systemPrompt: SYSTEM, userMessage: USER } }];"
+      },
+      "id": "build-brief-prompt",
+      "name": "Build Brief Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2140,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 500, response_format: { type: 'json_object' } }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "groq-brief",
+      "name": "Groq: Daily Brief",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2380,
+        440
+      ],
+      "credentials": {
+        "httpHeaderAuth": { "id": "GROQ_CREDENTIAL_ID", "name": "Groq API" }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nlet briefing = null;\ntry {\n  if (input.choices) {\n    const parsed = JSON.parse(input.choices[0].message.content);\n    briefing = parsed.results || parsed;\n  }\n} catch (e) { /* AI failed, use null briefing */ }\n\nreturn [{ json: { briefing } }];"
+      },
+      "id": "parse-brief",
+      "name": "Parse Brief Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2620,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { dateStr, dayName, weekStr, focusTheme, fileKey } = $('Compute Date & File Path').first().json;\n\n// Try to get briefing data from AI if it ran\nlet briefSection = '## Today\\'s Focus\\n> Set your top 3 priorities for today.\\n\\n';\ntry {\n  const briefData = $('Parse Brief Response').first().json.briefing;\n  if (briefData) {\n    const focusItems = briefData.focus_items || [];\n    const nudge = briefData.domain_nudge;\n    briefSection = '## Today\\'s Focus\\n';\n    if (focusItems.length > 0) {\n      briefSection += `> **${focusItems.length} items need attention today:**\\n`;\n      focusItems.forEach((item, i) => {\n        briefSection += `> ${i + 1}. ${item}\\n`;\n      });\n      if (nudge) {\n        briefSection += `>\\n> *${nudge}*\\n`;\n      }\n    }\n    briefSection += '\\n';\n  }\n} catch (e) { /* no briefing available, use static */ }\n\nconst content = `---\\ndate: ${dateStr}\\nday: ${dayName}\\nweek: ${weekStr}\\nfocus_theme: \"${focusTheme}\"\\ntags:\\n  - daily-note\\n---\\n\\n# ${dayName}, ${dateStr}\\n\\n> **Focus Theme:** ${focusTheme}\\n\\n---\\n\\n${briefSection}---\\n\\n## Top 3 Priorities\\n\\n- [ ] [area:: work] [priority:: A]\\n- [ ] [area:: work] [priority:: A]\\n- [ ] [area:: work] [priority:: A]\\n\\n---\\n\\n## Tasks Captured Today\\n\\n\\n\\n---\\n\\n## Notes\\n\\n\\n\\n---\\n\\n## End of Day Reflection\\n\\n**What went well?**\\n\\n\\n**What could be better?**\\n\\n\\n**Carry forward tomorrow:**\\n\\n- [ ]\\n`;\n\nconst base64 = Buffer.from(content, 'utf-8').toString('base64');\n\nreturn [{\n  json: { fileKey, dateStr, dayName, focusTheme, created: true },\n  binary: {\n    data: {\n      data: base64,\n      mimeType: 'text/markdown',\n      fileName: `${dateStr}.md`\n    }\n  }\n}];"
       },
       "id": "build-note",
       "name": "Build Daily Note Content",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1180,
-        360
+        2860,
+        440
       ]
     },
     {
@@ -132,8 +249,8 @@
       "type": "n8n-nodes-base.awsS3",
       "typeVersion": 2,
       "position": [
-        1420,
-        360
+        3100,
+        440
       ],
       "credentials": {
         "aws": {
@@ -152,7 +269,7 @@
       "typeVersion": 2,
       "position": [
         1180,
-        560
+        360
       ]
     },
     {
@@ -164,8 +281,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1660,
-        460
+        3340,
+        440
       ]
     }
   ],
@@ -207,7 +324,7 @@
       "main": [
         [
           {
-            "node": "Build Daily Note Content",
+            "node": "Prepare Context Read",
             "type": "main",
             "index": 0
           }
@@ -215,6 +332,90 @@
         [
           {
             "node": "Already Exists — Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Context Read": {
+      "main": [
+        [
+          {
+            "node": "S3: Read Task List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read Task List": {
+      "main": [
+        [
+          {
+            "node": "Gate Check: Has Signal?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate Check: Has Signal?": {
+      "main": [
+        [
+          {
+            "node": "Has Signal?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Signal?": {
+      "main": [
+        [
+          {
+            "node": "Build Brief Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Daily Note Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Brief Prompt": {
+      "main": [
+        [
+          {
+            "node": "Groq: Daily Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq: Daily Brief": {
+      "main": [
+        [
+          {
+            "node": "Parse Brief Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Brief Response": {
+      "main": [
+        [
+          {
+            "node": "Build Daily Note Content",
             "type": "main",
             "index": 0
           }
@@ -271,6 +472,6 @@
     }
   ],
   "triggerCount": 1,
-  "updatedAt": "2026-03-24T00:00:00.000Z",
-  "versionId": "2"
+  "updatedAt": "2026-03-28T00:00:00.000Z",
+  "versionId": "3"
 }

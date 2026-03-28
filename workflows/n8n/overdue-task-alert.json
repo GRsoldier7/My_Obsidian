@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## ⚠️ Overdue Task Alert\n\n**Schedule:** 8:00 AM every day\n**Scans:** Master Task List + processed inbox in MinIO\n**Output:** Email to aaron.deyoung@gmail.com\n\n### Setup\n- Credential `MinIO — obsidian-vault` must exist\n- Credential `Gmail SMTP` must exist\n\n### Task Format Detected\n```\n- [ ] Task [area:: work] [priority:: A] [due:: 2026-03-20]\n```",
+        "content": "## ⚠️ Overdue Task Alert\n\n**Schedule:** 8:00 AM every day\n**Scans:** Master Task List + processed inbox in MinIO\n**Output:** AI-triaged email with DO TODAY / RESCHEDULE / CONSIDER DROPPING sections\n\n### Setup\n- Credential `MinIO — obsidian-vault` must exist\n- Credential `Gmail SMTP` must exist\n- Credential `Groq API` must exist (free tier)\n\n### Task Format Detected\n```\n- [ ] Task [area:: work] [priority:: A] [due:: 2026-03-20]\n```",
         "height": 380,
         "width": 360,
         "color": 2
@@ -64,7 +64,7 @@
       "typeVersion": 2,
       "position": [
         700,
-        460
+        360
       ],
       "credentials": {
         "aws": {
@@ -76,7 +76,26 @@
     },
     {
       "parameters": {
-        "jsCode": "// Scan file content for overdue tasks\nconst meta = $('Define Files to Scan').item.json;\nconst todayStr = meta.todayStr;\nconst todayDate = new Date(todayStr + 'T00:00:00');\n\nconst binaryKey = Object.keys($input.item.binary || {})[0] || 'data';\nconst binaryData = $input.item.binary?.[binaryKey];\nif (!binaryData?.data) {\n  return [{ json: { overdueTasks: [], fileLabel: meta.label, error: 'Could not read file' } }];\n}\n\nconst content = Buffer.from(binaryData.data, 'base64').toString('utf-8');\n\nconst taskPattern = /^\\s*- \\[ \\]\\s+(.+)$/gm;\nconst duePattern = /\\[due::\\s*(\\d{4}-\\d{2}-\\d{2})\\s*\\]/;\nconst areaPattern = /\\[area::\\s*(\\w+)\\s*\\]/;\nconst priorityPattern = /\\[priority::\\s*([A-C])\\s*\\]/i;\n\nconst overdueTasks = [];\nlet match;\ntaskPattern.lastIndex = 0;\n\nwhile ((match = taskPattern.exec(content)) !== null) {\n  const taskLine = match[1];\n  const dueMatch = taskLine.match(duePattern);\n  if (!dueMatch) continue;\n\n  const dueDateStr = dueMatch[1];\n  const dueDate = new Date(dueDateStr + 'T00:00:00');\n  if (dueDate >= todayDate) continue;\n\n  const areaMatch = taskLine.match(areaPattern);\n  const priorityMatch = taskLine.match(priorityPattern);\n  const daysOverdue = Math.floor((todayDate - dueDate) / 86400000);\n\n  const cleanTitle = taskLine\n    .replace(/\\[area::[^\\]]+\\]/g, '')\n    .replace(/\\[priority::[^\\]]+\\]/g, '')\n    .replace(/\\[due::[^\\]]+\\]/g, '')\n    .replace(/\\s{2,}/g, ' ')\n    .trim();\n\n  const AREA_EMOJI = { faith:'🙏', family:'💒', business:'🚀', consulting:'💼', work:'🏥', health:'💪', home:'🏠', personal:'🤖' };\n  const area = areaMatch ? areaMatch[1] : 'unknown';\n\n  overdueTasks.push({\n    title: cleanTitle,\n    area,\n    emoji: AREA_EMOJI[area] || '📌',\n    priority: priorityMatch ? priorityMatch[1].toUpperCase() : 'none',\n    due: dueDateStr,\n    daysOverdue,\n    sourceFile: meta.label\n  });\n}\n\noverdueTasks.sort((a, b) => {\n  const po = { A:0, B:1, C:2, none:3 };\n  const pd = (po[a.priority] || 3) - (po[b.priority] || 3);\n  return pd !== 0 ? pd : b.daysOverdue - a.daysOverdue;\n});\n\nreturn [{ json: { overdueTasks, fileLabel: meta.label, todayStr } }];"
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "Homelab/000_Master Dashboard/North Star.md"
+      },
+      "id": "read-north-star",
+      "name": "S3: Read North Star",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        700,
+        560
+      ],
+      "credentials": {
+        "aws": { "id": "jscahbrUH2TCnnSx", "name": "MinIO S3" }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse overdue tasks locally (no AI) + gate check\nconst TZ = 'America/Chicago';\nconst now = new Date();\nconst fmt = (opts) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...opts });\nconst y = parseInt(fmt({ year: 'numeric' }).format(now));\nconst m = fmt({ month: '2-digit' }).format(now);\nconst d = fmt({ day: '2-digit' }).format(now);\nconst todayStr = `${y}-${m}-${d}`;\n\n// Read MTL content\nlet mtlContent = '';\ntry {\n  const binary = $('S3: Download File').first().binary;\n  const key = Object.keys(binary || {})[0] || 'data';\n  if (binary && binary[key]) {\n    mtlContent = Buffer.from(binary[key].data, 'base64').toString('utf-8');\n  }\n} catch (e) {}\n\n// Read North Star content\nlet northStarContent = '';\ntry {\n  const binary = $('S3: Read North Star').first().binary;\n  const key = Object.keys(binary || {})[0] || 'data';\n  if (binary && binary[key]) {\n    northStarContent = Buffer.from(binary[key].data, 'base64').toString('utf-8');\n  }\n} catch (e) {}\n\nconst taskRegex = /^\\s*- \\[ \\]\\s+(.+)$/gm;\nconst overdueItems = [];\nlet match;\n\nwhile ((match = taskRegex.exec(mtlContent)) !== null) {\n  const line = match[1];\n  const dueMatch = line.match(/\\[due::\\s*(\\d{4}-\\d{2}-\\d{2})\\s*\\]/);\n  if (!dueMatch || dueMatch[1] >= todayStr) continue;\n\n  const areaMatch = line.match(/\\[area::\\s*(\\w+)\\s*\\]/);\n  const priorityMatch = line.match(/\\[priority::\\s*([A-C])\\s*\\]/i);\n\n  const dueDate = new Date(dueMatch[1]);\n  const daysOverdue = Math.floor((now - dueDate) / 86400000);\n\n  overdueItems.push({\n    task: line.replace(/\\[area::.*?\\]/g, '').replace(/\\[priority::.*?\\]/g, '').replace(/\\[due::.*?\\]/g, '').trim(),\n    area: areaMatch ? areaMatch[1] : 'unknown',\n    priority: priorityMatch ? priorityMatch[1].toUpperCase() : 'B',\n    due: dueMatch[1],\n    days_overdue: daysOverdue\n  });\n}\n\n// Gate check: no overdue items = stop\nif (overdueItems.length === 0) {\n  return [{ json: { hasOverdue: false, overdueItems: [], northStar: '' } }];\n}\n\nreturn [{ json: { hasOverdue: true, overdueItems, northStar: northStarContent, overdueCount: overdueItems.length } }];"
       },
       "id": "scan-overdue",
       "name": "Scan for Overdue Tasks",
@@ -89,15 +108,135 @@
     },
     {
       "parameters": {
-        "jsCode": "// Build HTML digest email for overdue tasks\nconst items = $input.all();\nconst todayStr = items[0]?.json.todayStr || new Date().toISOString().split('T')[0];\n\nconst allTasks = items.flatMap(i => i.json.overdueTasks || []);\n\nallTasks.sort((a, b) => {\n  const po = { A:0, B:1, C:2, none:3 };\n  return (po[a.priority]||3) - (po[b.priority]||3) || b.daysOverdue - a.daysOverdue;\n});\n\nif (allTasks.length === 0) {\n  const html = `<html><body style=\"font-family:system-ui;max-width:600px;margin:0 auto;padding:24px\">\n    <h1>✅ All Clear — ${todayStr}</h1>\n    <p style=\"color:#4caf50;font-size:1.1em\">No overdue tasks found. Great work staying on top of things!</p>\n  </body></html>`;\n  return [{ json: { subject: `✅ All Clear — No Overdue Tasks · ${todayStr}`, html, totalOverdue: 0 } }];\n}\n\nconst byPriority = allTasks.reduce((acc, t) => { acc[t.priority] = (acc[t.priority]||0)+1; return acc; }, {});\n\nconst PRIORITY_COLOR = { A:'#ff6b6b', B:'#f5a623', C:'#4ecdc4', none:'#888' };\n\nconst taskRows = allTasks.map(t => `\n  <tr style=\"border-bottom:1px solid #2a2a3e\">\n    <td style=\"padding:10px 8px\">${t.emoji} ${t.title}</td>\n    <td style=\"padding:10px 8px;text-align:center\"><span style=\"background:${PRIORITY_COLOR[t.priority]||'#888'};color:#000;padding:2px 8px;border-radius:12px;font-weight:700\">${t.priority}</span></td>\n    <td style=\"padding:10px 8px;color:#f5a623\">${t.due}</td>\n    <td style=\"padding:10px 8px;color:#ff6b6b;font-weight:700\">${t.daysOverdue}d</td>\n    <td style=\"padding:10px 8px;color:#888;font-size:0.85em\">${t.area}</td>\n  </tr>`).join('');\n\nconst html = `<!DOCTYPE html><html><head><meta charset=\"utf-8\"></head>\n<body style=\"background:#13131f;color:#e0e0f0;font-family:system-ui,sans-serif;max-width:680px;margin:0 auto;padding:24px\">\n  <div style=\"background:linear-gradient(135deg,#ff6b6b,#ee0979);border-radius:16px;padding:28px 32px;margin-bottom:24px\">\n    <h1 style=\"margin:0;color:#fff\">⚠️ Overdue Task Alert</h1>\n    <p style=\"margin:8px 0 0;color:rgba(255,255,255,0.8)\">${todayStr} &bull; ${allTasks.length} overdue item${allTasks.length!==1?'s':''}</p>\n  </div>\n  <div style=\"display:flex;gap:12px;margin-bottom:24px\">\n    ${['A','B','C'].filter(p=>byPriority[p]).map(p=>`\n    <div style=\"flex:1;background:#1e1e2e;border-radius:12px;padding:16px;text-align:center\">\n      <div style=\"font-size:2em;font-weight:700;color:${PRIORITY_COLOR[p]}\">${byPriority[p]}</div>\n      <div style=\"color:#888\">Priority ${p}</div>\n    </div>`).join('')}\n  </div>\n  <table style=\"width:100%;border-collapse:collapse;background:#1e1e2e;border-radius:12px;overflow:hidden\">\n    <thead><tr style=\"background:#2a2a3e\">\n      <th style=\"padding:12px 8px;text-align:left\">Task</th>\n      <th style=\"padding:12px 8px\">P</th>\n      <th style=\"padding:12px 8px;text-align:left\">Due</th>\n      <th style=\"padding:12px 8px;text-align:left\">Overdue</th>\n      <th style=\"padding:12px 8px;text-align:left\">Area</th>\n    </tr></thead>\n    <tbody>${taskRows}</tbody>\n  </table>\n  <p style=\"color:#555;margin-top:24px;font-size:0.85em\">These tasks have passed their due date. Open Obsidian to update or complete them.</p>\n</body></html>`;\n\nreturn [{ json: { subject: `⚠️ ${allTasks.length} Overdue Task${allTasks.length!==1?'s':''} — ${byPriority.A||0} Priority A · ${todayStr}`, html, totalOverdue: allTasks.length } }];"
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "has-overdue", "leftValue": "={{ $json.hasOverdue }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-has-overdue",
+      "name": "Has Overdue?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1180,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst overdueStr = input.overdueItems.map(t =>\n  `- \"${t.task}\" | area: ${t.area} | priority: ${t.priority} | due: ${t.due} | ${t.days_overdue} days overdue`\n).join('\\n');\n\nconst SYSTEM = 'You are the AI Brain for Aaron\\'s Life Operating System. Return structured JSON only. Be direct and actionable.';\nconst USER = `TASK: Triage overdue tasks with actionable recommendations.\\n\\nFor each overdue task, recommend one of:\\n- \"escalate\" — This is a needle-mover being ignored. Do it today.\\n- \"act\" — Important, do it today.\\n- \"reschedule\" — Push to a specific future date with reason.\\n- \"drop\" — Stale, low-priority, not advancing any goal.\\n\\nReturn JSON:\\n{\"results\": [{\"task\": \"string\", \"area\": \"string\", \"days_overdue\": 0, \"recommendation\": \"escalate|act|reschedule|drop\", \"reason\": \"string\", \"suggested_date\": \"YYYY-MM-DD|null\"}]}\\n\\nOVERDUE TASKS:\\n${overdueStr}\\n\\nNORTH STAR GOALS:\\n${input.northStar}`;\n\nreturn [{ json: { systemPrompt: SYSTEM, userMessage: USER } }];"
+      },
+      "id": "build-triage-prompt",
+      "name": "Build Triage Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'llama-3.3-70b-versatile', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000, response_format: { type: 'json_object' } }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "groq-triage",
+      "name": "Groq: Triage Tasks",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1660,
+        360
+      ],
+      "credentials": {
+        "httpHeaderAuth": { "id": "GROQ_CREDENTIAL_ID", "name": "Groq API" }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            { "id": "groq-ok", "leftValue": "={{ $json.choices }}", "rightValue": "", "operator": { "type": "exists", "operation": "exists" } }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "groq-triage-ok",
+      "name": "Groq Triage OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1900,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={{ $env.GEMINI_API_KEY }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $('Build Triage Prompt').item.json.systemPrompt + '\\n\\n' + $('Build Triage Prompt').item.json.userMessage }] }], generationConfig: { temperature: 0.3, maxOutputTokens: 2000, responseMimeType: 'application/json' } }) }}",
+        "options": { "timeout": 30000 }
+      },
+      "id": "gemini-triage-fallback",
+      "name": "Gemini Fallback: Triage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2140,
+        500
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\ntry {\n  const content = input.choices[0].message.content;\n  const parsed = JSON.parse(content);\n  return [{ json: { success: true, results: parsed.results || [], source: 'groq' } }];\n} catch (e) {\n  return [{ json: { success: false, error: e.message, results: [] } }];\n}"
+      },
+      "id": "parse-groq-triage",
+      "name": "Parse Groq Triage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2140,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\ntry {\n  let text = input.candidates[0].content.parts[0].text;\n  text = text.replace(/^```json\\n?/i, '').replace(/\\n?```$/i, '').trim();\n  const parsed = JSON.parse(text);\n  return [{ json: { success: true, results: parsed.results || [], source: 'gemini' } }];\n} catch (e) {\n  return [{ json: { success: false, error: e.message, results: [] } }];\n}"
+      },
+      "id": "parse-gemini-triage",
+      "name": "Parse Gemini Triage",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2380,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst results = input.results || [];\n\nconst escalate = results.filter(r => r.recommendation === 'escalate');\nconst act = results.filter(r => r.recommendation === 'act');\nconst reschedule = results.filter(r => r.recommendation === 'reschedule');\nconst drop = results.filter(r => r.recommendation === 'drop');\n\nconst areaEmoji = { faith: '🙏', family: '💒', business: '🚀', consulting: '💼', work: '🏥', health: '💪', home: '🏠', personal: '🤖' };\n\nconst row = (item) => {\n  const emoji = areaEmoji[item.area] || '📌';\n  return `<li style=\"margin-bottom:8px;\">${emoji} <strong>${item.task}</strong> (${item.area}, ${item.days_overdue}d overdue)<br/><span style=\"color:#666;font-size:13px;\">→ ${item.reason}</span>${item.suggested_date ? `<br/><span style=\"color:#2980b9;font-size:13px;\">📅 Reschedule to ${item.suggested_date}</span>` : ''}</li>`;\n};\n\nlet html = '<div style=\"font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',Roboto,sans-serif;max-width:600px;margin:0 auto;\">\\n';\nhtml += '<h1 style=\"color:#1a1a2e;\">⚠️ Task Triage</h1>\\n';\n\nif (escalate.length > 0 || act.length > 0) {\n  html += '<h2 style=\"color:#c0392b;\">🔴 DO TODAY</h2>\\n';\n  html += `<ul style=\"list-style:none;padding:0;\">${[...escalate, ...act].map(row).join('')}</ul>\\n`;\n}\nif (reschedule.length > 0) {\n  html += '<h2 style=\"color:#f39c12;\">🟡 RESCHEDULE</h2>\\n';\n  html += `<ul style=\"list-style:none;padding:0;\">${reschedule.map(row).join('')}</ul>\\n`;\n}\nif (drop.length > 0) {\n  html += '<h2 style=\"color:#95a5a6;\">⚪ CONSIDER DROPPING</h2>\\n';\n  html += `<ul style=\"list-style:none;padding:0;\">${drop.map(row).join('')}</ul>\\n`;\n}\nhtml += '</div>';\n\nconst urgentCount = escalate.length + act.length;\nconst subject = urgentCount > 0\n  ? `[Triage] ${urgentCount} need action today, ${reschedule.length} to reschedule`\n  : `[Triage] ${reschedule.length} to reschedule, ${drop.length} to drop`;\n\nreturn [{ json: { subject, html } }];"
       },
       "id": "build-email",
       "name": "Build Alert Email",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1180,
-        460
+        2620,
+        360
       ]
     },
     {
@@ -114,8 +253,8 @@
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2.1,
       "position": [
-        1420,
-        460
+        2860,
+        360
       ],
       "credentials": {
         "smtp": {
@@ -144,6 +283,11 @@
             "node": "S3: Download File",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "S3: Read North Star",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -159,7 +303,103 @@
         ]
       ]
     },
+    "S3: Read North Star": {
+      "main": [
+        [
+          {
+            "node": "Scan for Overdue Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Scan for Overdue Tasks": {
+      "main": [
+        [
+          {
+            "node": "Has Overdue?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Overdue?": {
+      "main": [
+        [
+          {
+            "node": "Build Triage Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Build Triage Prompt": {
+      "main": [
+        [
+          {
+            "node": "Groq: Triage Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq: Triage Tasks": {
+      "main": [
+        [
+          {
+            "node": "Groq Triage OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Triage OK?": {
+      "main": [
+        [
+          {
+            "node": "Parse Groq Triage",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Gemini Fallback: Triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Fallback: Triage": {
+      "main": [
+        [
+          {
+            "node": "Parse Gemini Triage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Groq Triage": {
+      "main": [
+        [
+          {
+            "node": "Build Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Gemini Triage": {
       "main": [
         [
           {
@@ -198,6 +438,6 @@
     }
   ],
   "triggerCount": 1,
-  "updatedAt": "2026-03-24T00:00:00.000Z",
-  "versionId": "2"
+  "updatedAt": "2026-03-28T00:00:00.000Z",
+  "versionId": "3"
 }
