@@ -104,7 +104,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Collect items across loop iterations using staticData.\n// Guard: if collected has stale data from a prior failed run, check timestamp.\nconst item = $input.item.json;\nconst state = $workflow.staticData;\n\n// Initialize or reset stale data (>2h old = stale from a failed prior run)\nconst now = Date.now();\nif (!state.collected || !state.collectedAt || (now - state.collectedAt) > 7200000) {\n  state.collected = [];\n}\nstate.collectedAt = now;\n\nif (item.downloadSuccess !== false) {\n  state.collected.push(item);\n}\n\nreturn [{ json: item }];"
+        "jsCode": "// Collect items across loop iterations using staticData.\n// Guard: if collected has stale data from a prior failed run, check timestamp.\nconst item = $input.item.json;\nconst state = $getWorkflowStaticData(\"global\");\n\n// Initialize or reset stale data (>2h old = stale from a failed prior run)\nconst now = Date.now();\nif (!state.collected || !state.collectedAt || (now - state.collectedAt) > 7200000) {\n  state.collected = [];\n}\nstate.collectedAt = now;\n\nif (item.downloadSuccess !== false) {\n  state.collected.push(item);\n}\n\nreturn [{ json: item }];"
       },
       "id": "accumulate",
       "name": "Accumulate Results",
@@ -117,7 +117,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Collect all accumulated brain dump content\nconst state = $workflow.staticData;\nconst files = state.collected || [];\n\n// Clear for next run\nstate.collected = [];\n\nlet allContent = '';\n\nfor (const item of files) {\n  const dumps = [item];\n  for (const dump of dumps) {\n    if (dump.rawContent && dump.rawContent.trim().length > 10) {\n      allContent += `\\n--- ${dump.domain} (${dump.area}) ---\\n${dump.rawContent}\\n`;\n    }\n  }\n}\n\nif (!allContent.trim()) {\n  return [{ json: { hasContent: false, results: [], allContent: '' } }];\n}\n\nreturn [{ json: { hasContent: true, allContent: allContent.trim() } }];"
+        "jsCode": "// Collect all accumulated brain dump content\nconst state = $getWorkflowStaticData(\"global\");\nconst files = state.collected || [];\n\n// Clear for next run\nstate.collected = [];\n\nlet allContent = '';\n\nfor (const item of files) {\n  const dumps = [item];\n  for (const dump of dumps) {\n    if (dump.rawContent && dump.rawContent.trim().length > 10) {\n      allContent += `\\n--- ${dump.domain} (${dump.area}) ---\\n${dump.rawContent}\\n`;\n    }\n  }\n}\n\nif (!allContent.trim()) {\n  return [{ json: { hasContent: false, results: [], allContent: '' } }];\n}\n\nreturn [{ json: { hasContent: true, allContent: allContent.trim() } }];"
       },
       "id": "parse-analyze",
       "name": "Parse & Analyze All",
