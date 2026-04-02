@@ -1,6 +1,6 @@
 # ObsidianHomeOrchestrator — Project Map
 
-## Status: Implementation In Progress (~65% Complete)
+## Status: Implementation In Progress (~85% Complete)
 
 ## Architecture
 - **n8n:** Proxmox LXC at `192.168.1.121:5678`
@@ -14,6 +14,9 @@
 - 2026-03-21: 3 n8n workflows built (brain-dump-processor, daily-note-creator, overdue-task-alert) — NOTE: these used fs module (broken in LXC)
 - 2026-03-24: GAP ANALYSIS: Filesystem workflows broken; area taxonomy missing family/home; no weekly digest workflow built
 - 2026-03-24: ADR-002 written. All workflows rebuilt for MinIO S3. Weekly digest workflow created.
+- 2026-03-29: FULL AUDIT. Found 99.8% failure rate (5,541/5,554). Root causes: PolyChronos running every 2min to dead endpoint, MinIO credential had wrong access key, Weekly Digest merge node misconfigured.
+- 2026-03-29: Fixed: new MinIO credential (Claude_Code key), deactivated PolyChronos, fixed merge node, exported all 7 live workflows to repo, added OpenRouter/Llama 3.3 integration, fully parameterized setup-n8n.sh with placeholder system.
+- 2026-03-29: CRITICAL DISCOVERY: All S3 paths had `Homelab/` prefix but vault files are at bucket root (no prefix). Remotely Save syncs without prefix. Removed `Homelab/` from all workflow paths. Verified via boto3: North Star, MTL, Brain Dumps all readable.
 
 ## What's Actually Built (Correct State)
 - [x] Vault folder structure (6 folders created)
@@ -30,15 +33,28 @@
 - [x] .env.example (updated — MinIO + SMTP vars)
 - [x] CLAUDE.md (updated — 8 areas, current paths)
 
-## Remaining (requires manual action in n8n / Obsidian)
-- [ ] **Create MinIO credential in n8n** — name: `MinIO — obsidian-vault`, endpoint: `192.168.1.240:9000`
-- [ ] **Create SMTP credential in n8n** — name: `Gmail SMTP`, Gmail App Password
-- [ ] **Import all 4 workflows** into n8n, activate each
+## Completed (2026-03-29 Audit)
+- [x] MinIO S3 credential fixed in n8n (new access key: Claude_Code service account)
+- [x] Gmail SMTP (Aaron) credential verified working
+- [x] OpenRouter API credential verified working
+- [x] All 6 workflows deployed to n8n and active
+- [x] PolyChronos Inbox Processor deactivated (was causing 99.8% failure rate)
+- [x] Weekly Digest merge node fixed (append mode)
+- [x] Brain Dump Processor staticData bug fixed
+- [x] Repo synced with live n8n state (7 workflow exports)
+- [x] setup-n8n.sh fully rewritten (3 credentials, 6 workflows, placeholder hydration)
+- [x] All credential IDs/emails replaced with placeholders in repo
+- [x] .gitignore covers .claude/worktrees/
+- [x] .env.example has OPENROUTER_API_KEY + consumer docs
+
+## Remaining
 - [ ] **Verify Remotely Save** is syncing to MinIO bucket `obsidian-vault` prefix `Homelab/`
 - [ ] **Create 8 brain dump files** in vault with correct `domain:` frontmatter
 - [ ] **QuickAdd macros** — Quick Task, Brain Dump, Quick Idea, Meeting Note
 - [ ] **Bookmarks** — 5 pinned notes for mobile quick access
 - [ ] **E2E test** — real brain dump → workflow run → verify tasks appear
+- [ ] **Monitor** n8n failure rate over next 24-48h to confirm all fixes hold
+- [ ] **PolyChronos** — needs valid endpoint before reactivation
 
 ## Q2 2026 Quarterly Rocks
 1. 🙏 Faith: Launch social media Bible study (4 sessions delivered)
@@ -47,5 +63,5 @@
 4. 🏥 Work: Deliver Union project
 5. 💪 Health: Make hip decision + 3x/week gym for 8 weeks
 
-## Context Handoff (2026-03-24)
-Rebuilt all workflows to use MinIO S3 (ADR-002). User needs to: (1) set up n8n credentials for MinIO + SMTP, (2) import 4 workflow JSONs, (3) verify Remotely Save sync target. Weekly digest workflow is new and high-value — prioritize its setup.
+## Context Handoff (2026-03-29)
+Full audit and fix session. All n8n credentials and workflows are now live and working. The repo workflow JSONs are templates with placeholders — run `source .env && bash scripts/setup-n8n.sh` for fresh deployments. Live workflows include OpenRouter/Llama 3.3 70B for AI-powered triage and briefings. See `docs/2026-03-29-n8n-audit-and-fix.md` for complete audit trail.

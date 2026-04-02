@@ -30,6 +30,7 @@ node_modules/
 
 # Claude Code (contains session permissions, may log sensitive command args)
 .claude/settings.local.json
+.claude/worktrees/
 
 # Logs
 *.log

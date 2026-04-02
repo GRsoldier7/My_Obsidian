@@ -1,9 +1,9 @@
 {
-  "name": "📚 Article Processor — 8AM & 7PM",
+  "name": "\ud83d\udcda Article Processor \u2014 8AM & 7PM",
   "nodes": [
     {
       "parameters": {
-        "content": "## 📚 Article Processor\n\n**Schedule:** 8:00 AM and 7:00 PM daily\n**Source:** `Homelab/00_Inbox/articles-to-process.md` in MinIO\n**Output:** Article notes filed to domain folders; action items as task files; queue cleared\n\n### URL Format in articles-to-process.md\n```\nhttps://example.com/article — Optional context note\nhttps://another.com/post\n```\n\n### Setup\n- MinIO credential `MinIO S3` must exist\n- OpenRouter API credential must exist (free tier at openrouter.ai)\n- `articles-to-process.md` must exist in MinIO at the path above",
+        "content": "## \ud83d\udcda Article Processor\n\n**Schedule:** 8:00 AM and 7:00 PM daily\n**Source:** `00_Inbox/articles-to-process.md` in MinIO\n**Output:** Article notes filed to domain folders; action items as task files; queue cleared\n\n### URL Format in articles-to-process.md\n```\nhttps://example.com/article \u2014 Optional context note\nhttps://another.com/post\n```\n\n### Setup\n- MinIO credential `MinIO S3` must exist\n- OpenRouter API credential must exist (free tier at openrouter.ai)\n- `articles-to-process.md` must exist in MinIO at the path above",
         "height": 420,
         "width": 400,
         "color": 3
@@ -44,7 +44,7 @@
         "resource": "file",
         "operation": "download",
         "bucketName": "obsidian-vault",
-        "fileKey": "Homelab/00_Inbox/articles-to-process.md",
+        "fileKey": "00_Inbox/articles-to-process.md",
         "options": {}
       },
       "id": "read-article-queue",
@@ -57,7 +57,7 @@
       ],
       "credentials": {
         "aws": {
-          "id": "jscahbrUH2TCnnSx",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       },
@@ -65,7 +65,7 @@
     },
     {
       "parameters": {
-        "jsCode": "let content = '';\ntry {\n  const binary = $input.first().binary;\n  const key = Object.keys(binary || {})[0] || 'data';\n  if (binary && binary[key]) {\n    content = Buffer.from(binary[key].data, 'base64').toString('utf-8');\n  }\n} catch (e) {}\n\n// Strip frontmatter\ncontent = content.replace(/^---[\\s\\S]*?---\\s*/m, '').trim();\n\nif (!content) {\n  return [{ json: { hasUrls: false, urls: [] } }];\n}\n\n// Parse URLs — one per line, optional context after \" — \"\nconst lines = content.split('\\n').filter(l => l.trim());\nconst urls = [];\n\nfor (const line of lines) {\n  const trimmed = line.trim();\n  if (!trimmed || trimmed.startsWith('#')) continue;\n\n  const parts = trimmed.split(' — ');\n  const urlPart = parts[0].trim();\n  const context = parts.length > 1 ? parts.slice(1).join(' — ').trim() : '';\n\n  // Basic URL validation\n  if (urlPart.startsWith('http://') || urlPart.startsWith('https://')) {\n    urls.push({ url: urlPart, context });\n  }\n}\n\nreturn [{ json: { hasUrls: urls.length > 0, urls, urlCount: urls.length } }];"
+        "jsCode": "let content = '';\ntry {\n  const binary = $input.first().binary;\n  const key = Object.keys(binary || {})[0] || 'data';\n  if (binary && binary[key]) {\n    content = Buffer.from(binary[key].data, 'base64').toString('utf-8');\n  }\n} catch (e) {}\n\n// Strip frontmatter\ncontent = content.replace(/^---[\\s\\S]*?---\\s*/m, '').trim();\n\nif (!content) {\n  return [{ json: { hasUrls: false, urls: [] } }];\n}\n\n// Parse URLs \u2014 one per line, optional context after \" \u2014 \"\nconst lines = content.split('\\n').filter(l => l.trim());\nconst urls = [];\n\nfor (const line of lines) {\n  const trimmed = line.trim();\n  if (!trimmed || trimmed.startsWith('#')) continue;\n\n  const parts = trimmed.split(' \u2014 ');\n  const urlPart = parts[0].trim();\n  const context = parts.length > 1 ? parts.slice(1).join(' \u2014 ').trim() : '';\n\n  // Basic URL validation\n  if (urlPart.startsWith('http://') || urlPart.startsWith('https://')) {\n    urls.push({ url: urlPart, context });\n  }\n}\n\n// Return one item per URL so SplitInBatches iterates once per URL\n// Gate check: single hasUrls:false item if queue is empty\nif (urls.length === 0) {\n  return [{ json: { hasUrls: false, url: null, context: '', urlCount: 0 } }];\n}\nreturn urls.map(u => ({ json: { hasUrls: true, url: u.url, context: u.context, urlCount: urls.length } }));"
       },
       "id": "parse-urls",
       "name": "Parse URLs",
@@ -79,9 +79,21 @@
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "conditions": [
-            { "id": "has-urls", "leftValue": "={{ $json.hasUrls }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+            {
+              "id": "has-urls",
+              "leftValue": "={{ $json.hasUrls }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
           ],
           "combinator": "and"
         }
@@ -111,7 +123,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Extract individual URL from the urls array for processing\nconst input = $input.first().json;\nconst urls = input.urls || [];\n// splitInBatches splits the array — get the current item's url\n// The loop gives us each url object directly from the split\nreturn [{ json: input }];"
+        "jsCode": "// Each item from the loop is already a single {url, context} object\n// Pass it through cleanly for Fetch Page\nconst item = $input.first().json;\nreturn [{ json: { url: item.url, context: item.context || '' } }];"
       },
       "id": "get-current-url",
       "name": "Get Current URL",
@@ -179,15 +191,26 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" },
-            { "name": "HTTP-Referer", "value": "https://github.com/ObsidianHomeOrchestrator" },
-            { "name": "X-Title", "value": "Life OS AI Brain" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://github.com/ObsidianHomeOrchestrator"
+            },
+            {
+              "name": "X-Title",
+              "value": "Life OS AI Brain"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000 }) }}",
-        "options": { "timeout": 30000 }
+        "options": {
+          "timeout": 30000
+        }
       },
       "id": "groq-summarize",
       "name": "OpenRouter: Llama 3.3 70B",
@@ -199,7 +222,7 @@
       ],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "Z7liUYc3Toq3q7W7",
+          "id": "__OPENROUTER_CRED_ID__",
           "name": "OpenRouter API"
         }
       },
@@ -220,7 +243,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const input = $input.first().json;\nconst r = input.results || input;\nconst BUCKET = 'obsidian-vault';\nconst PREFIX = 'Homelab';\n\nconst AREA_FOLDER_MAP = {\n  faith: '30_Knowledge Library/Bible Studies & Notes',\n  family: '20_Domains (Life and Work)/Personal/Family',\n  business: '20_Domains (Life and Work)/Personal/Business Ideas & Projects',\n  consulting: '20_Domains (Life and Work)/Career/Consulting',\n  work: '20_Domains (Life and Work)/Career/Parallon',\n  health: '30_Knowledge Library/Biohacking',\n  home: '20_Domains (Life and Work)/Personal/Home',\n  personal: '20_Domains (Life and Work)/Personal'\n};\n\nconst area = r.area || 'personal';\nconst folder = AREA_FOLDER_MAP[area] || AREA_FOLDER_MAP.personal;\nconst slug = (r.title || 'article').toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 50);\n\nconst TZ = 'America/Chicago';\nconst now = new Date();\nconst fmt = (opts) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...opts });\nconst y = parseInt(fmt({ year: 'numeric' }).format(now));\nconst m = fmt({ month: '2-digit' }).format(now);\nconst d = fmt({ day: '2-digit' }).format(now);\nconst dateStr = `${y}-${m}-${d}`;\n\n// Get original URL from the extract-text node context\nlet sourceUrl = '';\ntry {\n  sourceUrl = $('Extract Text').first().json.url || '';\n} catch (e) {}\n\nlet noteContent = `---\\ntype: article-note\\nsource_url: ${sourceUrl}\\ndate_captured: ${dateStr}\\narea: ${area}\\nneedle_mover: ${r.needle_mover || false}\\n---\\n\\n# ${r.title || 'Untitled Article'}\\n\\n## Summary\\n${r.summary || 'No summary available.'}\\n\\n## Key Takeaways\\n`;\n\nif (r.key_takeaways && r.key_takeaways.length > 0) {\n  r.key_takeaways.forEach(t => { noteContent += `- ${t}\\n`; });\n} else {\n  noteContent += '- No takeaways extracted.\\n';\n}\n\n// Action items as inline tasks\nif (r.action_items && r.action_items.length > 0) {\n  noteContent += '\\n## Action Items\\n';\n  r.action_items.forEach(a => {\n    const due = a.due ? ` [due:: ${a.due}]` : '';\n    noteContent += `- [ ] ${a.task} [area:: ${a.area || area}] [priority:: ${a.priority || 'B'}]${due}\\n`;\n  });\n}\n\nreturn [{ json: {\n  bucket: BUCKET,\n  fileKey: `${PREFIX}/${folder}/${dateStr}-${slug}.md`,\n  content: noteContent,\n  actionItems: r.action_items || [],\n  title: r.title\n} }];"
+        "jsCode": "const input = $input.first().json;\nconst r = input.results || input;\nconst BUCKET = 'obsidian-vault';\nconst PREFIX = '';\n\nconst AREA_FOLDER_MAP = {\n  faith: '30_Knowledge Library/Bible Studies & Notes',\n  family: '20_Domains (Life and Work)/Personal/Family',\n  business: '20_Domains (Life and Work)/Personal/Business Ideas & Projects',\n  consulting: '20_Domains (Life and Work)/Career/Consulting',\n  work: '20_Domains (Life and Work)/Career/Parallon',\n  health: '30_Knowledge Library/Biohacking',\n  home: '20_Domains (Life and Work)/Personal/Home',\n  personal: '20_Domains (Life and Work)/Personal'\n};\n\nconst area = r.area || 'personal';\nconst folder = AREA_FOLDER_MAP[area] || AREA_FOLDER_MAP.personal;\nconst slug = (r.title || 'article').toLowerCase().replace(/[^a-z0-9]+/g, '-').substring(0, 50);\n\nconst TZ = 'America/Chicago';\nconst now = new Date();\nconst fmt = (opts) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...opts });\nconst y = parseInt(fmt({ year: 'numeric' }).format(now));\nconst m = fmt({ month: '2-digit' }).format(now);\nconst d = fmt({ day: '2-digit' }).format(now);\nconst dateStr = `${y}-${m}-${d}`;\n\n// Get original URL from the extract-text node context\nlet sourceUrl = '';\ntry {\n  sourceUrl = $('Extract Text').first().json.url || '';\n} catch (e) {}\n\nlet noteContent = `---\\ntype: article-note\\nsource_url: ${sourceUrl}\\ndate_captured: ${dateStr}\\narea: ${area}\\nneedle_mover: ${r.needle_mover || false}\\n---\\n\\n# ${r.title || 'Untitled Article'}\\n\\n## Summary\\n${r.summary || 'No summary available.'}\\n\\n## Key Takeaways\\n`;\n\nif (r.key_takeaways && r.key_takeaways.length > 0) {\n  r.key_takeaways.forEach(t => { noteContent += `- ${t}\\n`; });\n} else {\n  noteContent += '- No takeaways extracted.\\n';\n}\n\n// Action items as inline tasks\nif (r.action_items && r.action_items.length > 0) {\n  noteContent += '\\n## Action Items\\n';\n  r.action_items.forEach(a => {\n    const due = a.due ? ` [due:: ${a.due}]` : '';\n    noteContent += `- [ ] ${a.task} [area:: ${a.area || area}] [priority:: ${a.priority || 'B'}]${due}\\n`;\n  });\n}\n\nreturn [{ json: {\n  bucket: BUCKET,\n  fileKey: `${folder}/${dateStr}-${slug}.md`,\n  content: noteContent,\n  actionItems: r.action_items || [],\n  title: r.title\n} }];"
       },
       "id": "build-article-note",
       "name": "Build Article Note",
@@ -263,7 +286,7 @@
       ],
       "credentials": {
         "aws": {
-          "id": "jscahbrUH2TCnnSx",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       }
@@ -283,7 +306,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// After all URLs processed, clear the articles-to-process.md file\nconst BUCKET = 'obsidian-vault';\nconst PREFIX = 'Homelab';\n\nconst clearedContent = `---\\ntype: article-queue\\n---\\n\\n`;\n\nreturn [{ json: {\n  bucket: BUCKET,\n  fileKey: `${PREFIX}/00_Inbox/articles-to-process.md`,\n  content: clearedContent,\n  label: 'Clear article queue'\n} }];"
+        "jsCode": "// After all URLs processed, clear the articles-to-process.md file\nconst BUCKET = 'obsidian-vault';\nconst PREFIX = '';\n\nconst clearedContent = `---\\ntype: article-queue\\n---\\n\\n`;\n\nreturn [{ json: {\n  bucket: BUCKET,\n  fileKey: `00_Inbox/articles-to-process.md`,\n  content: clearedContent,\n  label: 'Clear article queue'\n} }];"
       },
       "id": "build-clear-queue",
       "name": "Build Clear Queue",
@@ -326,7 +349,7 @@
       ],
       "credentials": {
         "aws": {
-          "id": "jscahbrUH2TCnnSx",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       }
@@ -533,24 +556,14 @@
     "executionOrder": "v1",
     "saveManualExecutions": true,
     "callerPolicy": "workflowsFromSameOwner",
-    "timezone": "America/Chicago"
+    "timezone": "America/Chicago",
+    "availableInMCP": false,
+    "binaryMode": "separate"
   },
-  "staticData": null,
-  "tags": [
-    {
-      "name": "obsidian",
-      "id": "obsidian-tag"
-    },
-    {
-      "name": "article-processor",
-      "id": "article-processor-tag"
-    },
-    {
-      "name": "automation",
-      "id": "automation-tag"
+  "staticData": {
+    "node:8AM & 7PM Daily": {
+      "recurrenceRules": []
     }
-  ],
-  "triggerCount": 1,
-  "updatedAt": "2026-03-28T00:00:00.000Z",
-  "versionId": "1"
+  },
+  "tags": []
 }

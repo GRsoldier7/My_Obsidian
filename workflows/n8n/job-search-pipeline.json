@@ -1,0 +1,549 @@
+{
+  "name": "Job Search Pipeline - Native n8n v3",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Job Search Pipeline\n\n**Flow 1:** Every 6h - Fetch RemoteOK -> Filter -> AI Rate -> Append 7+ to Sheet\n**Flow 2:** Daily 7am - Read Sheet -> Generate Cover Letters for checked rows\n**Flow 3:** Manual trigger - same as Flow 1\n\nNo SplitInBatches loops. All AI processing in Code nodes.",
+        "height": 250,
+        "width": 500,
+        "color": 4
+      },
+      "id": "sticky-overview",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        112,
+        48
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "cron-6h",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        112,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://remoteok.com/api",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "http-remoteok",
+      "name": "Fetch RemoteOK",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        784,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Smart filter using Pipeline Config settings\nconst config = $('Parse Config').first().json;\nconst items = $input.all().map(i => i.json);\nconst results = [];\n\nconst keywords = config.mustHaveKeywords || [];\nconst blocked = config.blockedKeywords || [];\nconst blockedLocs = config.blockedLocations || [];\n\nfor (const j of items) {\n  if (!j.position && !j.title) continue;\n  const title = (j.position || j.title || '').toLowerCase();\n  const tags = (j.tags || []).join(' ').toLowerCase();\n  const loc = (j.location || '').toLowerCase();\n  const all = title + ' ' + tags + ' ' + loc;\n\n  // Must match at least one keyword\n  if (!keywords.some(k => all.includes(k))) continue;\n\n  // Must not match blocked terms\n  if (blocked.some(k => title.includes(k) || tags.includes(k))) continue;\n\n  // Must not be international\n  if (blockedLocs.some(k => loc.includes(k))) continue;\n\n  results.push({ json: j });\n}\n\nif (results.length === 0) return [{ json: { _empty: true } }];\nreturn results;\n"
+      },
+      "id": "code-filter",
+      "name": "Filter & Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-position",
+              "leftValue": "={{ $json.position || $json.company || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-has-jobs",
+      "name": "Has Jobs?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1232,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Rate all filtered jobs via OpenRouter in a single pass\n// NO looping nodes - everything happens here\nconst jobs = $input.all().map(i => i.json);\nconst results = [];\nconst API_URL = 'https://openrouter.ai/api/v1/chat/completions';\nconst API_KEY = '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';\nconst MODEL = 'google/gemini-2.0-flash-001';\nconst RESUME = `Senior AI/Automation & Power Platform Engineer. 7+ years at Caterpillar Financial. Power Apps, Power Automate, Copilot Studio, Power BI, Python, Docker, Kubernetes, n8n, Zapier, Snowflake, ServiceNow, ETL pipelines. Army veteran, 2 MS degrees, Georgia Tech AI/ML Accelerator 2025. CIO Award winner. Led Copilot rollout, built AI governance chatbot (90% inquiry reduction), migrated 95% reports to Power BI.`;\n\n// Process max 50 jobs to stay within time limits\nconst maxJobs = Math.min(jobs.length, 50);\n\nfor (let i = 0; i < maxJobs; i++) {\n  const job = jobs[i];\n  const title = job.position || job.title || 'Unknown';\n  const company = job.company || 'Unknown';\n  const tags = (job.tags || []).join(', ');\n  const location = job.location || 'Remote';\n  const desc = (job.description || '').substring(0, 1500);\n\n  const prompt = `Rate 1-10 how well this job matches the candidate. Return ONLY a JSON object: {\"rating\": N, \"reason\": \"one sentence\"}\n\nJob: ${title} at ${company}\nLocation: ${location}\nTags: ${tags}\nDescription: ${desc}\n\nCandidate: ${RESUME}`;\n\n  try {\n    const response = await fetch(API_URL, {\n      method: 'POST',\n      headers: {\n        'Authorization': `Bearer ${API_KEY}`,\n        'Content-Type': 'application/json',\n      },\n      body: JSON.stringify({\n        model: MODEL,\n        messages: [{ role: 'user', content: prompt }],\n        temperature: 0.3,\n        max_tokens: 200,\n      }),\n    });\n\n    const data = await response.json();\n    const content = data.choices?.[0]?.message?.content || '';\n\n    // Parse rating from response\n    let rating = 0;\n    let reason = '';\n    try {\n      const parsed = JSON.parse(content.replace(/```json\\n?/g, '').replace(/```/g, '').trim());\n      rating = parsed.rating || 0;\n      reason = parsed.reason || '';\n    } catch {\n      // Try to extract just a number\n      const match = content.match(/\\b(\\d+)\\b/);\n      rating = match ? parseInt(match[1]) : 0;\n      reason = content.substring(0, 100);\n    }\n\n    if (rating >= 7) {\n      results.push({\n        json: {\n          job_title: title,\n          company: company,\n          location: location,\n          remote_status: 'Remote',\n          position_rating: rating,\n          company_rating: 'N/A',\n          source: 'RemoteOK',\n          link: job.url ? `https://remoteok.com${job.url}` : '',\n          date_added: new Date().toISOString().split('T')[0],\n          applied: 'No',\n          notes: reason,\n          closing_date: '',\n          not_aligned: 'FALSE',\n          want_cover_letter: 'FALSE',\n          cover_letter: '',\n        }\n      });\n    }\n  } catch (err) {\n    // Skip failed jobs, continue processing\n  }\n\n  // Small delay between API calls\n  if (i < maxJobs - 1) {\n    await new Promise(r => setTimeout(r, 500));\n  }\n}\n\n// If no high-rated jobs, return empty signal\nif (results.length === 0) {\n  return [{ json: { _empty: true, message: `Rated ${maxJobs} jobs, none scored 7+` } }];\n}\n\nreturn results;\n"
+      },
+      "id": "code-rate-all",
+      "name": "AI Rate All Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1456,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "has-title",
+              "leftValue": "={{ $json.job_title || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-has-rated",
+      "name": "Any Rated 7+?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1680,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1r_3cUMoBHIUPbndHZ80yLZec290irnbK7Z02_l8PEds",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "High Rated Jobs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Job Title": "={{ $json.job_title }}",
+            "Company": "={{ $json.company }}",
+            "Location": "={{ $json.location }}",
+            "Remote Status": "={{ $json.remote_status }}",
+            "Position Rating": "={{ $json.position_rating }}",
+            "Company Rating": "={{ $json.company_rating }}",
+            "Source": "={{ $json.source }}",
+            "Link": "={{ $json.link }}",
+            "Date Added": "={{ $json.date_added }}",
+            "Applied": "={{ $json.applied }}",
+            "Notes": "={{ $json.notes }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "sheets-append",
+      "name": "Append to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1904,
+        384
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "58eFJjSKdKWVvSow",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 12 * * *"
+            }
+          ]
+        }
+      },
+      "id": "cron-daily",
+      "name": "Daily 7am CT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        112,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "1r_3cUMoBHIUPbndHZ80yLZec290irnbK7Z02_l8PEds",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "High Rated Jobs",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "sheets-read",
+      "name": "Read Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        336,
+        704
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "58eFJjSKdKWVvSow",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Generate cover letters for checked rows\nconst rows = $input.all().map(i => i.json);\nconst API_URL = 'https://openrouter.ai/api/v1/chat/completions';\nconst API_KEY = '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';\nconst MODEL = 'google/gemini-2.0-flash-001';\nconst RESUME = `Senior AI/Automation & Power Platform Engineer. 7+ years at Caterpillar Financial. Power Apps, Power Automate, Copilot Studio, Power BI, Python, Docker, Kubernetes, n8n, Zapier, Snowflake, ServiceNow, ETL pipelines. Army veteran, 2 MS degrees, Georgia Tech AI/ML Accelerator 2025. CIO Award winner. Led Copilot rollout, built AI governance chatbot (90% inquiry reduction), migrated 95% reports to Power BI.`;\n\nconst results = [];\n\nfor (const row of rows) {\n  // Check: Want a Cover Letter? = TRUE and Cover Letter is empty\n  const wantCL = String(row['Want a Cover Letter?'] || '').toUpperCase();\n  const hasCL = String(row['Cover Letter'] || '').trim();\n\n  if (wantCL !== 'TRUE' || hasCL.length > 10) continue;\n\n  const title = row['Job Title'] || 'Unknown';\n  const company = row['Company'] || 'Unknown';\n  const location = row['Location'] || 'Remote';\n  const remote = row['Remote Status'] || 'Remote';\n  const rowNum = row['_rowNumber'] || row['row_number'] || 0;\n\n  const prompt = `Write a tailored cover letter in Markdown for this role at ${company}.\n\n# Cover Letter \u2014 ${title} at ${company}\n\n**Aaron DeYoung**\nNashville, TN | __NOTIFICATION_EMAIL__ | 616-826-4535\n\n---\n\nRole: ${title}\nCompany: ${company}\nLocation: ${location} (${remote})\n\nResume: ${RESUME}\n\nWrite 250-350 words. Open with a company-specific hook. Include 2-3 quantified achievements. Sound human, confident, specific. End with sign-off as Aaron DeYoung, U.S. Army Veteran | AI & Automation Engineer.`;\n\n  try {\n    const response = await fetch(API_URL, {\n      method: 'POST',\n      headers: {\n        'Authorization': `Bearer ${API_KEY}`,\n        'Content-Type': 'application/json',\n      },\n      body: JSON.stringify({\n        model: MODEL,\n        messages: [{ role: 'user', content: prompt }],\n        temperature: 0.7,\n        max_tokens: 1000,\n      }),\n    });\n\n    const data = await response.json();\n    const coverLetter = data.choices?.[0]?.message?.content || '';\n\n    if (coverLetter.length > 50) {\n      results.push({\n        json: {\n          ...row,\n          'Cover Letter': coverLetter,\n          _rowNumber: rowNum,\n          _needsUpdate: true,\n        }\n      });\n    }\n  } catch (err) {\n    // Skip, continue\n  }\n\n  await new Promise(r => setTimeout(r, 1000));\n}\n\nif (results.length === 0) {\n  return [{ json: { _empty: true, message: 'No cover letters needed' } }];\n}\n\nreturn results;\n"
+      },
+      "id": "code-gen-cl",
+      "name": "Generate Cover Letters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "needs-update",
+              "leftValue": "={{ $json._needsUpdate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-has-cl",
+      "name": "Any Generated?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        784,
+        704
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1r_3cUMoBHIUPbndHZ80yLZec290irnbK7Z02_l8PEds",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "High Rated Jobs",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Cover Letter": "={{ $json['Cover Letter'] }}"
+          }
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED"
+        }
+      },
+      "id": "sheets-update-cl",
+      "name": "Write CLs to Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1008,
+        704
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "58eFJjSKdKWVvSow",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        112,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "authentication": "serviceAccount",
+        "documentId": {
+          "__rl": true,
+          "value": "1r_3cUMoBHIUPbndHZ80yLZec290irnbK7Z02_l8PEds",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Pipeline Config",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "id": "sheets-read-config",
+      "name": "Read Config",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        336,
+        384
+      ],
+      "credentials": {
+        "googleApi": {
+          "id": "58eFJjSKdKWVvSow",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Pipeline Config into structured settings\nconst rows = $input.all().map(i => i.json);\nconst config = {\n  targetCompanies: [],\n  mustHaveKeywords: [],\n  blockedKeywords: [],\n  blockedLocations: [],\n  settings: {}\n};\n\nfor (const row of rows) {\n  if (row.Active !== 'TRUE' && row.Active !== true) continue;\n  const cat = (row.Category || '').trim();\n  const val = (row.Value || '').trim().toLowerCase();\n\n  if (cat === 'Target Company') config.targetCompanies.push(val);\n  else if (cat === 'Must-Have Keyword') config.mustHaveKeywords.push(val);\n  else if (cat === 'Blocked Keyword') config.blockedKeywords.push(val);\n  else if (cat === 'Blocked Location') config.blockedLocations.push(val);\n  else if (cat === 'Setting') {\n    const [key, value] = val.split('=');\n    if (key && value) config.settings[key.trim()] = value.trim();\n  }\n}\n\nreturn [{ json: config }];\n"
+      },
+      "id": "code-parse-config",
+      "name": "Parse Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        384
+      ]
+    }
+  ],
+  "connections": {
+    "Every 6 Hours": {
+      "main": [
+        [
+          {
+            "node": "Read Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch RemoteOK": {
+      "main": [
+        [
+          {
+            "node": "Filter & Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter & Validate": {
+      "main": [
+        [
+          {
+            "node": "Has Jobs?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Jobs?": {
+      "main": [
+        [
+          {
+            "node": "AI Rate All Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "AI Rate All Jobs": {
+      "main": [
+        [
+          {
+            "node": "Any Rated 7+?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Rated 7+?": {
+      "main": [
+        [
+          {
+            "node": "Append to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Daily 7am CT": {
+      "main": [
+        [
+          {
+            "node": "Read Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Sheet": {
+      "main": [
+        [
+          {
+            "node": "Generate Cover Letters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Cover Letters": {
+      "main": [
+        [
+          {
+            "node": "Any Generated?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Generated?": {
+      "main": [
+        [
+          {
+            "node": "Write CLs to Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Config": {
+      "main": [
+        [
+          {
+            "node": "Parse Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Config": {
+      "main": [
+        [
+          {
+            "node": "Fetch RemoteOK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Chicago",
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false,
+    "binaryMode": "separate"
+  },
+  "staticData": {
+    "node:Every 6 Hours": {
+      "recurrenceRules": [
+        12
+      ]
+    },
+    "node:Daily 7am CT": {
+      "recurrenceRules": []
+    }
+  },
+  "tags": []
+}
