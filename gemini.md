@@ -1,6 +1,6 @@
 # ObsidianHomeOrchestrator — Project Map
 
-## Status: Implementation In Progress (~85% Complete)
+## Status: v2 Implementation In Progress (~75% Complete)
 
 ## Architecture
 - **n8n:** Proxmox LXC at `192.168.1.121:5678`
@@ -63,5 +63,19 @@
 4. 🏥 Work: Deliver Union project
 5. 💪 Health: Make hip decision + 3x/week gym for 8 weeks
 
-## Context Handoff (2026-03-29)
-Full audit and fix session. All n8n credentials and workflows are now live and working. The repo workflow JSONs are templates with placeholders — run `source .env && bash scripts/setup-n8n.sh` for fresh deployments. Live workflows include OpenRouter/Llama 3.3 70B for AI-powered triage and briefings. See `docs/2026-03-29-n8n-audit-and-fix.md` for complete audit trail.
+## v2 Overhaul (2026-04-02)
+- [x] **Full design spec** — `docs/superpowers/specs/2026-04-02-life-os-v2-design.md`
+- [x] **Implementation plan** — `docs/superpowers/plans/2026-04-02-life-os-v2-implementation.md`
+- [x] **Infrastructure fixed** — Daily/, logs/ folders, BrainDump — Consulting.md created in MinIO
+- [x] **Health check** — `scripts/health_check.py` (4/4 checks passing)
+- [x] **Python pipeline** — `tools/process_brain_dump.py` fully rewritten: section-aware, regex extraction, OpenRouter cascade
+- [x] **51 pytest tests** — all passing (`tests/test_brain_dump.py`, `tests/test_health_check.py`)
+- [x] **First extraction** — 1 task + 21 articles written to MinIO (first output in 14 days)
+- [x] **Backlog processed** — Personal + Business brain dumps extracted
+- [ ] **n8n workflow v2 JSONs** — brain-dump-processor-v2, daily-note-creator-v2, overdue-task-alert-v2, weekly-digest-v2, system-health-monitor, error-handler
+- [ ] **Import v2 workflows** to live n8n (API key needs regeneration)
+- [ ] **E2E test** — `scripts/e2e_test.py`
+- [ ] **Final verification** — all workflows active and producing output
+
+## Context Handoff (2026-04-02)
+v2 overhaul session. Root cause: system ran 14 days without processing a single brain dump. Fixed: section-aware extraction, smart content detection, regex extraction (zero AI cost), OpenRouter cascade for AI enhancement, verified writes, JSON run logs. Python pipeline proven working. n8n workflow v2 JSONs being built for import. API key needs regeneration for automated deployment. See design spec and implementation plan in `docs/superpowers/`.

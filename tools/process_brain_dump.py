@@ -573,10 +573,45 @@ def append_articles(s3, article_lines: list[str], today: str, dry_run: bool):
     s3_put_verified(s3, ARTICLES_FILE, new_content, dry_run)
 
 
-def update_frontmatter_processed(content: str, today: str) -> str:
-    """Update last_processed and status fields in frontmatter."""
+SECTION_TEMPLATES = {
+    "Quick Notes": "*Raw thoughts, observations, things on your mind right now*\n\n<!-- Add notes here -->",
+    "Needle Movers": "*Big moves that could change the game*\n\n<!-- Format: - [ ] <what> -->",
+    "To Do's": "*Specific actions, tasks, follow-ups*\n\n<!-- Format: - [ ] <task> [priority:: A/B/C] [due:: YYYY-MM-DD] -->",
+    "Articles & Resources to Follow Up On": "*Links, articles, books, videos, tools to explore*\n\n<!-- Add links here -->",
+    "Things to Organize & Follow Up On": "*Loose ends, conversations to close, things in limbo*\n\n<!-- Add items here -->",
+    "Ideas & Possibilities": "*Half-baked ideas, what-ifs, experiments worth exploring*\n\n<!-- Add ideas here -->",
+    "Recurring / Rhythms": "*Regular things in this domain that need attention or a new rhythm*\n\n<!-- Add here -->",
+}
+
+
+def reset_to_template(content: str, extracted_headers: list[str], today: str) -> str:
+    """
+    Clear extracted sections back to empty template state.
+    Leaves the file ready for the user to fill in again.
+    Updates frontmatter last_processed and resets status to empty.
+    """
+    # Update frontmatter
     content = re.sub(r"^last_processed:.*$", f"last_processed: {today}", content, flags=re.MULTILINE)
-    content = re.sub(r"^status: empty$", "status: processed", content, flags=re.MULTILINE)
+    content = re.sub(r"^status:.*$", "status: empty", content, flags=re.MULTILINE)
+
+    # Clear each extracted section back to template placeholder
+    for header in extracted_headers:
+        # Find the section header in content
+        header_clean = header.lstrip("⚡🎯✅📰🗂️💡🔁 ").strip()
+        # Look for matching template
+        template = None
+        for known, tmpl in SECTION_TEMPLATES.items():
+            if known in header_clean or header_clean in known:
+                template = tmpl
+                break
+        if not template:
+            continue
+
+        # Find the section and replace its body (between this ## and next ##)
+        pattern = rf"(## {re.escape(header)}\n).*?(?=\n## |\n---\n\*Tags:|\Z)"
+        replacement = rf"\g<1>\n{template}\n"
+        content = re.sub(pattern, replacement, content, flags=re.DOTALL)
+
     return content
 
 
@@ -669,10 +704,12 @@ def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
         log.articles_queued += len(all_articles)
         log.write_verifications_pass += 1
 
-    # Update frontmatter to mark processed
-    updated_content = update_frontmatter_processed(content, today)
+    # Reset extracted sections to empty template (ready for user to fill again)
+    extracted_headers = list(real_sections.keys())
+    updated_content = reset_to_template(content, extracted_headers, today)
     if not dry_run:
         s3_put_verified(s3, key, updated_content, dry_run)
+        logging.info(f"  → Reset {len(extracted_headers)} section(s) to empty template")
 
     log.files_processed.append(name)
     logging.info(f"  → Done: {tasks_written} tasks, {notes_written} notes, {len(all_articles)} articles")

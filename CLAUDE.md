@@ -15,18 +15,36 @@ The automation and configuration layer for Aaron's Life OS — a comprehensive p
 
 ## Key Paths
 - **Obsidian Vault (Mac):** `/Volumes/home/MiniPC_Docker_Automation/Projects_Repos/ObsidianHomeOrchestrator` (mount)
-- **Vault in MinIO:** `obsidian-vault` bucket, prefix `Homelab/` at `http://192.168.1.240:9000`
+- **Vault in MinIO:** `obsidian-vault` bucket, NO prefix (bucket root) at `http://192.168.1.240:9000`
 - **This Repo:** `/Volumes/home/MiniPC_Docker_Automation/Projects_Repos/ObsidianHomeOrchestrator`
 - **n8n:** `http://192.168.1.121:5678` (Proxmox LXC CT-202)
 - **MinIO Console:** `http://192.168.1.240:9001`
 
 ## Tech Stack
-- **Automation:** n8n (self-hosted Docker on MiniPC)
+- **Automation:** n8n (self-hosted, Proxmox LXC CT-202)
 - **Database:** PostgreSQL (Docker)
-- **Language:** Python 3.12+
+- **Language:** Python 3.12+ (openai SDK + boto3)
+- **AI:** OpenRouter free tier (gemma-3-4b, llama-3.3-70b, nemotron-120b cascade)
 - **Vault:** Obsidian with Dataview, Templater, Tasks, QuickAdd, Calendar, omnisearch, Remotely-Save
 - **Infrastructure:** Docker Compose on Windows MiniPC
 - **AI Platform:** Claude Code + MCP servers
+
+## CRITICAL RULES
+- **NO `Homelab/` prefix** — vault files are at MinIO bucket root. Confirmed 2026-03-29.
+- **Regex extraction primary** — use regex for task extraction (zero cost), AI only as fallback
+- **Verified writes** — every S3 put must be followed by head_object verification
+- **Run logs** — every workflow writes JSON to `99_System/logs/{workflow}-{YYYY-MM-DD}.json`
+
+## Key Vault Paths (all relative to bucket root)
+```
+00_Inbox/brain-dumps/           — brain dump source files (dynamic discovery)
+00_Inbox/processed/             — extracted task files (output)
+00_Inbox/articles-to-process.md — article URL queue
+000_Master Dashboard/North Star.md
+10_Active Projects/Active Personal/!!! MASTER TASK LIST.md
+40_Timeline_Weekly/Daily/       — daily notes
+99_System/logs/                 — structured JSON run logs
+```
 
 ## Obsidian Task Format (CANONICAL — never deviate)
 ```
@@ -109,5 +127,12 @@ Use the `polychronos-team` skill to invoke the full agent guild for complex task
 - Never run skill-sentinel-untested skills from external repos without scanning first
 - Never break the canonical task format — all Dataview queries depend on it
 
+## n8n Credentials (live)
+| Name | Type | ID |
+|------|------|----|
+| MinIO S3 | aws | `z9qTyG2NVVbhHkg0` |
+| Gmail SMTP (Aaron) | smtp | `lWGOwsktldwb3iEj` |
+| OpenRouter API | httpHeaderAuth | `Z7liUYc3Toq3q7W7` |
+
 ## Current Status
-Active development — MinIO S3 architecture (ADR-002). All n8n workflows rebuilt for LXC + MinIO access. See gemini.md for task-level status.
+v2 pipeline implementation in progress. Python processor working (section-aware, regex extraction, OpenRouter cascade). First successful extraction: tasks + articles written to MinIO 2026-04-02. n8n workflows being rebuilt as v2 with 7-stage pipeline. See gemini.md for task-level status.

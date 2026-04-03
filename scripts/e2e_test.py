@@ -9,13 +9,18 @@ files exist, then cleans up. Exit 0 = all pass.
 Usage:
     python3 scripts/e2e_test.py
 """
+import io
 import json
 import os
 import sys
-import time
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Force UTF-8 output on Windows
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 import boto3
 from botocore.client import Config
@@ -96,14 +101,18 @@ def run_processor():
         "--file", "E2E-Test-BrainDump.md",
         "--verbose",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO_ROOT))
-    print(result.stdout[-2000:] if len(result.stdout) > 2000 else result.stdout)
-    if result.stderr:
-        print("STDERR:", result.stderr[-500:])
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    result = subprocess.run(cmd, capture_output=True, cwd=str(REPO_ROOT), env=env)
+    stdout = result.stdout.decode("utf-8", errors="replace")
+    print(stdout[-2000:] if len(stdout) > 2000 else stdout)
     check("processor_exit_code", result.returncode == 0, f"exit={result.returncode}")
 
+    # Extract JSON from output (find last {...} block)
     try:
-        output = json.loads(result.stdout.strip().split("\n")[-1])
+        import re
+        json_match = re.findall(r'\{[^{}]*\}', stdout, re.DOTALL)
+        output = json.loads(json_match[-1]) if json_match else {}
         check("tasks_written", output.get("tasks_written", 0) > 0,
               f"tasks_written={output.get('tasks_written', 0)}")
         check("no_errors", len(output.get("errors", [])) == 0,

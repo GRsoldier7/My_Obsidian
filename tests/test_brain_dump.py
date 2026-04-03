@@ -12,6 +12,7 @@ from process_brain_dump import (
     validate_task_line,
     quality_gate_tasks,
     section_type,
+    reset_to_template,
 )
 
 
@@ -247,3 +248,57 @@ def test_section_type_quick_notes():
 
 def test_section_type_ideas():
     assert section_type("💡 Ideas & Possibilities") == "notes"
+
+
+# ── reset_to_template ────────────────────────────────────────────────────────
+
+def test_reset_to_template_clears_content():
+    content = """---
+domain: Personal
+area: personal
+last_processed:
+status: empty
+---
+
+# Brain Dump — Personal
+
+## ✅ To Do's
+- Buy groceries
+- Call dentist
+- Fix the car
+
+## 💡 Ideas & Possibilities
+App idea: habit tracker for Obsidian
+
+---
+
+*Tags: #brain-dump #personal*
+"""
+    result = reset_to_template(content, ["✅ To Do's", "💡 Ideas & Possibilities"], "2026-04-02")
+    assert "Buy groceries" not in result
+    assert "App idea" not in result
+    assert "last_processed: 2026-04-02" in result
+    assert "status: empty" in result
+    # Template placeholders should be restored
+    assert "<!-- Format:" in result or "<!-- Add" in result
+
+
+def test_reset_to_template_preserves_other_sections():
+    content = """---
+status: empty
+last_processed:
+---
+
+## ⚡ Quick Notes
+<!-- Add notes here -->
+
+## ✅ To Do's
+Real task here
+
+## 📰 Articles & Resources to Follow Up On
+<!-- Add links here -->
+"""
+    result = reset_to_template(content, ["✅ To Do's"], "2026-04-02")
+    assert "Real task here" not in result
+    # Quick Notes was NOT extracted, should stay unchanged
+    assert "<!-- Add notes here -->" in result
