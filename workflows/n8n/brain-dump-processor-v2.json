@@ -1,0 +1,189 @@
+{
+  "name": "🧠 Brain Dump Processor v2 — Daily 7AM",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 12 * * *" }]
+        }
+      },
+      "id": "trigger",
+      "name": "Every Day 7AM CDT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "bucketName": "obsidian-vault",
+        "prefix": "00_Inbox/brain-dumps/",
+        "additionalFields": {}
+      },
+      "id": "s3-list",
+      "name": "S3: List Brain Dumps",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [440, 300],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter to only real files (not folders, not zero-byte)\nconst items = $input.all();\nconst files = items.filter(item => {\n  const key = item.json.Key || '';\n  const size = item.json.Size || 0;\n  return key.endsWith('.md') && size > 0;\n});\nreturn files.length > 0 ? files : [{ json: { _noFiles: true } }];"
+      },
+      "id": "filter-files",
+      "name": "Filter Real Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "leftValue": "", "caseSensitive": true, "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "leftValue": "={{ $json._noFiles }}", "rightValue": true, "operator": { "type": "boolean", "operation": "notEquals" } }
+          ]
+        }
+      },
+      "id": "if-has-files",
+      "name": "Has Files?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "loop",
+      "name": "Loop Each File",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "={{ $json.Key }}"
+      },
+      "id": "s3-download",
+      "name": "S3: Download File",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [1320, 200],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse sections, detect real content, extract tasks via regex\nconst item = $input.first();\nconst binaryData = item.binary?.data;\nif (!binaryData) return [{ json: { hasContent: false } }];\n\nconst content = Buffer.from(binaryData.data, 'base64').toString('utf-8');\nconst fileName = item.json.Key?.split('/').pop() || '';\nconst today = new Date().toISOString().split('T')[0];\n\n// Infer area from filename\nfunction inferArea(name) {\n  const n = name.toLowerCase();\n  if (n.includes('faith') || n.includes('bible')) return 'faith';\n  if (n.includes('family')) return 'family';\n  if (n.includes('business') || n.includes('echelon')) return 'business';\n  if (n.includes('consulting')) return 'consulting';\n  if (n.includes('work') || n.includes('parallon')) return 'work';\n  if (n.includes('health')) return 'health';\n  if (n.includes('home')) return 'home';\n  return 'personal';\n}\n\n// Parse into sections\nconst sections = {};\nlet header = '_fm';\nlet lines = [];\nfor (const line of content.split('\\n')) {\n  if (line.trim().startsWith('## ')) {\n    sections[header] = lines.join('\\n');\n    header = line.trim().substring(3).trim();\n    lines = [];\n  } else {\n    lines.push(line);\n  }\n}\nsections[header] = lines.join('\\n');\n\n// Check real content\nfunction isEmpty(body) {\n  const stripped = body\n    .replace(/<!--[\\s\\S]*?-->/g, '')\n    .replace(/^\\s*[-*]{3,}\\s*$/gm, '')\n    .replace(/^\\s*=this\\.\\w+\\s*$/gm, '')\n    .replace(/^\\s*\\*[^*]+\\*\\s*$/gm, '')\n    .replace(/^\\s*>.*$/gm, '')\n    .replace(/^\\s*$/gm, '')\n    .trim();\n  return stripped.length === 0;\n}\n\n// Q2 Rock priority keywords\nconst Q2 = {\n  faith: ['bible','bible study','social media','church','prayer'],\n  family: ['christy','marriage','questionnaire','kids'],\n  business: ['echelon','website','offer','outreach','mvp'],\n  work: ['union','parallon','deliver','exit'],\n  health: ['hip','gym','crossfit','workout','3x']\n};\nfunction inferPriority(text) {\n  const l = text.toLowerCase();\n  for (const kws of Object.values(Q2)) {\n    if (kws.some(k => l.includes(k))) return 'A';\n  }\n  return 'B';\n}\n\nconst area = inferArea(fileName);\nconst tasks = [];\nconst articles = [];\nconst extractedHeaders = [];\n\nfor (const [h, body] of Object.entries(sections)) {\n  if (h.startsWith('_') || isEmpty(body)) continue;\n  const isTask = /To Do|Needle|Recurring|Organize/i.test(h);\n  const isArticle = /Article|Resource/i.test(h);\n  if (!isTask && !isArticle && !/Quick Notes|Ideas/i.test(h)) continue;\n  extractedHeaders.push(h);\n  \n  if (isTask) {\n    for (const line of body.split('\\n')) {\n      const s = line.trim();\n      if (!s || s.startsWith('<!--') || s.startsWith('>') || /^\\*[^*]+\\*$/.test(s)) continue;\n      let taskText = '';\n      if (/^[-*]\\s*\\[ \\]\\s+/.test(s)) taskText = s.replace(/^[-*]\\s*\\[ \\]\\s+/, '');\n      else if (/^[-*]\\s+\\S/.test(s)) taskText = s.replace(/^[-*]\\s+/, '');\n      else if (/^(I need|Need to|Research|Call|Email|Buy|Get|Check|Follow up|Review|Write|Schedule|Set up|Look into|Find|Fix|Create|Build|Update|Send)/i.test(s)) taskText = s;\n      if (taskText && taskText.length > 5) {\n        taskText = taskText.replace(/\\s*\\[(area|priority|due)::[^\\]]*\\]/g, '').trim();\n        const p = inferPriority(taskText);\n        tasks.push(`- [ ] ${taskText} [area:: ${area}] [priority:: ${p}]`);\n      }\n    }\n  }\n  if (isArticle) {\n    const urls = body.match(/https?:\\/\\/[^\\s\\)\\]]+/g) || [];\n    for (const url of urls) if (url.length > 10) articles.push(`- <${url}>`);\n  }\n}\n\nreturn [{ json: {\n  hasContent: tasks.length > 0 || articles.length > 0,\n  fileName, fileKey: item.json.Key, area, today,\n  tasks, articles, taskCount: tasks.length, articleCount: articles.length,\n  extractedHeaders, content\n}}];"
+      },
+      "id": "parse-extract",
+      "name": "Parse & Extract",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "leftValue": "", "caseSensitive": true, "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "leftValue": "={{ $json.hasContent }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+          ]
+        }
+      },
+      "id": "if-content",
+      "name": "Has Content?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1760, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build task file and write back template\nconst item = $input.first();\nconst { tasks, articles, fileName, area, today, content, extractedHeaders } = item.json;\n\n// Build task file content\nconst slug = fileName.replace('.md','').replace(/ /g,'-').replace(/—/g,'');\nlet taskFile = `---\\nsource: ${fileName}\\narea: ${area}\\nprocessed: ${today}\\ntype: extracted-tasks\\n---\\n\\n# Extracted Tasks — ${fileName} (${today})\\n\\n${tasks.join('\\n')}\\n`;\n\n// Build article lines\nlet articleLines = articles.length > 0 ? `\\n## Added ${today}\\n\\n${articles.join('\\n')}\\n` : '';\n\n// Reset brain dump to template\nconst TEMPLATES = {\n  'Quick Notes': '<!-- Add notes here -->',\n  'Needle Movers': '<!-- Format: - [ ] <what> -->',\n  \"To Do's\": '<!-- Format: - [ ] <task> [priority:: A/B/C] [due:: YYYY-MM-DD] -->',\n  'Articles & Resources': '<!-- Add links here -->',\n  'Things to Organize': '<!-- Add items here -->',\n  'Ideas & Possibilities': '<!-- Add ideas here -->',\n  'Recurring': '<!-- Add here -->'\n};\n\nlet resetContent = content\n  .replace(/^last_processed:.*$/m, `last_processed: ${today}`)\n  .replace(/^status:.*$/m, 'status: empty');\n\nfor (const h of extractedHeaders) {\n  for (const [key, tmpl] of Object.entries(TEMPLATES)) {\n    if (h.includes(key)) {\n      const re = new RegExp(`(## ${h.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\\\$&')}\\n)([\\\\s\\\\S]*?)(?=\\n## |\\n---\\n\\\\*Tags:|$)`);\n      resetContent = resetContent.replace(re, `$1\\n${tmpl}\\n`);\n      break;\n    }\n  }\n}\n\n// Run log\nconst log = JSON.stringify({\n  workflow: 'brain-dump-processor',\n  run_date: today,\n  finished_at: new Date().toISOString(),\n  status: 'success',\n  files_with_content: 1,\n  tasks_written: tasks.length,\n  articles_queued: articles.length,\n  files_processed: [fileName]\n}, null, 2);\n\nreturn [{ json: {\n  taskFileKey: `00_Inbox/processed/${today}-${slug}-tasks.md`,\n  taskFileContent: taskFile,\n  articleLines,\n  resetFileKey: item.json.fileKey,\n  resetContent,\n  logKey: `99_System/logs/brain-dump-processor-${today}.json`,\n  logContent: log,\n  taskCount: tasks.length,\n  articleCount: articles.length,\n  fileName, today\n}}];"
+      },
+      "id": "build-output",
+      "name": "Build Output Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1980, 100]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.taskFileKey }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-write-tasks",
+      "name": "S3: Write Tasks",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [2200, 0],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.resetFileKey }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-reset-template",
+      "name": "S3: Reset Brain Dump",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [2200, 200],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.logKey }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-write-log",
+      "name": "S3: Write Run Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [2200, 400],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+    },
+    {
+      "parameters": {
+        "fromEmail": "aaron.deyoung@gmail.com",
+        "toEmail": "aaron.deyoung@gmail.com",
+        "subject": "=🧠 Brain Dump Processed — {{ $json.taskCount }} tasks, {{ $json.articleCount }} articles",
+        "text": "=Brain Dump Processor completed at {{ $now.toISO() }}\n\nFile: {{ $json.fileName }}\nTasks extracted: {{ $json.taskCount }}\nArticles queued: {{ $json.articleCount }}\n\nOutput: 00_Inbox/processed/{{ $json.today }}-tasks.md"
+      },
+      "id": "email-digest",
+      "name": "Email: Digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [2420, 200],
+      "credentials": { "smtp": { "id": "lWGOwsktldwb3iEj", "name": "Gmail SMTP (Aaron)" } }
+    }
+  ],
+  "connections": {
+    "Every Day 7AM CDT": { "main": [[{ "node": "S3: List Brain Dumps", "type": "main", "index": 0 }]] },
+    "S3: List Brain Dumps": { "main": [[{ "node": "Filter Real Files", "type": "main", "index": 0 }]] },
+    "Filter Real Files": { "main": [[{ "node": "Has Files?", "type": "main", "index": 0 }]] },
+    "Has Files?": { "main": [[{ "node": "Loop Each File", "type": "main", "index": 0 }], []] },
+    "Loop Each File": { "main": [[{ "node": "S3: Download File", "type": "main", "index": 0 }], []] },
+    "S3: Download File": { "main": [[{ "node": "Parse & Extract", "type": "main", "index": 0 }]] },
+    "Parse & Extract": { "main": [[{ "node": "Has Content?", "type": "main", "index": 0 }]] },
+    "Has Content?": { "main": [[{ "node": "Build Output Files", "type": "main", "index": 0 }], [{ "node": "Loop Each File", "type": "main", "index": 0 }]] },
+    "Build Output Files": { "main": [[{ "node": "S3: Write Tasks", "type": "main", "index": 0 }, { "node": "S3: Reset Brain Dump", "type": "main", "index": 0 }, { "node": "S3: Write Run Log", "type": "main", "index": 0 }]] },
+    "S3: Write Tasks": { "main": [[{ "node": "Email: Digest", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

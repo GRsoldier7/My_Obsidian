@@ -1,0 +1,90 @@
+{
+  "name": "📊 Weekly Needle Mover Digest v2 — Sunday 6PM",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 23 * * 0" }] }
+      },
+      "id": "trigger",
+      "name": "Sunday 6PM CDT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "000_Master Dashboard/North Star.md"
+      },
+      "id": "s3-north-star",
+      "name": "S3: Read North Star",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [440, 200],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
+      },
+      "id": "s3-mtl",
+      "name": "S3: Read MTL",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [440, 400],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const today = new Date().toISOString().split('T')[0];\nconst weekAgo = new Date(Date.now() - 7*86400000).toISOString().split('T')[0];\n\nlet mtl = '';\ntry { const b = $('S3: Read MTL').first().binary?.data; if(b) mtl = Buffer.from(b.data,'base64').toString('utf-8'); } catch(e) {}\n\n// Count tasks by area and status\nconst areas = ['faith','family','business','consulting','work','health','home','personal'];\nconst stats = {};\nfor (const a of areas) stats[a] = { total: 0, completed: 0, overdue: 0, dueThisWeek: 0 };\n\nconst nextWeek = new Date(Date.now() + 7*86400000).toISOString().split('T')[0];\n\n// Open tasks\nconst openRe = /- \\[ \\] .+?\\[area:: (\\w+)\\].*?(?:\\[due:: (\\d{4}-\\d{2}-\\d{2})\\])?/g;\nlet m;\nwhile ((m = openRe.exec(mtl)) !== null) {\n  const area = m[1]; const due = m[2];\n  if (stats[area]) {\n    stats[area].total++;\n    if (due && due < today) stats[area].overdue++;\n    if (due && due >= today && due <= nextWeek) stats[area].dueThisWeek++;\n  }\n}\n\n// Completed tasks (- [x])\nconst doneRe = /- \\[x\\] .+?\\[area:: (\\w+)\\]/g;\nwhile ((m = doneRe.exec(mtl)) !== null) {\n  if (stats[m[1]]) stats[m[1]].completed++;\n}\n\n// Q2 Rocks\nconst rocks = [\n  { area: 'faith', rock: 'Launch social media Bible study (4 sessions)' },\n  { area: 'family', rock: 'Marriage Alignment Questionnaire + bi-weekly check-in' },\n  { area: 'business', rock: 'Ship MVP — website, offer, 3 outreach (Echelon Seven)' },\n  { area: 'work', rock: 'Deliver Union project + position for exit' },\n  { area: 'health', rock: 'Hip decision + 3x/week gym for 8 weeks' }\n];\n\n// Build HTML digest\nlet html = `<h1>Weekly Needle Mover Digest</h1><p>Week ending ${today}</p>`;\nhtml += '<h2>Q2 Rock Progress</h2><table border=\"1\" cellpadding=\"5\"><tr><th>Rock</th><th>Open</th><th>Done</th><th>Overdue</th></tr>';\nfor (const r of rocks) {\n  const s = stats[r.area] || { total:0, completed:0, overdue:0 };\n  html += `<tr><td><strong>${r.area}</strong>: ${r.rock}</td><td>${s.total}</td><td>${s.completed}</td><td>${s.overdue > 0 ? '<span style=\"color:red\">' + s.overdue + '</span>' : '0'}</td></tr>`;\n}\nhtml += '</table>';\n\nhtml += '<h2>All Areas</h2><table border=\"1\" cellpadding=\"5\"><tr><th>Area</th><th>Open</th><th>Done</th><th>Due This Week</th><th>Overdue</th></tr>';\nfor (const [area, s] of Object.entries(stats)) {\n  if (s.total + s.completed === 0) continue;\n  html += `<tr><td>${area}</td><td>${s.total}</td><td>${s.completed}</td><td>${s.dueThisWeek}</td><td>${s.overdue}</td></tr>`;\n}\nhtml += '</table>';\n\nconst log = JSON.stringify({ workflow: 'weekly-digest', run_date: today, finished_at: new Date().toISOString(), status: 'success' }, null, 2);\n\nreturn [{ json: { html, today, logKey: `99_System/logs/weekly-digest-${today}.json`, logContent: log } }];"
+      },
+      "id": "build-digest",
+      "name": "Build Weekly Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [770, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "aaron.deyoung@gmail.com",
+        "toEmail": "aaron.deyoung@gmail.com",
+        "subject": "=📊 Weekly Needle Mover Digest — Week of {{ $json.today }}",
+        "html": "={{ $json.html }}"
+      },
+      "id": "email",
+      "name": "Email: Weekly Digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [990, 300],
+      "credentials": { "smtp": { "id": "lWGOwsktldwb3iEj", "name": "Gmail SMTP (Aaron)" } }
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.logKey }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-log",
+      "name": "S3: Write Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [1210, 300],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+    }
+  ],
+  "connections": {
+    "Sunday 6PM CDT": { "main": [[{ "node": "S3: Read North Star", "type": "main", "index": 0 }, { "node": "S3: Read MTL", "type": "main", "index": 0 }]] },
+    "S3: Read North Star": { "main": [[{ "node": "Build Weekly Digest", "type": "main", "index": 0 }]] },
+    "S3: Read MTL": { "main": [[{ "node": "Build Weekly Digest", "type": "main", "index": 0 }]] },
+    "Build Weekly Digest": { "main": [[{ "node": "Email: Weekly Digest", "type": "main", "index": 0 }]] },
+    "Email: Weekly Digest": { "main": [[{ "node": "S3: Write Log", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

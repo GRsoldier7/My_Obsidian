@@ -1,14 +1,36 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
 # ObsidianHomeOrchestrator — n8n Setup Script
-# Creates credentials, imports workflows, activates all 6 workflows
-# Credentials: MinIO S3, Gmail SMTP, OpenRouter API
+#
+# Idempotent setup: creates credentials, hydrates workflow templates
+# with real IDs, imports/updates all workflows, and activates them.
+#
+# Workflow JSONs in workflows/n8n/ are TEMPLATES containing these
+# placeholders (never commit real IDs to git):
+#   __MINIO_CRED_ID__       → replaced with the real MinIO cred ID
+#   __SMTP_CRED_ID__        → replaced with the real SMTP cred ID
+#   __OPENROUTER_CRED_ID__  → replaced with the real OpenRouter cred ID
+#   __NOTIFICATION_EMAIL__  → replaced with NOTIFICATION_EMAIL env var
+#
+# Usage:
+#   source .env && bash scripts/setup-n8n.sh
 # ═══════════════════════════════════════════════════════════════════
 set -euo pipefail
 
-N8N_HOST="${N8N_HOST:-http://192.168.1.121:5678}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKFLOW_DIR="$SCRIPT_DIR/../workflows/n8n"
+
+# ── Read config from environment (with defaults where safe) ─────
+N8N_HOST="${N8N_HOST:-http://192.168.1.121:5678}"
+MINIO_ENDPOINT="${MINIO_ENDPOINT:-http://192.168.1.240:9000}"
+SMTP_HOST="${SMTP_HOST:-smtp.gmail.com}"
+SMTP_PORT="${SMTP_PORT:-587}"
+NOTIFICATION_EMAIL="${NOTIFICATION_EMAIL:-${SMTP_USER:-}}"
+
+# ── Canonical credential names (must match workflow JSONs) ──────
+MINIO_CRED_NAME="MinIO S3"
+SMTP_CRED_NAME="Gmail SMTP (Aaron)"
+OPENROUTER_CRED_NAME="OpenRouter API"
 
 # ── Validate required env vars ──────────────────────────────────
 required_vars=(N8N_API_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY SMTP_USER SMTP_PASS OPENROUTER_API_KEY)
@@ -18,252 +40,318 @@ for var in "${required_vars[@]}"; do
 done
 
 if [[ ${#missing[@]} -gt 0 ]]; then
-  echo "❌ Missing required environment variables:"
+  echo "ERROR: Missing required environment variables:"
   for v in "${missing[@]}"; do echo "   - $v"; done
   echo ""
   echo "Set them in .env and run:  source .env && bash $0"
   echo ""
   echo "Required:"
-  echo "  N8N_API_KEY       — Generate at n8n → Settings → API → Create API Key"
-  echo "  MINIO_ACCESS_KEY  — MinIO Claude_Cowork service account access key"
-  echo "  MINIO_SECRET_KEY  — MinIO Claude_Cowork service account secret key"
-  echo "  SMTP_USER         — Gmail address (aaron.deyoung@gmail.com)"
-  echo "  SMTP_PASS         — Gmail App Password (Google Account → Security → 2FA → App Passwords)"
-  echo "  OPENROUTER_API_KEY — Free tier at https://openrouter.ai (unified LLM gateway)"
+  echo "  N8N_API_KEY       — Generate at n8n > Settings > API > Create API Key"
+  echo "  MINIO_ACCESS_KEY  — MinIO service account access key"
+  echo "  MINIO_SECRET_KEY  — MinIO service account secret key"
+  echo "  SMTP_USER         — Gmail address (e.g. aaron.deyoung@gmail.com)"
+  echo "  SMTP_PASS         — Gmail App Password"
+  echo "  OPENROUTER_API_KEY — OpenRouter API key (free tier at openrouter.ai)"
+  echo ""
+  echo "Optional (have defaults):"
+  echo "  N8N_HOST            — Default: http://192.168.1.121:5678"
+  echo "  MINIO_ENDPOINT      — Default: http://192.168.1.240:9000"
+  echo "  SMTP_HOST           — Default: smtp.gmail.com"
+  echo "  SMTP_PORT           — Default: 587"
+  echo "  NOTIFICATION_EMAIL  — Default: \$SMTP_USER"
+  exit 1
+fi
+
+if [[ -z "$NOTIFICATION_EMAIL" ]]; then
+  echo "ERROR: NOTIFICATION_EMAIL and SMTP_USER are both empty."
   exit 1
 fi
 
 API="$N8N_HOST/api/v1"
-AUTH="-H X-N8N-API-KEY:$N8N_API_KEY"
 
-echo "🔗 Connecting to n8n at $N8N_HOST..."
-status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 $AUTH "$API/workflows" 2>/dev/null)
-if [[ "$status" != "200" ]]; then
-  echo "❌ Cannot reach n8n API (HTTP $status). Check N8N_HOST and N8N_API_KEY."
+# ── Helper: n8n API call ────────────────────────────────────────
+n8n_api() {
+  local method="$1" path="$2"
+  shift 2
+  curl -sf -X "$method" "$API$path" \
+    -H "X-N8N-API-KEY: $N8N_API_KEY" \
+    -H "Content-Type: application/json" \
+    "$@"
+}
+
+# ── Helper: find credential ID by exact name ────────────────────
+find_cred_id() {
+  local cred_name="$1"
+  n8n_api GET "/credentials" 2>/dev/null | \
+    python3 -c "
+import sys, json
+data = json.load(sys.stdin).get('data', [])
+for c in data:
+    if c.get('name') == '$cred_name':
+        print(c['id'])
+        break
+" 2>/dev/null || true
+}
+
+# ── Step 0: Test connectivity ───────────────────────────────────
+echo "Connecting to n8n at $N8N_HOST..."
+if ! n8n_api GET "/workflows" > /dev/null 2>&1; then
+  echo "ERROR: Cannot reach n8n API. Check N8N_HOST and N8N_API_KEY."
+  echo "  N8N_HOST=$N8N_HOST"
   exit 1
 fi
-echo "✅ n8n API connected"
-
-# ── Step 1: Create MinIO credential ─────────────────────────────
+echo "OK — n8n API connected"
 echo ""
-echo "📦 Creating MinIO credential..."
-MINIO_CRED_RESPONSE=$(curl -s -X POST "$API/credentials" \
-  -H "X-N8N-API-KEY: $N8N_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "MinIO — obsidian-vault",
+
+# ── Step 1: Create or find MinIO credential ─────────────────────
+echo "--- MinIO S3 Credential ---"
+MINIO_CRED_ID=$(find_cred_id "$MINIO_CRED_NAME")
+
+if [[ -n "$MINIO_CRED_ID" ]]; then
+  echo "EXISTS (ID: $MINIO_CRED_ID) — updating credentials..."
+  n8n_api PATCH "/credentials/$MINIO_CRED_ID" -d '{
+    "name": "'"$MINIO_CRED_NAME"'",
     "type": "aws",
     "data": {
       "region": "us-east-1",
       "accessKeyId": "'"$MINIO_ACCESS_KEY"'",
       "secretAccessKey": "'"$MINIO_SECRET_KEY"'",
       "customEndpoints": true,
-      "s3Endpoint": "http://192.168.1.240:9000",
-      "s3ForcePathStyle": true
+      "s3Endpoint": "'"$MINIO_ENDPOINT"'",
+      "sessionToken": "",
+      "sesEndpoint": "",
+      "sqsEndpoint": "",
+      "ssmEndpoint": "",
+      "snsEndpoint": "",
+      "rekognitionEndpoint": "",
+      "lambdaEndpoint": ""
+    }
+  }' > /dev/null 2>&1
+  echo "OK — MinIO credential updated"
+else
+  echo "Creating..."
+  MINIO_CRED_RESPONSE=$(n8n_api POST "/credentials" -d '{
+    "name": "'"$MINIO_CRED_NAME"'",
+    "type": "aws",
+    "data": {
+      "region": "us-east-1",
+      "accessKeyId": "'"$MINIO_ACCESS_KEY"'",
+      "secretAccessKey": "'"$MINIO_SECRET_KEY"'",
+      "customEndpoints": true,
+      "s3Endpoint": "'"$MINIO_ENDPOINT"'",
+      "sessionToken": "",
+      "sesEndpoint": "",
+      "sqsEndpoint": "",
+      "ssmEndpoint": "",
+      "snsEndpoint": "",
+      "rekognitionEndpoint": "",
+      "lambdaEndpoint": ""
     }
   }')
-
-MINIO_CRED_ID=$(echo "$MINIO_CRED_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
-if [[ -z "$MINIO_CRED_ID" ]]; then
-  echo "⚠️  MinIO credential may already exist. Checking..."
-  MINIO_CRED_ID=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/credentials" | \
-    python3 -c "import sys,json; creds=json.load(sys.stdin).get('data',[]); print(next((c['id'] for c in creds if 'MinIO' in c.get('name','')), ''))" 2>/dev/null)
-  if [[ -n "$MINIO_CRED_ID" ]]; then
-    echo "✅ MinIO credential exists (ID: $MINIO_CRED_ID)"
-  else
-    echo "❌ Failed to create MinIO credential. Response: $MINIO_CRED_RESPONSE"
+  MINIO_CRED_ID=$(echo "$MINIO_CRED_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+  if [[ -z "$MINIO_CRED_ID" ]]; then
+    echo "ERROR: Failed to create MinIO credential."
+    echo "Response: $MINIO_CRED_RESPONSE"
     exit 1
   fi
-else
-  echo "✅ MinIO credential created (ID: $MINIO_CRED_ID)"
+  echo "OK — MinIO credential created (ID: $MINIO_CRED_ID)"
 fi
 
-# ── Step 2: Create Gmail SMTP credential ────────────────────────
+# ── Step 2: Create or find SMTP credential ──────────────────────
 echo ""
-echo "📧 Creating Gmail SMTP credential..."
-SMTP_CRED_RESPONSE=$(curl -s -X POST "$API/credentials" \
-  -H "X-N8N-API-KEY: $N8N_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Gmail SMTP",
+echo "--- Gmail SMTP Credential ---"
+SMTP_CRED_ID=$(find_cred_id "$SMTP_CRED_NAME")
+
+if [[ -n "$SMTP_CRED_ID" ]]; then
+  echo "EXISTS (ID: $SMTP_CRED_ID) — updating credentials..."
+  n8n_api PATCH "/credentials/$SMTP_CRED_ID" -d '{
+    "name": "'"$SMTP_CRED_NAME"'",
     "type": "smtp",
     "data": {
-      "host": "smtp.gmail.com",
-      "port": 587,
+      "host": "'"$SMTP_HOST"'",
+      "port": '"$SMTP_PORT"',
+      "secure": false,
+      "user": "'"$SMTP_USER"'",
+      "password": "'"$SMTP_PASS"'"
+    }
+  }' > /dev/null 2>&1
+  echo "OK — SMTP credential updated"
+else
+  echo "Creating..."
+  SMTP_CRED_RESPONSE=$(n8n_api POST "/credentials" -d '{
+    "name": "'"$SMTP_CRED_NAME"'",
+    "type": "smtp",
+    "data": {
+      "host": "'"$SMTP_HOST"'",
+      "port": '"$SMTP_PORT"',
       "secure": false,
       "user": "'"$SMTP_USER"'",
       "password": "'"$SMTP_PASS"'"
     }
   }')
-
-SMTP_CRED_ID=$(echo "$SMTP_CRED_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
-if [[ -z "$SMTP_CRED_ID" ]]; then
-  echo "⚠️  SMTP credential may already exist. Checking..."
-  SMTP_CRED_ID=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/credentials" | \
-    python3 -c "import sys,json; creds=json.load(sys.stdin).get('data',[]); print(next((c['id'] for c in creds if 'Gmail' in c.get('name','') or 'SMTP' in c.get('name','')), ''))" 2>/dev/null)
-  if [[ -n "$SMTP_CRED_ID" ]]; then
-    echo "✅ SMTP credential exists (ID: $SMTP_CRED_ID)"
-  else
-    echo "❌ Failed to create SMTP credential. Response: $SMTP_CRED_RESPONSE"
+  SMTP_CRED_ID=$(echo "$SMTP_CRED_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+  if [[ -z "$SMTP_CRED_ID" ]]; then
+    echo "ERROR: Failed to create SMTP credential."
+    echo "Response: $SMTP_CRED_RESPONSE"
     exit 1
   fi
-else
-  echo "✅ Gmail SMTP credential created (ID: $SMTP_CRED_ID)"
+  echo "OK — SMTP credential created (ID: $SMTP_CRED_ID)"
 fi
 
-
-# ── Step 3: Create OpenRouter API credential ─────────────────────
+# ── Step 3: Create or find OpenRouter credential ────────────────
 echo ""
-echo "🤖 Creating OpenRouter API credential..."
-OR_CRED_RESPONSE=$(curl -s -X POST "$API/credentials" \
-  -H "X-N8N-API-KEY: $N8N_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "OpenRouter API",
+echo "--- OpenRouter API Credential ---"
+OPENROUTER_CRED_ID=$(find_cred_id "$OPENROUTER_CRED_NAME")
+
+if [[ -n "$OPENROUTER_CRED_ID" ]]; then
+  echo "EXISTS (ID: $OPENROUTER_CRED_ID) — updating..."
+  n8n_api PATCH "/credentials/$OPENROUTER_CRED_ID" -d '{
+    "name": "'"$OPENROUTER_CRED_NAME"'",
+    "type": "httpHeaderAuth",
+    "data": {
+      "name": "Authorization",
+      "value": "Bearer '"$OPENROUTER_API_KEY"'"
+    }
+  }' > /dev/null 2>&1
+  echo "OK — OpenRouter credential updated"
+else
+  echo "Creating..."
+  OPENROUTER_CRED_RESPONSE=$(n8n_api POST "/credentials" -d '{
+    "name": "'"$OPENROUTER_CRED_NAME"'",
     "type": "httpHeaderAuth",
     "data": {
       "name": "Authorization",
       "value": "Bearer '"$OPENROUTER_API_KEY"'"
     }
   }')
-
-OR_CRED_ID=$(echo "$OR_CRED_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
-if [[ -z "$OR_CRED_ID" ]]; then
-  echo "⚠️  OpenRouter credential may already exist. Checking..."
-  OR_CRED_ID=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/credentials" | \
-    python3 -c "import sys,json; creds=json.load(sys.stdin).get('data',[]); print(next((c['id'] for c in creds if 'OpenRouter' in c.get('name','')), ''))" 2>/dev/null)
-  if [[ -n "$OR_CRED_ID" ]]; then
-    echo "✅ OpenRouter credential exists (ID: $OR_CRED_ID)"
-  else
-    echo "❌ Failed to create OpenRouter credential. Response: $OR_CRED_RESPONSE"
+  OPENROUTER_CRED_ID=$(echo "$OPENROUTER_CRED_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+  if [[ -z "$OPENROUTER_CRED_ID" ]]; then
+    echo "ERROR: Failed to create OpenRouter credential."
+    echo "Response: $OPENROUTER_CRED_RESPONSE"
     exit 1
   fi
-else
-  echo "✅ OpenRouter API credential created (ID: $OR_CRED_ID)"
+  echo "OK — OpenRouter credential created (ID: $OPENROUTER_CRED_ID)"
 fi
 
 echo ""
-echo "🔑 Credential IDs:"
-echo "   MinIO:       $MINIO_CRED_ID"
-echo "   SMTP:        $SMTP_CRED_ID"
-echo "   OpenRouter:  $OR_CRED_ID"
+echo "Credential IDs:"
+echo "   MinIO:      $MINIO_CRED_ID"
+echo "   SMTP:       $SMTP_CRED_ID"
+echo "   OpenRouter: $OPENROUTER_CRED_ID"
+echo "   Email:      $NOTIFICATION_EMAIL"
 
-# ── Step 5: Get existing workflows ──────────────────────────────
+# ── Step 3: Hydrate workflow templates and import ────────────────
 echo ""
-echo "📋 Checking existing workflows..."
-EXISTING_WORKFLOWS=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/workflows")
+echo "--- Importing Workflows ---"
 
-# ── Step 6: Update credential IDs in workflows and import/update ─
-echo ""
-echo "📥 Updating workflows with real credential IDs..."
+# Create temp directory for hydrated copies (cleaned up on exit)
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+
+# Get existing workflows for update-vs-create check
+EXISTING_WORKFLOWS=$(n8n_api GET "/workflows" 2>/dev/null || echo '{"data":[]}')
 
 WORKFLOWS=(
-  "ai-brain.json"
   "brain-dump-processor.json"
   "daily-note-creator.json"
   "overdue-task-alert.json"
   "weekly-digest.json"
+  "ai-brain.json"
   "article-processor.json"
 )
 
 for wf_file in "${WORKFLOWS[@]}"; do
-  wf_path="$WORKFLOW_DIR/$wf_file"
-  if [[ ! -f "$wf_path" ]]; then
-    echo "   ⚠️  Workflow file not found: $wf_path — skipping"
+  wf_template="$WORKFLOW_DIR/$wf_file"
+  if [[ ! -f "$wf_template" ]]; then
+    echo "SKIP: $wf_file (file not found)"
     continue
   fi
 
-  # Replace placeholder credential IDs with real ones
-  wf_json=$(cat "$wf_path" | \
-    sed "s/\"id\": \"MINIO_CRED_ID\"/\"id\": \"$MINIO_CRED_ID\"/g" | \
-    sed "s/\"id\": \"SMTP_CRED_ID\"/\"id\": \"$SMTP_CRED_ID\"/g" | \
-    sed "s/\"id\": \"OPENROUTER_CREDENTIAL_ID\"/\"id\": \"$OR_CRED_ID\"/g")
+  # Hydrate: replace all placeholders with real values
+  wf_hydrated="$TMPDIR/$wf_file"
+  python3 -c "
+import json, sys
+with open('$wf_template') as f:
+    wf = json.load(f)
+# Strip read-only and non-API fields
+for field in ['tags', 'staticData', 'id', 'triggerCount', 'updatedAt', 'versionId', 'createdAt']:
+    wf.pop(field, None)
+if 'settings' in wf:
+    allowed = {'executionOrder', 'saveManualExecutions', 'callerPolicy', 'errorWorkflow', 'timezone'}
+    wf['settings'] = {k: v for k, v in wf['settings'].items() if k in allowed}
+raw = json.dumps(wf)
+# Replace placeholders
+raw = raw.replace('__MINIO_CRED_ID__', '$MINIO_CRED_ID')
+raw = raw.replace('__SMTP_CRED_ID__', '$SMTP_CRED_ID')
+raw = raw.replace('__OPENROUTER_CRED_ID__', '$OPENROUTER_CRED_ID')
+raw = raw.replace('__NOTIFICATION_EMAIL__', '$NOTIFICATION_EMAIL')
+with open('$wf_hydrated', 'w') as f:
+    f.write(raw)
+"
 
+  # Validate JSON
+  if ! python3 -c "import json; json.load(open('$wf_hydrated'))" 2>/dev/null; then
+    echo "ERROR: $wf_file failed JSON validation after hydration"
+    continue
+  fi
+
+  wf_json=$(cat "$wf_hydrated")
   wf_name=$(echo "$wf_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['name'])" 2>/dev/null)
 
   # Check if workflow already exists by name
   existing_id=$(echo "$EXISTING_WORKFLOWS" | python3 -c "
-import sys,json
+import sys, json
 data = json.load(sys.stdin).get('data', [])
-name = '$wf_name'
 for w in data:
-    if w.get('name') == name:
+    if w.get('name') == '''$wf_name''':
         print(w['id'])
         break
-" 2>/dev/null)
+" 2>/dev/null || true)
 
   if [[ -n "$existing_id" ]]; then
-    # Update existing workflow
-    echo "   🔄 Updating: $wf_name (ID: $existing_id)"
-    update_result=$(curl -s -X PUT "$API/workflows/$existing_id" \
-      -H "X-N8N-API-KEY: $N8N_API_KEY" \
-      -H "Content-Type: application/json" \
-      -d "$wf_json")
-
-    # Activate
-    curl -s -X PATCH "$API/workflows/$existing_id" \
-      -H "X-N8N-API-KEY: $N8N_API_KEY" \
-      -H "Content-Type: application/json" \
-      -d '{"active": true}' > /dev/null 2>&1
-    echo "   ✅ Updated and activated"
+    echo "  UPDATE: $wf_name (ID: $existing_id)"
+    n8n_api PUT "/workflows/$existing_id" -d "$wf_json" > /dev/null 2>&1
+    n8n_api POST "/workflows/$existing_id/activate" > /dev/null 2>&1
+    echo "  OK — updated and activated"
   else
-    # Import new workflow
-    echo "   📥 Importing: $wf_name"
-    import_result=$(curl -s -X POST "$API/workflows" \
-      -H "X-N8N-API-KEY: $N8N_API_KEY" \
-      -H "Content-Type: application/json" \
-      -d "$wf_json")
-
+    echo "  IMPORT: $wf_name"
+    import_result=$(n8n_api POST "/workflows" -d "$wf_json" 2>/dev/null || echo '{}')
     new_id=$(echo "$import_result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
     if [[ -n "$new_id" ]]; then
-      # Activate
-      curl -s -X PATCH "$API/workflows/$new_id" \
-        -H "X-N8N-API-KEY: $N8N_API_KEY" \
-        -H "Content-Type: application/json" \
-        -d '{"active": true}' > /dev/null 2>&1
-      echo "   ✅ Imported and activated (ID: $new_id)"
+      n8n_api POST "/workflows/$new_id/activate" > /dev/null 2>&1
+      echo "  OK — imported and activated (ID: $new_id)"
     else
-      echo "   ❌ Import failed: $import_result"
+      echo "  ERROR: Import failed. Response: $import_result"
     fi
   fi
 done
 
-# ── Step 7: Verify all workflows are active ─────────────────────
+# ── Step 4: Verify ──────────────────────────────────────────────
 echo ""
-echo "🔍 Verifying workflow status..."
-FINAL_WORKFLOWS=$(curl -s -H "X-N8N-API-KEY: $N8N_API_KEY" "$API/workflows")
+echo "--- Verification ---"
+FINAL_WORKFLOWS=$(n8n_api GET "/workflows" 2>/dev/null || echo '{"data":[]}')
 echo "$FINAL_WORKFLOWS" | python3 -c "
 import sys, json
 data = json.load(sys.stdin).get('data', [])
-targets = ['Brain Dump', 'Daily Note', 'Overdue Task', 'Weekly', 'AI Brain', 'Article']
+targets = ['Brain Dump', 'Daily Note', 'Overdue Task', 'Weekly']
+found = 0
 for w in data:
     name = w.get('name', '')
     if any(t in name for t in targets):
-        status = '✅ ACTIVE  ' if w.get('active') else '❌ INACTIVE'
-        print(f'   {status}  {name}')
+        status = 'ACTIVE' if w.get('active') else 'INACTIVE'
+        print(f'   [{status}]  {name}')
+        found += 1
+if found == 0:
+    print('   WARNING: No matching workflows found')
 " 2>/dev/null
 
 echo ""
-echo "═══════════════════════════════════════════════════"
-echo "🎉 Setup complete! AI Brain is live."
-echo ""
-echo "Credentials created:"
-echo "  ✅ MinIO S3 (obsidian-vault bucket)"
-echo "  ✅ Gmail SMTP"
-echo "  ✅ OpenRouter API (Llama 3.3 70B free tier)"
-echo ""
-echo "Workflows imported (6 total):"
-echo "  ✅ 🧠 AI Brain — Shared Intelligence Layer"
-echo "  ✅ 🧠 Brain Dump Processor (7AM — AI classify)"
-echo "  ✅ 📓 Daily Note Creator (6AM — AI briefing)"
-echo "  ✅ ⚠️  Overdue Task Alert (8AM — AI triage)"
-echo "  ✅ 📊 Weekly Digest (Sun 6PM — AI review)"
-echo "  ✅ 📚 Article Processor (8AM + 7PM)"
+echo "==================================================="
+echo "Setup complete!"
 echo ""
 echo "Next steps:"
 echo "  1. Verify Remotely Save in Obsidian is syncing to:"
 echo "     Bucket: obsidian-vault | Prefix: Homelab/"
-echo "  2. Ensure 8 brain dump files exist in vault"
-echo "  3. Test: Run '🧠 Brain Dump Processor' manually in n8n"
-echo "  4. Test: Run '📓 Daily Note Creator' manually in n8n"
-echo "═══════════════════════════════════════════════════"
+echo "  2. Ensure brain dump files exist in vault"
+echo "  3. Test: Run 'Daily Note Creator' manually in n8n"
+echo "==================================================="

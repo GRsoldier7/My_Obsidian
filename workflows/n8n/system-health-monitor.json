@@ -1,0 +1,118 @@
+{
+  "name": "🏥 System Health Monitor — Every 6h",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 */6 * * *" }] }
+      },
+      "id": "trigger",
+      "name": "Every 6 Hours",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const checks = [];\nconst today = new Date().toISOString().split('T')[0];\nconst hour = new Date().getUTCHours().toString().padStart(2, '0');\n\n// Check 1: MinIO (list bucket)\ntry {\n  // S3 list will be done via next node\n  checks.push({ name: 'minio', status: 'pending' });\n} catch(e) {\n  checks.push({ name: 'minio', status: 'fail', error: e.message });\n}\n\nreturn [{ json: { checks, today, hour, logKey: `99_System/logs/health-monitor-${today}-${hour}.json` } }];"
+      },
+      "id": "init",
+      "name": "Init Checks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "operation": "headObject",
+        "bucketName": "obsidian-vault",
+        "fileKey": "000_Master Dashboard/North Star.md"
+      },
+      "id": "s3-check-ns",
+      "name": "S3: Check North Star",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [660, 200],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "headObject",
+        "bucketName": "obsidian-vault",
+        "fileKey": "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
+      },
+      "id": "s3-check-mtl",
+      "name": "S3: Check MTL",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [660, 400],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const init = $('Init Checks').first().json;\nconst nsCheck = $('S3: Check North Star').first().json;\nconst mtlCheck = $('S3: Check MTL').first().json;\n\nconst checks = [\n  { name: 'minio_north_star', status: nsCheck.error ? 'fail' : 'pass', detail: nsCheck.error || 'OK' },\n  { name: 'minio_mtl', status: mtlCheck.error ? 'fail' : 'pass', detail: mtlCheck.error || 'OK' }\n];\n\nconst anyFail = checks.some(c => c.status === 'fail');\n\nconst log = JSON.stringify({\n  workflow: 'system-health-monitor',\n  run_date: init.today,\n  finished_at: new Date().toISOString(),\n  status: anyFail ? 'fail' : 'pass',\n  checks\n}, null, 2);\n\nreturn [{ json: { checks, anyFail, logKey: init.logKey, logContent: log, today: init.today } }];"
+      },
+      "id": "evaluate",
+      "name": "Evaluate Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "leftValue": "", "caseSensitive": true, "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "leftValue": "={{ $json.anyFail }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+          ]
+        }
+      },
+      "id": "if-fail",
+      "name": "Any Failures?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "aaron.deyoung@gmail.com",
+        "toEmail": "aaron.deyoung@gmail.com",
+        "subject": "=🚨 Health Check FAILED — {{ $json.today }}",
+        "text": "=System health check failed.\n\nChecks:\n{{ JSON.stringify($json.checks, null, 2) }}"
+      },
+      "id": "email-alert",
+      "name": "Email: Health Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1320, 200],
+      "credentials": { "smtp": { "id": "lWGOwsktldwb3iEj", "name": "Gmail SMTP (Aaron)" } }
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.logKey }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-log",
+      "name": "S3: Write Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [1320, 400],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+    }
+  ],
+  "connections": {
+    "Every 6 Hours": { "main": [[{ "node": "Init Checks", "type": "main", "index": 0 }]] },
+    "Init Checks": { "main": [[{ "node": "S3: Check North Star", "type": "main", "index": 0 }, { "node": "S3: Check MTL", "type": "main", "index": 0 }]] },
+    "S3: Check North Star": { "main": [[{ "node": "Evaluate Results", "type": "main", "index": 0 }]] },
+    "S3: Check MTL": { "main": [[{ "node": "Evaluate Results", "type": "main", "index": 0 }]] },
+    "Evaluate Results": { "main": [[{ "node": "Any Failures?", "type": "main", "index": 0 }]] },
+    "Any Failures?": { "main": [[{ "node": "Email: Health Alert", "type": "main", "index": 0 }], [{ "node": "S3: Write Log", "type": "main", "index": 0 }]] },
+    "Email: Health Alert": { "main": [[{ "node": "S3: Write Log", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

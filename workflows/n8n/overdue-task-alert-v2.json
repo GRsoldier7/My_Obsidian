@@ -1,0 +1,113 @@
+{
+  "name": "⚠️ Overdue Task Alert v2 — 8AM Daily",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 13 * * *" }] }
+      },
+      "id": "trigger",
+      "name": "Every Day 8AM CDT",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
+      },
+      "id": "s3-read-mtl",
+      "name": "S3: Read MTL",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [440, 300],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const bin = $input.first().binary?.data;\nif (!bin) return [{ json: { overdue: [], count: 0 } }];\nconst content = Buffer.from(bin.data, 'base64').toString('utf-8');\nconst today = new Date().toISOString().split('T')[0];\n\nconst overdue = [];\nconst re = /- \\[ \\] (.+?)\\[area:: (\\w+)\\].*?\\[priority:: ([ABC])\\].*?\\[due:: (\\d{4}-\\d{2}-\\d{2})\\]/g;\nlet m;\nwhile ((m = re.exec(content)) !== null) {\n  if (m[4] < today) {\n    overdue.push({ task: m[1].trim(), area: m[2], priority: m[3], due: m[4], daysOverdue: Math.floor((new Date(today) - new Date(m[4])) / 86400000) });\n  }\n}\n\n// Sort: Priority A first, then by days overdue\noverdue.sort((a,b) => (a.priority < b.priority ? -1 : a.priority > b.priority ? 1 : b.daysOverdue - a.daysOverdue));\n\nreturn [{ json: { overdue, count: overdue.length, today } }];"
+      },
+      "id": "find-overdue",
+      "name": "Find Overdue Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "leftValue": "", "caseSensitive": true, "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [
+            { "leftValue": "={{ $json.count }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ]
+        }
+      },
+      "id": "if-overdue",
+      "name": "Any Overdue?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { overdue, count, today } = $input.first().json;\n\nlet html = `<h2>Overdue Tasks Alert — ${count} task(s)</h2><p>Date: ${today}</p>`;\n\nconst byArea = {};\nfor (const t of overdue) {\n  if (!byArea[t.area]) byArea[t.area] = [];\n  byArea[t.area].push(t);\n}\n\nfor (const [area, tasks] of Object.entries(byArea)) {\n  html += `<h3>${area.charAt(0).toUpperCase() + area.slice(1)}</h3><ul>`;\n  for (const t of tasks) {\n    html += `<li><strong>[${t.priority}]</strong> ${t.task} <em>(due: ${t.due}, ${t.daysOverdue}d overdue)</em></li>`;\n  }\n  html += '</ul>';\n}\n\nreturn [{ json: { html, subject: `Overdue Tasks Alert — ${count} tasks`, count, today } }];"
+      },
+      "id": "format-email",
+      "name": "Format Alert Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "fromEmail": "aaron.deyoung@gmail.com",
+        "toEmail": "aaron.deyoung@gmail.com",
+        "subject": "={{ $json.subject }}",
+        "html": "={{ $json.html }}"
+      },
+      "id": "email",
+      "name": "Email: Overdue Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1320, 200],
+      "credentials": { "smtp": { "id": "lWGOwsktldwb3iEj", "name": "Gmail SMTP (Aaron)" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const { count, today } = $input.first().json;\nconst log = JSON.stringify({ workflow: 'overdue-task-alert', run_date: today, finished_at: new Date().toISOString(), status: 'success', overdue_count: count }, null, 2);\nreturn [{ json: { logKey: `99_System/logs/overdue-task-alert-${today}.json`, logContent: log } }];"
+      },
+      "id": "build-log",
+      "name": "Build Run Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 200]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.logKey }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-log",
+      "name": "S3: Write Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [1760, 200],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+    }
+  ],
+  "connections": {
+    "Every Day 8AM CDT": { "main": [[{ "node": "S3: Read MTL", "type": "main", "index": 0 }]] },
+    "S3: Read MTL": { "main": [[{ "node": "Find Overdue Tasks", "type": "main", "index": 0 }]] },
+    "Find Overdue Tasks": { "main": [[{ "node": "Any Overdue?", "type": "main", "index": 0 }]] },
+    "Any Overdue?": { "main": [[{ "node": "Format Alert Email", "type": "main", "index": 0 }], []] },
+    "Format Alert Email": { "main": [[{ "node": "Email: Overdue Alert", "type": "main", "index": 0 }]] },
+    "Email: Overdue Alert": { "main": [[{ "node": "Build Run Log", "type": "main", "index": 0 }]] },
+    "Build Run Log": { "main": [[{ "node": "S3: Write Log", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}

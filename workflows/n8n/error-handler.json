@@ -1,0 +1,57 @@
+{
+  "name": "🚨 Error Handler — Global",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "error-trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const error = $input.first().json;\nconst today = new Date().toISOString().split('T')[0];\nconst ts = new Date().toISOString();\n\nconst workflowName = error.workflow?.name || 'Unknown';\nconst nodeName = error.execution?.lastNodeExecuted || 'Unknown';\nconst errorMsg = error.execution?.error?.message || JSON.stringify(error).substring(0, 500);\n\nconst html = `<h2>n8n Workflow Error</h2>\n<table border=\"1\" cellpadding=\"5\">\n<tr><td><strong>Workflow</strong></td><td>${workflowName}</td></tr>\n<tr><td><strong>Node</strong></td><td>${nodeName}</td></tr>\n<tr><td><strong>Time</strong></td><td>${ts}</td></tr>\n<tr><td><strong>Error</strong></td><td><pre>${errorMsg}</pre></td></tr>\n</table>`;\n\nconst log = JSON.stringify({\n  workflow: 'error-handler',\n  source_workflow: workflowName,\n  source_node: nodeName,\n  error: errorMsg,\n  timestamp: ts\n}, null, 2);\n\nreturn [{ json: {\n  subject: `n8n Error: ${workflowName} — ${nodeName}`,\n  html, today, ts,\n  logKey: `99_System/logs/errors-${today}.json`,\n  logContent: log\n}}];"
+      },
+      "id": "format-error",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "aaron.deyoung@gmail.com",
+        "toEmail": "aaron.deyoung@gmail.com",
+        "subject": "={{ $json.subject }}",
+        "html": "={{ $json.html }}"
+      },
+      "id": "email",
+      "name": "Email: Error Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "credentials": { "smtp": { "id": "lWGOwsktldwb3iEj", "name": "Gmail SMTP (Aaron)" } }
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.logKey }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-log",
+      "name": "S3: Write Error Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [880, 300],
+      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+    }
+  ],
+  "connections": {
+    "Error Trigger": { "main": [[{ "node": "Format Error", "type": "main", "index": 0 }]] },
+    "Format Error": { "main": [[{ "node": "Email: Error Alert", "type": "main", "index": 0 }, { "node": "S3: Write Error Log", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
