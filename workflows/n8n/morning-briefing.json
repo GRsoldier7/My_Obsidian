@@ -1,0 +1,262 @@
+{
+  "name": "🌅 Morning Briefing — 7AM Daily",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Every Day 7AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst today = now.toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst yesterday = new Date(now - 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst dayOfWeek = now.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/Chicago' });\nreturn [{ json: { today, yesterday, dayOfWeek } }];"
+      },
+      "id": "set-dates",
+      "name": "Set Dates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
+      },
+      "id": "s3-mtl",
+      "name": "S3: Read MTL",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        660,
+        200
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "={{ `99_System/logs/brain-dump-processor-${$('Set Dates').first().json.yesterday}.json` }}"
+      },
+      "id": "s3-log",
+      "name": "S3: Read Yesterday Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        660,
+        400
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const { today, yesterday, dayOfWeek } = $('Set Dates').first().json;\n\n// MTL is passed through S3: Read MTL -> S3: Read Yesterday Log chain\n// Both nodes use continueOnFail so they pass their json/binary forward\nlet mtlContent = '';\ntry {\n  const bin = $('S3: Read MTL').first().binary?.data;\n  if (bin) mtlContent = Buffer.from(bin.data, 'base64').toString('utf-8');\n} catch(e) {}\n\nconst overdue = [];\nconst dueToday = [];\nconst re = /^- \\\\[ \\\\] (.+?)\\\\[area:: (\\\\w+)\\\\].*?\\\\[priority:: ([ABC])\\\\].*?\\\\[due:: (\\\\d{4}-\\\\d{2}-\\\\d{2})\\\\]/gm;\nlet m;\nwhile ((m = re.exec(mtlContent)) !== null) {\n  const item = { task: m[1].trim(), area: m[2], priority: m[3], due: m[4] };\n  if (m[4] < today) {\n    item.daysOverdue = Math.floor((new Date(today) - new Date(m[4])) / 86400000);\n    overdue.push(item);\n  } else if (m[4] === today) {\n    dueToday.push(item);\n  }\n}\noverdue.sort((a,b) => a.priority < b.priority ? -1 : a.priority > b.priority ? 1 : b.daysOverdue - a.daysOverdue);\ndueToday.sort((a,b) => a.priority < b.priority ? -1 : 1);\n\nlet capturedTasks = 0, capturedArticles = 0;\ntry {\n  const bin = $('S3: Read Yesterday Log').first().binary?.data;\n  if (bin) {\n    const log = JSON.parse(Buffer.from(bin.data, 'base64').toString('utf-8'));\n    capturedTasks = log.tasks_extracted || log.task_count || 0;\n    capturedArticles = log.articles_queued || log.article_count || 0;\n  }\n} catch(e) {}\n\nconst areaEmoji = { faith:'🙏', family:'👨‍👩‍👧', business:'🚀', consulting:'💼', work:'🏥', health:'💪', home:'🏠', personal:'🎯' };\n\nfunction taskRow(t) {\n  const badge = t.priority === 'A' ? '<span style=\"color:#c0392b;font-weight:bold\">[A]</span>' : t.priority === 'B' ? '<span style=\"color:#e67e22\">[B]</span>' : '<span style=\"color:#7f8c8d\">[C]</span>';\n  const overdueTxt = t.daysOverdue ? ` <em style=\"color:#e74c3c\">(${t.daysOverdue}d overdue)</em>` : '';\n  return `<li>${badge} ${t.task} <small>due: ${t.due}</small>${overdueTxt}</li>`;\n}\n\nfunction areaSection(items) {\n  const byArea = {};\n  for (const t of items) { if (!byArea[t.area]) byArea[t.area] = []; byArea[t.area].push(t); }\n  return Object.entries(byArea).map(([area, tasks]) =>\n    `<h4>${areaEmoji[area] || '📌'} ${area.charAt(0).toUpperCase()+area.slice(1)}</h4><ul>${tasks.map(taskRow).join('')}</ul>`\n  ).join('');\n}\n\nlet html = `<div style=\"font-family:Arial,sans-serif;max-width:700px;margin:0 auto;color:#2c3e50\"><h1 style=\"border-bottom:3px solid #3498db;padding-bottom:8px\">🌅 Morning Briefing — ${dayOfWeek}, ${today}</h1>`;\n\nhtml += overdue.length > 0\n  ? `<div style=\"background:#fdf2f2;border-left:4px solid #e74c3c;padding:12px;margin:16px 0\"><h2 style=\"color:#e74c3c;margin-top:0\">🔥 Overdue — ${overdue.length} task${overdue.length>1?'s':''}</h2>${areaSection(overdue)}</div>`\n  : `<div style=\"background:#eafaf1;border-left:4px solid #27ae60;padding:12px;margin:16px 0\"><p>✅ No overdue tasks — you're caught up!</p></div>`;\n\nhtml += dueToday.length > 0\n  ? `<div style=\"background:#fef9e7;border-left:4px solid #f39c12;padding:12px;margin:16px 0\"><h2 style=\"color:#f39c12;margin-top:0\">📅 Due Today — ${dueToday.length} task${dueToday.length>1?'s':''}</h2>${areaSection(dueToday)}</div>`\n  : `<div style=\"padding:12px;margin:16px 0\"><h2>📅 Due Today</h2><p style=\"color:#7f8c8d\"><em>Nothing scheduled — great day to get ahead.</em></p></div>`;\n\nhtml += capturedTasks > 0 || capturedArticles > 0\n  ? `<div style=\"background:#eaf3fb;border-left:4px solid #3498db;padding:12px;margin:16px 0\"><h2 style=\"color:#3498db;margin-top:0\">📥 Yesterday's Captures</h2><ul><li><strong>${capturedTasks}</strong> tasks extracted</li><li><strong>${capturedArticles}</strong> articles queued</li></ul></div>`\n  : `<div style=\"padding:12px;margin:16px 0\"><h2>📥 Yesterday's Captures</h2><p style=\"color:#7f8c8d\"><em>No brain dump processed yesterday.</em></p></div>`;\n\nhtml += `<div style=\"background:#f4f6f7;border-left:4px solid #95a5a6;padding:12px;margin:16px 0\"><h2 style=\"margin-top:0\">🎯 Q2 2026 Rocks</h2><ul><li>🙏 Faith: Social media Bible study (4 sessions)</li><li>👨‍👩‍👧 Family: Marriage Alignment + bi-weekly check-in</li><li>🚀 Business: MVP — website, offer, 3 outreach convos</li><li>🏥 Work: Deliver Union project</li><li>💪 Health: Hip decision + 3x/week gym x8 weeks</li></ul></div>`;\nhtml += `<p style=\"color:#95a5a6;font-size:12px;text-align:center\">Generated ${new Date().toISOString()}</p></div>`;\n\nreturn [{ json: { html, today, dayOfWeek, overdueCount: overdue.length, todayCount: dueToday.length, capturedTasks, capturedArticles, bodyLength: html.length } }];"
+      },
+      "id": "build-briefing",
+      "name": "Build Morning Briefing",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "aaron.deyoung@gmail.com",
+        "toEmail": "aaron.deyoung@gmail.com",
+        "subject": "={{ `🌅 Morning Briefing — ${$json.dayOfWeek}, ${$json.today} | ${$json.overdueCount} overdue, ${$json.todayCount} due today` }}",
+        "html": "={{ $json.html }}",
+        "options": {
+          "emailFormat": "html"
+        }
+      },
+      "id": "email",
+      "name": "Email: Morning Briefing",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lWGOwsktldwb3iEj",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst log = JSON.stringify({ workflow: 'morning-briefing', run_date: j.today, finished_at: new Date().toISOString(), status: 'success', overdue_count: j.overdueCount, today_count: j.todayCount, body_length: j.bodyLength }, null, 2);\nreturn [{ json: { logKey: `99_System/logs/morning-briefing-${j.today}.json`, logContent: log } }];"
+      },
+      "id": "build-log",
+      "name": "Build Run Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $json.logContent;\nconst key = $json.logKey;\nconst buf = Buffer.from(content, 'utf-8');\nreturn [{ json: $json, binary: { data: { data: buf.toString('base64'), mimeType: 'application/json', fileName: key.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
+      },
+      "id": "convert-log-binary",
+      "name": "Convert Log to Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.logKey }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-write-log",
+      "name": "S3: Write Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Day 7AM": {
+      "main": [
+        [
+          {
+            "node": "Set Dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Dates": {
+      "main": [
+        [
+          {
+            "node": "S3: Read MTL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read MTL": {
+      "main": [
+        [
+          {
+            "node": "S3: Read Yesterday Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read Yesterday Log": {
+      "main": [
+        [
+          {
+            "node": "Build Morning Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Morning Briefing": {
+      "main": [
+        [
+          {
+            "node": "Email: Morning Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email: Morning Briefing": {
+      "main": [
+        [
+          {
+            "node": "Build Run Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Run Log": {
+      "main": [
+        [
+          {
+            "node": "Convert Log to Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Log to Binary": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -7,7 +7,10 @@
       "name": "Error Trigger",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
-      "position": [220, 300]
+      "position": [
+        220,
+        300
+      ]
     },
     {
       "parameters": {
@@ -17,21 +20,35 @@
       "name": "Format Error",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 300]
+      "position": [
+        440,
+        300
+      ]
     },
     {
       "parameters": {
         "fromEmail": "aaron.deyoung@gmail.com",
         "toEmail": "aaron.deyoung@gmail.com",
         "subject": "={{ $json.subject }}",
-        "html": "={{ $json.html }}"
+        "html": "={{ $json.html }}",
+        "options": {
+          "emailFormat": "html"
+        }
       },
       "id": "email",
       "name": "Email: Error Alert",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [660, 300],
-      "credentials": { "smtp": { "id": "lWGOwsktldwb3iEj", "name": "Gmail SMTP (Aaron)" } }
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lWGOwsktldwb3iEj",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
     },
     {
       "parameters": {
@@ -45,13 +62,48 @@
       "name": "S3: Write Error Log",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [880, 300],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+      "position": [
+        880,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      }
     }
   ],
   "connections": {
-    "Error Trigger": { "main": [[{ "node": "Format Error", "type": "main", "index": 0 }]] },
-    "Format Error": { "main": [[{ "node": "Email: Error Alert", "type": "main", "index": 0 }, { "node": "S3: Write Error Log", "type": "main", "index": 0 }]] }
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Format Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Error": {
+      "main": [
+        [
+          {
+            "node": "Email: Error Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S3: Write Error Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1"
+  }
 }

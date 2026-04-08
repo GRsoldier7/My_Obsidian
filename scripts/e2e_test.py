@@ -27,8 +27,8 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 
 MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://192.168.1.240:9000")
-MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "7BHf9fjXTN2mdtPwivvv")
-MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi")
+MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")  # Required: set in .env
+MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")  # Required: set in .env
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "obsidian-vault")
 
 REPO_ROOT = Path(__file__).parent.parent
@@ -108,17 +108,23 @@ def run_processor():
     print(stdout[-2000:] if len(stdout) > 2000 else stdout)
     check("processor_exit_code", result.returncode == 0, f"exit={result.returncode}")
 
-    # Extract JSON from output (find last {...} block)
+    # Extract JSON — find last top-level {...} block in stdout
+    output = {}
     try:
-        import re
-        json_match = re.findall(r'\{[^{}]*\}', stdout, re.DOTALL)
-        output = json.loads(json_match[-1]) if json_match else {}
-        check("tasks_written", output.get("tasks_written", 0) > 0,
-              f"tasks_written={output.get('tasks_written', 0)}")
-        check("no_errors", len(output.get("errors", [])) == 0,
-              f"errors={output.get('errors', [])}")
-    except (json.JSONDecodeError, IndexError) as e:
+        start = stdout.rfind("{")
+        end = stdout.rfind("}")
+        if start >= 0 and end > start:
+            output = json.loads(stdout[start:end + 1])
+            check("output_parseable", True, f"parsed {len(output)} keys")
+        else:
+            check("output_parseable", False, "no JSON block found in stdout")
+    except json.JSONDecodeError as e:
         check("output_parseable", False, str(e))
+
+    check("tasks_written", output.get("tasks_written", 0) > 0,
+          f"tasks_written={output.get('tasks_written', 0)}")
+    check("no_errors", len(output.get("errors", [])) == 0,
+          f"errors={output.get('errors', [])}")
 
 
 def verify_outputs(client):

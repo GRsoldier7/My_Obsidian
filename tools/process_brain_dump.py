@@ -38,8 +38,8 @@ except ImportError:
 # ── Configuration ────────────────────────────────────────────────────────────
 
 MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://192.168.1.240:9000")
-MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "7BHf9fjXTN2mdtPwivvv")
-MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi")
+MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")  # Required: set in .env
+MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")  # Required: set in .env
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "obsidian-vault")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -308,6 +308,9 @@ Q2_ROCK_KEYWORDS = {
     "business": ["echelon", "website", "offer", "outreach", "mvp", "client", "echelon seven"],
     "work": ["union", "parallon", "project", "deliver", "exit"],
     "health": ["hip", "gym", "3x", "crossfit", "workout", "decision", "biohacking"],
+    "consulting": ["client", "sow", "proposal", "engagement", "scope", "invoice", "billable", "retainer", "deliverable", "consulting"],
+    "home": ["house", "michigan", "mi property", "generator", "ups", "photo", "repair", "maintenance", "basement", "hvac", "yard"],
+    "personal": ["ai project", "hobby", "side project", "experiment", "learning", "reading", "self", "tinkering", "personal"],
 }
 
 def infer_priority(text: str) -> str:

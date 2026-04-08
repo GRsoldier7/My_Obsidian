@@ -11,7 +11,7 @@
 **Spec:** `docs/superpowers/specs/2026-04-02-life-os-v2-design.md`
 
 **Credentials (live, verified):**
-- MinIO: access=`7BHf9fjXTN2mdtPwivvv`, endpoint=`http://192.168.1.240:9000`, bucket=`obsidian-vault`
+- MinIO: access=`[REDACTED_MINIO_ACCESS_KEY]`, endpoint=`http://192.168.1.240:9000`, bucket=`obsidian-vault`
 - n8n API key: in `.env` as `N8N_API_KEY`
 - n8n credential IDs: MinIO=`z9qTyG2NVVbhHkg0`, SMTP=`lWGOwsktldwb3iEj`, OpenRouter=`Z7liUYc3Toq3q7W7`
 
@@ -36,8 +36,8 @@ from botocore.client import Config
 
 s3 = boto3.client('s3',
     endpoint_url='http://192.168.1.240:9000',
-    aws_access_key_id='7BHf9fjXTN2mdtPwivvv',
-    aws_secret_access_key='EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi',
+    aws_access_key_id='[REDACTED_MINIO_ACCESS_KEY]',
+    aws_secret_access_key='[REDACTED_MINIO_SECRET_KEY]',
     config=Config(signature_version='s3v4'),
     region_name='us-east-1'
 )
@@ -65,8 +65,8 @@ from botocore.client import Config
 
 s3 = boto3.client('s3',
     endpoint_url='http://192.168.1.240:9000',
-    aws_access_key_id='7BHf9fjXTN2mdtPwivvv',
-    aws_secret_access_key='EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi',
+    aws_access_key_id='[REDACTED_MINIO_ACCESS_KEY]',
+    aws_secret_access_key='[REDACTED_MINIO_SECRET_KEY]',
     config=Config(signature_version='s3v4'),
     region_name='us-east-1'
 )
@@ -154,8 +154,8 @@ from botocore.client import Config
 
 s3 = boto3.client('s3',
     endpoint_url='http://192.168.1.240:9000',
-    aws_access_key_id='7BHf9fjXTN2mdtPwivvv',
-    aws_secret_access_key='EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi',
+    aws_access_key_id='[REDACTED_MINIO_ACCESS_KEY]',
+    aws_secret_access_key='[REDACTED_MINIO_SECRET_KEY]',
     config=Config(signature_version='s3v4'),
     region_name='us-east-1'
 )
@@ -205,8 +205,8 @@ def test_health_result_structure():
 def test_check_minio_returns_health_result():
     result = check_minio(
         endpoint="http://192.168.1.240:9000",
-        access_key="7BHf9fjXTN2mdtPwivvv",
-        secret_key="EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi",
+        access_key="[REDACTED_MINIO_ACCESS_KEY]",
+        secret_key="[REDACTED_MINIO_SECRET_KEY]",
         bucket="obsidian-vault"
     )
     assert isinstance(result, HealthResult)
@@ -216,8 +216,8 @@ def test_check_minio_returns_health_result():
 def test_check_vault_files_finds_brain_dumps():
     result = check_vault_files(
         endpoint="http://192.168.1.240:9000",
-        access_key="7BHf9fjXTN2mdtPwivvv",
-        secret_key="EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi",
+        access_key="[REDACTED_MINIO_ACCESS_KEY]",
+        secret_key="[REDACTED_MINIO_SECRET_KEY]",
         bucket="obsidian-vault"
     )
     assert result.status == "pass"
@@ -1217,8 +1217,8 @@ from botocore.client import Config
 
 s3 = boto3.client('s3',
     endpoint_url='http://192.168.1.240:9000',
-    aws_access_key_id='7BHf9fjXTN2mdtPwivvv',
-    aws_secret_access_key='EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi',
+    aws_access_key_id='[REDACTED_MINIO_ACCESS_KEY]',
+    aws_secret_access_key='[REDACTED_MINIO_SECRET_KEY]',
     config=Config(signature_version='s3v4'),
     region_name='us-east-1'
 )
@@ -1242,8 +1242,8 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 s3 = boto3.client('s3',
     endpoint_url='http://192.168.1.240:9000',
-    aws_access_key_id='7BHf9fjXTN2mdtPwivvv',
-    aws_secret_access_key='EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi',
+    aws_access_key_id='[REDACTED_MINIO_ACCESS_KEY]',
+    aws_secret_access_key='[REDACTED_MINIO_SECRET_KEY]',
     config=Config(signature_version='s3v4'),
     region_name='us-east-1'
 )
@@ -1805,8 +1805,8 @@ import boto3, sys, io
 from botocore.client import Config
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 s3 = boto3.client('s3', endpoint_url='http://192.168.1.240:9000',
-    aws_access_key_id='7BHf9fjXTN2mdtPwivvv',
-    aws_secret_access_key='EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi',
+    aws_access_key_id='[REDACTED_MINIO_ACCESS_KEY]',
+    aws_secret_access_key='[REDACTED_MINIO_SECRET_KEY]',
     config=__import__('botocore').config.Config(signature_version='s3v4'), region_name='us-east-1')
 from datetime import date
 key = f'40_Timeline_Weekly/Daily/{date.today()}.md'
@@ -2408,7 +2408,7 @@ Add to bottom of CLAUDE.md:
 ## v2.0 System State (2026-04-02)
 
 ### Live Credentials (stored in .env — never commit)
-- MinIO: access=7BHf9fjXTN2mdtPwivvv, endpoint=http://192.168.1.240:9000, bucket=obsidian-vault
+- MinIO: access=[REDACTED_MINIO_ACCESS_KEY], endpoint=http://192.168.1.240:9000, bucket=obsidian-vault
 - n8n: http://192.168.1.121:5678, API key in .env as N8N_API_KEY
 - n8n credential IDs: MinIO=z9qTyG2NVVbhHkg0, SMTP=lWGOwsktldwb3iEj, OpenRouter=Z7liUYc3Toq3q7W7
 

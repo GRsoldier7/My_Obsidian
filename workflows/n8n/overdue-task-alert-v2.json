@@ -3,13 +3,23 @@
   "nodes": [
     {
       "parameters": {
-        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 13 * * *" }] }
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 13 * * *"
+            }
+          ]
+        }
       },
       "id": "trigger",
       "name": "Every Day 8AM CDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [220, 300]
+      "position": [
+        220,
+        300
+      ]
     },
     {
       "parameters": {
@@ -21,8 +31,16 @@
       "name": "S3: Read MTL",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [440, 300],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      }
     },
     {
       "parameters": {
@@ -32,15 +50,29 @@
       "name": "Find Overdue Tasks",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 300]
+      "position": [
+        660,
+        300
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "leftValue": "", "caseSensitive": true, "typeValidation": "strict" },
+          "options": {
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
           "combinator": "and",
           "conditions": [
-            { "leftValue": "={{ $json.count }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+            {
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
           ]
         }
       },
@@ -48,7 +80,10 @@
       "name": "Any Overdue?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [880, 300]
+      "position": [
+        880,
+        300
+      ]
     },
     {
       "parameters": {
@@ -58,21 +93,35 @@
       "name": "Format Alert Email",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1100, 200]
+      "position": [
+        1100,
+        200
+      ]
     },
     {
       "parameters": {
         "fromEmail": "aaron.deyoung@gmail.com",
         "toEmail": "aaron.deyoung@gmail.com",
         "subject": "={{ $json.subject }}",
-        "html": "={{ $json.html }}"
+        "html": "={{ $json.html }}",
+        "options": {
+          "emailFormat": "html"
+        }
       },
       "id": "email",
       "name": "Email: Overdue Alert",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [1320, 200],
-      "credentials": { "smtp": { "id": "lWGOwsktldwb3iEj", "name": "Gmail SMTP (Aaron)" } }
+      "position": [
+        1320,
+        200
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lWGOwsktldwb3iEj",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
     },
     {
       "parameters": {
@@ -82,7 +131,10 @@
       "name": "Build Run Log",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1540, 200]
+      "position": [
+        1540,
+        200
+      ]
     },
     {
       "parameters": {
@@ -96,18 +148,123 @@
       "name": "S3: Write Log",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [1760, 200],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+      "position": [
+        1980,
+        200
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $json.logContent;\nconst key = $json.logKey;\nconst buf = Buffer.from(content, \"utf-8\");\nreturn [{ json: $json, binary: { data: { data: buf.toString(\"base64\"), mimeType: \"application/json\", fileName: key.split(\"/\").pop(), fileExtension: \"json\", fileSize: buf.length } } }];"
+      },
+      "id": "convert-log-binary",
+      "name": "Convert Log to Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1650,
+        200
+      ]
     }
   ],
   "connections": {
-    "Every Day 8AM CDT": { "main": [[{ "node": "S3: Read MTL", "type": "main", "index": 0 }]] },
-    "S3: Read MTL": { "main": [[{ "node": "Find Overdue Tasks", "type": "main", "index": 0 }]] },
-    "Find Overdue Tasks": { "main": [[{ "node": "Any Overdue?", "type": "main", "index": 0 }]] },
-    "Any Overdue?": { "main": [[{ "node": "Format Alert Email", "type": "main", "index": 0 }], []] },
-    "Format Alert Email": { "main": [[{ "node": "Email: Overdue Alert", "type": "main", "index": 0 }]] },
-    "Email: Overdue Alert": { "main": [[{ "node": "Build Run Log", "type": "main", "index": 0 }]] },
-    "Build Run Log": { "main": [[{ "node": "S3: Write Log", "type": "main", "index": 0 }]] }
+    "Every Day 8AM CDT": {
+      "main": [
+        [
+          {
+            "node": "S3: Read MTL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read MTL": {
+      "main": [
+        [
+          {
+            "node": "Find Overdue Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Overdue Tasks": {
+      "main": [
+        [
+          {
+            "node": "Any Overdue?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Overdue?": {
+      "main": [
+        [
+          {
+            "node": "Format Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Format Alert Email": {
+      "main": [
+        [
+          {
+            "node": "Email: Overdue Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email: Overdue Alert": {
+      "main": [
+        [
+          {
+            "node": "Build Run Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Run Log": {
+      "main": [
+        [
+          {
+            "node": "Convert Log to Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Log to Binary": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1"
+  }
 }

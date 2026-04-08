@@ -1,0 +1,321 @@
+{
+  "name": "Vault Health Report - Weekly Sunday",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 20 * * 0"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Every Sunday 8PM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst today = now.toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst dayOfWeek = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][now.getDay()];\nconst d = now.getDay();\nconst daysToMon = d === 0 ? 6 : d - 1;\nconst weekStart = new Date(now - daysToMon * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nreturn [{ json: { today, dayOfWeek, weekStart } }];"
+      },
+      "id": "set-dates",
+      "name": "Set Dates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "bucketName": "obsidian-vault",
+        "prefix": "00_Inbox/brain-dumps/",
+        "additionalFields": {}
+      },
+      "id": "s3-list-bd",
+      "name": "S3: List Brain Dumps",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst files = items\n  .filter(i => i.json.Key && i.json.Key.endsWith('.md') && (i.json.Size || 0) > 0)\n  .map(i => ({ key: i.json.Key, name: i.json.Key.split('/').pop(), sizeKB: Math.round((i.json.Size||0)/1024) }));\nconst { today, dayOfWeek, weekStart } = $('Set Dates').first().json;\nreturn [{ json: { braindumpFiles: files, braindumpCount: files.length, today, dayOfWeek, weekStart } }];"
+      },
+      "id": "collect-bd",
+      "name": "Collect Brain Dumps",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "00_Inbox/articles-to-process.md"
+      },
+      "id": "s3-read-articles",
+      "name": "S3: Read Articles",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "bucketName": "obsidian-vault",
+        "prefix": "00_Inbox/processed/",
+        "additionalFields": {}
+      },
+      "id": "s3-list-processed",
+      "name": "S3: List Processed",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst { today, dayOfWeek, weekStart, braindumpFiles, braindumpCount } = $('Collect Brain Dumps').first().json;\nconst thisWeek = items\n  .filter(i => {\n    const key = i.json.Key || '';\n    if (!key.endsWith('.md') || (i.json.Size || 0) === 0) return false;\n    const name = key.split('/').pop();\n    const m = name.match(/^(\\d{4}-\\d{2}-\\d{2})/);\n    return m && m[1] >= weekStart;\n  })\n  .map(i => ({ key: i.json.Key, name: i.json.Key.split('/').pop() }));\nreturn [{ json: { today, dayOfWeek, weekStart, braindumpFiles, braindumpCount, processedThisWeek: thisWeek, processedCount: thisWeek.length } }];"
+      },
+      "id": "collect-processed",
+      "name": "Collect Processed Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { today, weekStart, braindumpFiles, braindumpCount, processedThisWeek, processedCount } = $input.first().json;\nlet articlesContent = '';\ntry {\n  const bin = $('S3: Read Articles').first().binary?.data;\n  if (bin) articlesContent = Buffer.from(bin.data, 'base64').toString('utf-8');\n} catch(e) {}\nconst allUrls = articlesContent.split('\\n').filter(l => /https?:\\/\\//.test(l));\nconst enriched = allUrls.filter(l => l.includes('[title::'));\nconst unenriched = allUrls.filter(l => !l.includes('[title::'));\n\nlet html = '<div style=\"font-family:Arial,sans-serif;max-width:700px;margin:0 auto;color:#2c3e50\">';\nhtml += `<h1 style=\"border-bottom:3px solid #9b59b6;padding-bottom:8px\">Vault Health Report &mdash; Week of ${weekStart}</h1>`;\n\n// Brain Dumps section\nhtml += '<div style=\"background:#f4ecf7;border-left:4px solid #9b59b6;padding:12px;margin:16px 0\">';\nhtml += `<h2 style=\"color:#9b59b6;margin-top:0\">Brain Dump Files (${braindumpCount} in inbox)</h2>`;\nif (braindumpCount === 0) {\n  html += '<p style=\"color:#27ae60\">Inbox clear — no brain dumps waiting</p>';\n} else {\n  html += '<ul>' + braindumpFiles.map(f => `<li><strong>${f.name}</strong> (${f.sizeKB}KB)</li>`).join('') + '</ul>';\n  html += `<p style=\"color:#e67e22\"><strong>Warning: ${braindumpCount} file(s) in brain-dumps/ — check processor logs.</strong></p>`;\n}\nhtml += '</div>';\n\n// Article queue section\nhtml += '<div style=\"background:#eaf3fb;border-left:4px solid #3498db;padding:12px;margin:16px 0\">';\nhtml += `<h2 style=\"color:#3498db;margin-top:0\">Article Queue (${allUrls.length} total)</h2>`;\nhtml += `<ul><li>Enriched with titles: <strong style=\"color:#27ae60\">${enriched.length}</strong></li>`;\nhtml += `<li>Needs enrichment: <strong style=\"color:${unenriched.length > 10 ? '#e74c3c' : '#e67e22'}\">${unenriched.length}</strong></li></ul>`;\nif (unenriched.length > 0) {\n  html += '<details><summary>Unenriched URLs</summary><ul>';\n  html += unenriched.slice(0, 12).map(l => `<li><code>${l.slice(0,90).replace(/</g,'&lt;')}</code></li>`).join('');\n  if (unenriched.length > 12) html += `<li>...and ${unenriched.length - 12} more</li>`;\n  html += '</ul></details>';\n}\nhtml += '</div>';\n\n// Processed this week\nhtml += '<div style=\"background:#eafaf1;border-left:4px solid #27ae60;padding:12px;margin:16px 0\">';\nhtml += `<h2 style=\"color:#27ae60;margin-top:0\">Processed This Week (${processedCount} files since ${weekStart})</h2>`;\nif (processedCount === 0) {\n  html += '<p style=\"color:#e74c3c\">No tasks processed this week. Brain dump processor may not be running.</p>';\n} else {\n  html += '<ul>' + processedThisWeek.slice(0,10).map(f => `<li>${f.name}</li>`).join('');\n  if (processedCount > 10) html += `<li>...and ${processedCount - 10} more</li>`;\n  html += '</ul>';\n}\nhtml += '</div>';\n\nconst healthy = braindumpCount === 0 && unenriched.length < 10 && processedCount > 0;\nconst critical = unenriched.length > 30 || processedCount === 0;\nconst badge = healthy ? 'HEALTHY' : critical ? 'NEEDS ATTENTION' : 'OK';\nhtml += `<p style=\"text-align:center;font-size:18px;font-weight:bold\">Status: ${badge}</p>`;\nhtml += '<p style=\"color:#95a5a6;font-size:11px;text-align:center\">Generated ' + new Date().toISOString() + '</p></div>';\n\nconst subject = `Vault Health: ${badge} | ${braindumpCount} dumps, ${unenriched.length} unenriched, ${processedCount} processed this week`;\nreturn [{ json: { html, subject, today, badge, braindumpCount, unenrichedCount: unenriched.length, processedCount } }];"
+      },
+      "id": "build-report",
+      "name": "Build Health Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "aaron.deyoung@gmail.com",
+        "toEmail": "aaron.deyoung@gmail.com",
+        "subject": "={{ $json.subject }}",
+        "html": "={{ $json.html }}",
+        "options": {
+          "emailFormat": "html"
+        }
+      },
+      "id": "email",
+      "name": "Email: Vault Health",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lWGOwsktldwb3iEj",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst log = JSON.stringify({\n  workflow: 'vault-health-report', run_date: j.today,\n  finished_at: new Date().toISOString(), status: 'success',\n  badge: j.badge, braindump_count: j.braindumpCount,\n  unenriched_articles: j.unenrichedCount, processed_this_week: j.processedCount\n}, null, 2);\nconst buf = Buffer.from(log, 'utf-8');\nconst logKey = `99_System/logs/vault-health-report-${j.today}.json`;\nreturn [{ json: { logKey }, binary: {\n  data: { data: buf.toString('base64'), mimeType: 'application/json', fileName: logKey.split('/').pop(), fileExtension: 'json', fileSize: buf.length }\n}}];"
+      },
+      "id": "build-log",
+      "name": "Build Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.logKey }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-write-log",
+      "name": "S3: Write Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Sunday 8PM": {
+      "main": [
+        [
+          {
+            "node": "Set Dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Dates": {
+      "main": [
+        [
+          {
+            "node": "S3: List Brain Dumps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: List Brain Dumps": {
+      "main": [
+        [
+          {
+            "node": "Collect Brain Dumps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Brain Dumps": {
+      "main": [
+        [
+          {
+            "node": "S3: Read Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read Articles": {
+      "main": [
+        [
+          {
+            "node": "S3: List Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: List Processed": {
+      "main": [
+        [
+          {
+            "node": "Collect Processed Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Processed Files": {
+      "main": [
+        [
+          {
+            "node": "Build Health Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Health Report": {
+      "main": [
+        [
+          {
+            "node": "Email: Vault Health",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email: Vault Health": {
+      "main": [
+        [
+          {
+            "node": "Build Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Log": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -13,7 +13,7 @@
 #   __NOTIFICATION_EMAIL__  → replaced with NOTIFICATION_EMAIL env var
 #
 # Usage:
-#   source .env && bash scripts/setup-n8n.sh
+#   set -a && source .env && set +a && bash scripts/setup-n8n.sh
 # ═══════════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -251,14 +251,23 @@ trap 'rm -rf "$TMPDIR"' EXIT
 # Get existing workflows for update-vs-create check
 EXISTING_WORKFLOWS=$(n8n_api GET "/workflows" 2>/dev/null || echo '{"data":[]}')
 
+# ── v2 Workflows (import these — v1 kept for rollback) ──────────────────────
 WORKFLOWS=(
-  "brain-dump-processor.json"
-  "daily-note-creator.json"
-  "overdue-task-alert.json"
-  "weekly-digest.json"
-  "ai-brain.json"
-  "article-processor.json"
+  "brain-dump-processor-v2.json"
+  "daily-note-creator-v2.json"
+  "overdue-task-alert-v2.json"
+  "weekly-digest-v2.json"
+  "error-handler.json"
+  "morning-briefing.json"
+  "telegram-capture.json"
+  "live-dashboard-updater.json"
+  "link-enricher.json"
+  "vault-health-report.json"
+  "system-health-monitor.json"
 )
+# V1 legacy (kept for rollback, do NOT activate alongside v2):
+# "brain-dump-processor.json" "daily-note-creator.json"
+# "overdue-task-alert.json"   "weekly-digest.json"
 
 for wf_file in "${WORKFLOWS[@]}"; do
   wf_template="$WORKFLOW_DIR/$wf_file"
@@ -333,7 +342,7 @@ FINAL_WORKFLOWS=$(n8n_api GET "/workflows" 2>/dev/null || echo '{"data":[]}')
 echo "$FINAL_WORKFLOWS" | python3 -c "
 import sys, json
 data = json.load(sys.stdin).get('data', [])
-targets = ['Brain Dump', 'Daily Note', 'Overdue Task', 'Weekly']
+targets = ['Brain Dump', 'Daily Note', 'Overdue', 'Weekly', 'Morning', 'Telegram', 'Dashboard', 'Link', 'Health', 'Error']
 found = 0
 for w in data:
     name = w.get('name', '')
@@ -350,8 +359,16 @@ echo "==================================================="
 echo "Setup complete!"
 echo ""
 echo "Next steps:"
-echo "  1. Verify Remotely Save in Obsidian is syncing to:"
-echo "     Bucket: obsidian-vault | Prefix: Homelab/"
-echo "  2. Ensure brain dump files exist in vault"
-echo "  3. Test: Run 'Daily Note Creator' manually in n8n"
+echo "  1. CRITICAL: Rotate MinIO key in console http://192.168.1.240:9001"
+echo "     Then update credential z9qTyG2NVVbhHkg0 with new key."
+echo "  2. Set env vars on n8n (Proxmox LXC CT-202):"
+echo "     TELEGRAM_BOT_TOKEN  — create bot via @BotFather"
+echo "     WEBHOOK_URL         — http://192.168.1.121:5678"
+echo "     N8N_ENCRYPTION_KEY  — openssl rand -hex 16"
+echo "  3. Register Telegram webhook:"
+echo "     curl https://api.telegram.org/bot\$TELEGRAM_BOT_TOKEN/setWebhook"
+echo "          --data url=\$WEBHOOK_URL/webhook/telegram-capture"
+echo "  4. Disable v1 workflows after confirming v2 works:"
+echo "     brain-dump-processor, daily-note-creator, overdue-task-alert, weekly-digest"
+echo "  5. Run e2e test: python3 scripts/e2e_test.py"
 echo "==================================================="

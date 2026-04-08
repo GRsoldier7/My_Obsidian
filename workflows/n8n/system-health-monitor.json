@@ -3,13 +3,23 @@
   "nodes": [
     {
       "parameters": {
-        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 */6 * * *" }] }
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */6 * * *"
+            }
+          ]
+        }
       },
       "id": "trigger",
       "name": "Every 6 Hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [220, 300]
+      "position": [
+        220,
+        300
+      ]
     },
     {
       "parameters": {
@@ -19,7 +29,10 @@
       "name": "Init Checks",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 300]
+      "position": [
+        440,
+        300
+      ]
     },
     {
       "parameters": {
@@ -31,8 +44,16 @@
       "name": "S3: Check North Star",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [660, 200],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "position": [
+        660,
+        200
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
       "continueOnFail": true
     },
     {
@@ -45,8 +66,16 @@
       "name": "S3: Check MTL",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [660, 400],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "position": [
+        660,
+        400
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
       "continueOnFail": true
     },
     {
@@ -57,15 +86,29 @@
       "name": "Evaluate Results",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [880, 300]
+      "position": [
+        880,
+        300
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "leftValue": "", "caseSensitive": true, "typeValidation": "strict" },
+          "options": {
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
           "combinator": "and",
           "conditions": [
-            { "leftValue": "={{ $json.anyFail }}", "rightValue": true, "operator": { "type": "boolean", "operation": "equals" } }
+            {
+              "leftValue": "={{ $json.anyFail }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
           ]
         }
       },
@@ -73,7 +116,10 @@
       "name": "Any Failures?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1100, 300]
+      "position": [
+        1100,
+        300
+      ]
     },
     {
       "parameters": {
@@ -86,8 +132,16 @@
       "name": "Email: Health Alert",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [1320, 200],
-      "credentials": { "smtp": { "id": "lWGOwsktldwb3iEj", "name": "Gmail SMTP (Aaron)" } }
+      "position": [
+        1320,
+        200
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lWGOwsktldwb3iEj",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
     },
     {
       "parameters": {
@@ -101,18 +155,110 @@
       "name": "S3: Write Log",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [1320, 400],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+      "position": [
+        1320,
+        400
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      }
     }
   ],
   "connections": {
-    "Every 6 Hours": { "main": [[{ "node": "Init Checks", "type": "main", "index": 0 }]] },
-    "Init Checks": { "main": [[{ "node": "S3: Check North Star", "type": "main", "index": 0 }, { "node": "S3: Check MTL", "type": "main", "index": 0 }]] },
-    "S3: Check North Star": { "main": [[{ "node": "Evaluate Results", "type": "main", "index": 0 }]] },
-    "S3: Check MTL": { "main": [[{ "node": "Evaluate Results", "type": "main", "index": 0 }]] },
-    "Evaluate Results": { "main": [[{ "node": "Any Failures?", "type": "main", "index": 0 }]] },
-    "Any Failures?": { "main": [[{ "node": "Email: Health Alert", "type": "main", "index": 0 }], [{ "node": "S3: Write Log", "type": "main", "index": 0 }]] },
-    "Email: Health Alert": { "main": [[{ "node": "S3: Write Log", "type": "main", "index": 0 }]] }
+    "Every 6 Hours": {
+      "main": [
+        [
+          {
+            "node": "Init Checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Checks": {
+      "main": [
+        [
+          {
+            "node": "S3: Check North Star",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S3: Check MTL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Check North Star": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Check MTL": {
+      "main": [
+        [
+          {
+            "node": "Evaluate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Evaluate Results": {
+      "main": [
+        [
+          {
+            "node": "Any Failures?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Any Failures?": {
+      "main": [
+        [
+          {
+            "node": "Email: Health Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email: Health Alert": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1"
+  }
 }

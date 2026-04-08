@@ -21,8 +21,8 @@ from botocore.exceptions import ClientError
 
 
 MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://192.168.1.240:9000")
-MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "7BHf9fjXTN2mdtPwivvv")
-MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi")
+MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")  # Set in .env
+MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")  # Set in .env
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "obsidian-vault")
 N8N_HOST = os.environ.get("N8N_HOST", "http://192.168.1.121:5678")
 

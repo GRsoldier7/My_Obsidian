@@ -15,7 +15,7 @@ Full audit of the ObsidianHomeOrchestrator repo and live n8n instance (http://19
 - **Credential ID (old):** `jscahbrUH2TCnnSx`
 - **Problem:** Access key stored in n8n (`zzfy7Jd3Fsdp...`) did not match any key in MinIO. All S3 operations failed.
 - **Impact:** Daily Note Creator failing every day since Mar 25. Brain Dump Processor S3 reads failing.
-- **Fix:** Deleted old credential, created new one (ID: `z9qTyG2NVVbhHkg0`) with correct access key from MinIO service account `Claude_Code` (access key: `7BHf9fjXTN2mdtPwivvv`). Updated all 5 workflows referencing MinIO.
+- **Fix:** Deleted old credential, created new one (ID: `z9qTyG2NVVbhHkg0`) with correct access key from MinIO service account `Claude_Code` (access key: `[REDACTED_MINIO_ACCESS_KEY]`). Updated all 5 workflows referencing MinIO.
 
 ### 3. Weekly Digest Merge Node — Configuration Error (HIGH)
 - **Workflow ID:** `qQ4fidC1K755758J`

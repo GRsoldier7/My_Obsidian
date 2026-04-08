@@ -3,13 +3,23 @@
   "nodes": [
     {
       "parameters": {
-        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 11 * * *" }] }
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
       },
       "id": "trigger",
       "name": "Every Day 6AM CDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [220, 300]
+      "position": [
+        220,
+        300
+      ]
     },
     {
       "parameters": {
@@ -19,7 +29,10 @@
       "name": "Set Today",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 300]
+      "position": [
+        440,
+        300
+      ]
     },
     {
       "parameters": {
@@ -31,17 +44,36 @@
       "name": "S3: Check Exists",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [660, 300],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
       "continueOnFail": true
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "leftValue": "", "caseSensitive": true, "typeValidation": "strict" },
+          "options": {
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
           "combinator": "and",
           "conditions": [
-            { "leftValue": "={{ $json.error }}", "rightValue": "", "operator": { "type": "string", "operation": "exists" } }
+            {
+              "leftValue": "={{ $json.error }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists"
+              }
+            }
           ]
         }
       },
@@ -49,7 +81,10 @@
       "name": "Not Exists?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [880, 300]
+      "position": [
+        880,
+        300
+      ]
     },
     {
       "parameters": {
@@ -61,19 +96,43 @@
       "name": "S3: Read MTL",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [1100, 200],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "position": [
+        1100,
+        200
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
       "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "const today = $('Set Today').first().json.today;\nconst dayOfWeek = new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long' });\n\n// Parse tasks due today from MTL\nlet mtl = '';\ntry {\n  const bin = $('S3: Read MTL').first().binary?.data;\n  if (bin) mtl = Buffer.from(bin.data, 'base64').toString('utf-8');\n} catch(e) {}\n\nconst tasksDue = [];\nconst re = /- \\[ \\] .+\\[due:: (\\d{4}-\\d{2}-\\d{2})\\]/g;\nlet m;\nwhile ((m = re.exec(mtl)) !== null) {\n  if (m[1] <= today) tasksDue.push(m[0]);\n}\n\nconst note = `---\\ndate: ${today}\\nday: ${dayOfWeek}\\ntype: daily-note\\n---\\n\\n# ${dayOfWeek}, ${today}\\n\\n## Today's Focus\\n<!-- What's the ONE thing that matters most today? -->\\n\\n## Tasks Due Today\\n${tasksDue.length > 0 ? tasksDue.join('\\n') : '*No tasks due today*'}\\n\\n## Notes & Observations\\n<!-- Brain dump throughout the day -->\\n\\n## End of Day Review\\n- [ ] Did I move a Quarterly Rock forward today?\\n- [ ] What went well?\\n- [ ] What would I do differently?\\n\\n---\\n*Auto-generated at ${new Date().toISOString()}*\\n`;\n\nreturn [{ json: { key: `40_Timeline_Weekly/Daily/${today}.md`, content: note, today } }];"
+        "jsCode": "const today = $('Set Today').first().json.today;\nconst dayOfWeek = new Date(today + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/Chicago' });\n\nlet mtl = '';\ntry {\n  const bin = $('S3: Read MTL').first().binary?.data;\n  if (bin) mtl = Buffer.from(bin.data, 'base64').toString('utf-8');\n} catch(e) {}\n\nconst tasksDue = [];\nconst re = /- \\[ \\] .+?\\[due:: (\\d{4}-\\d{2}-\\d{2})\\]/g;\nlet m;\nwhile ((m = re.exec(mtl)) !== null) {\n  if (m[1] <= today) tasksDue.push(m[0]);\n}\n\nconst note = `---\\ndate: ${today}\\nday: ${dayOfWeek}\\ntype: daily-note\\n---\\n\\n# ${dayOfWeek}, ${today}\\n\\n## Today's Focus\\n<!-- What's the ONE thing that matters most today? -->\\n\\n## Tasks Due Today\\n${tasksDue.length > 0 ? tasksDue.join('\\n') : '*No tasks due today*'}\\n\\n## Notes & Observations\\n<!-- Brain dump throughout the day -->\\n\\n## End of Day Review\\n- [ ] Did I move a Quarterly Rock forward today?\\n- [ ] What went well?\\n- [ ] What would I do differently?\\n\\n---\\n*Auto-generated at ${new Date().toISOString()}*\\n`;\n\nreturn [{ json: { key: `40_Timeline_Weekly/Daily/${today}.md`, content: note, today, taskCount: tasksDue.length } }];"
       },
       "id": "build-note",
       "name": "Build Daily Note",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 200]
+      "position": [
+        1320,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Convert markdown content to binary for S3 upload\nconst content = $json.content;\nconst key = $json.key;\nconst fileName = key.split('/').pop();\nconst buf = Buffer.from(content, 'utf-8');\nreturn [{ json: $json, binary: { data: { data: buf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: fileName, fileExtension: 'md', fileSize: buf.length } } }];"
+      },
+      "id": "convert-binary",
+      "name": "Convert to Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        200
+      ]
     },
     {
       "parameters": {
@@ -87,32 +146,132 @@
       "name": "S3: Write Daily Note",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [1540, 200],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+      "position": [
+        1760,
+        200
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      }
     },
     {
       "parameters": {
         "fromEmail": "aaron.deyoung@gmail.com",
         "toEmail": "aaron.deyoung@gmail.com",
         "subject": "=📅 Daily Note Created — {{ $json.today }}",
-        "text": "=Daily note created for {{ $json.today }}.\n\nPath: 40_Timeline_Weekly/Daily/{{ $json.today }}.md"
+        "text": "=Daily note created for {{ $json.today }}.\n\nPath: 40_Timeline_Weekly/Daily/{{ $json.today }}.md\nTasks pre-loaded: {{ $json.taskCount }}"
       },
       "id": "email",
       "name": "Email: Created",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [1760, 200],
-      "credentials": { "smtp": { "id": "lWGOwsktldwb3iEj", "name": "Gmail SMTP (Aaron)" } }
+      "position": [
+        1980,
+        200
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lWGOwsktldwb3iEj",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
     }
   ],
   "connections": {
-    "Every Day 6AM CDT": { "main": [[{ "node": "Set Today", "type": "main", "index": 0 }]] },
-    "Set Today": { "main": [[{ "node": "S3: Check Exists", "type": "main", "index": 0 }]] },
-    "S3: Check Exists": { "main": [[{ "node": "Not Exists?", "type": "main", "index": 0 }]] },
-    "Not Exists?": { "main": [[{ "node": "S3: Read MTL", "type": "main", "index": 0 }], []] },
-    "S3: Read MTL": { "main": [[{ "node": "Build Daily Note", "type": "main", "index": 0 }]] },
-    "Build Daily Note": { "main": [[{ "node": "S3: Write Daily Note", "type": "main", "index": 0 }]] },
-    "S3: Write Daily Note": { "main": [[{ "node": "Email: Created", "type": "main", "index": 0 }]] }
+    "Every Day 6AM CDT": {
+      "main": [
+        [
+          {
+            "node": "Set Today",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Today": {
+      "main": [
+        [
+          {
+            "node": "S3: Check Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Check Exists": {
+      "main": [
+        [
+          {
+            "node": "Not Exists?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Not Exists?": {
+      "main": [
+        [
+          {
+            "node": "S3: Read MTL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "S3: Read MTL": {
+      "main": [
+        [
+          {
+            "node": "Build Daily Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Daily Note": {
+      "main": [
+        [
+          {
+            "node": "Convert to Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to Binary": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Daily Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Write Daily Note": {
+      "main": [
+        [
+          {
+            "node": "Email: Created",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1"
+  }
 }

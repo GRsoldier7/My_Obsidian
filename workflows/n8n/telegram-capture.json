@@ -1,0 +1,431 @@
+{
+  "name": "📱 Telegram Capture — Instant Brain Dump",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "telegram-capture",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "Telegram Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1.1,
+      "position": [
+        220,
+        300
+      ],
+      "webhookId": "telegram-capture"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Telegram Update object\nconst body = $input.first().json.body || $input.first().json;\nconst msg = body.message || body.edited_message;\nif (!msg) return [{ json: { _skip: true, reason: 'no message' } }];\n\nconst chatId = msg.chat.id;\nconst text = msg.text || msg.caption || '';\nconst hasUrl = /https?:\\/\\/[^\\s]+/.test(text);\nconst isVoice = !!msg.voice;\nconst now = new Date();\nconst today = now.toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst ts = now.toISOString();\n\n// Route: url -> article | text -> brain dump | voice -> future\nconst route = isVoice ? 'voice' : hasUrl ? 'article' : 'braindump';\n\nreturn [{ json: { chatId, text, hasUrl, isVoice, route, today, ts, messageId: msg.message_id } }];"
+      },
+      "id": "parse-message",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json._skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "if-valid",
+      "name": "Valid Message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.route }}",
+              "rightValue": "article",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "if-article",
+      "name": "Is Article URL?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "00_Inbox/articles-to-process.md"
+      },
+      "id": "s3-read-articles",
+      "name": "S3: Read Articles Queue",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        200
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const { text, ts } = $input.first().json;\n\n// Append URL to articles-to-process.md\nlet existing = '';\ntry {\n  const bin = $('S3: Read Articles Queue').first().binary?.data;\n  if (bin) existing = Buffer.from(bin.data, 'base64').toString('utf-8');\n} catch(e) {}\n\n// Extract all URLs from message\nconst urls = text.match(/https?:\\/\\/[^\\s]+/g) || [];\nconst newLines = urls.map(u => `- [ ] ${u} [captured:: ${ts.split('T')[0]}] [source:: telegram]`);\n\nconst updated = existing.trimEnd() + '\\n' + newLines.join('\\n') + '\\n';\nconst buf = Buffer.from(updated, 'utf-8');\n\nreturn [{ json: {\n  ...$input.first().json,\n  content: updated,\n  key: '00_Inbox/articles-to-process.md',\n  urlCount: urls.length,\n  replyText: `✅ Queued ${urls.length} article${urls.length!==1?'s':''} for processing.`\n}, binary: { data: { data: buf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: 'articles-to-process.md', fileExtension: 'md', fileSize: buf.length } } }];"
+      },
+      "id": "append-article",
+      "name": "Append to Articles Queue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "00_Inbox/articles-to-process.md",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-write-articles",
+      "name": "S3: Write Articles Queue",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        200
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Append text capture to today's brain dump file\nconst { text, today, ts } = $input.first().json;\nconst key = `00_Inbox/brain-dumps/BrainDump-Telegram-${today}.md`;\n\n// Brain dump entry with timestamp\nconst entry = `\\n## ${ts.replace('T',' ').substring(0,16)} (Telegram)\\n${text}\\n`;\n\n// We always append — create file if new, or append if exists (n8n: write full content)\n// Strategy: read existing -> append -> write back\nconst replyText = `✅ Brain dump captured! (${text.length} chars)`;\n\nreturn [{ json: { ...$input.first().json, key, entry, replyText } }];"
+      },
+      "id": "build-braindump",
+      "name": "Build Brain Dump Entry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "={{ $json.key }}"
+      },
+      "id": "s3-read-dump",
+      "name": "S3: Read Existing Dump",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        400
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const { key, entry, today, replyText } = $('Build Brain Dump Entry').first().json;\n\n// Get existing content (may be empty if new file)\nlet existing = `---\\ndate: ${today}\\ntype: brain-dump\\nsource: telegram\\n---\\n\\n# Telegram Brain Dump — ${today}\\n`;\ntry {\n  const bin = $('S3: Read Existing Dump').first().binary?.data;\n  if (bin) existing = Buffer.from(bin.data, 'base64').toString('utf-8');\n} catch(e) {}\n\nconst updated = existing.trimEnd() + entry;\nconst buf = Buffer.from(updated, 'utf-8');\n\nreturn [{ json: {\n  ...$('Build Brain Dump Entry').first().json,\n  content: updated,\n  replyText\n}, binary: { data: { data: buf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: key.split('/').pop(), fileExtension: 'md', fileSize: buf.length } } }];"
+      },
+      "id": "merge-braindump",
+      "name": "Merge Brain Dump",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $('Build Brain Dump Entry').first().json.key }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-write-dump",
+      "name": "S3: Write Brain Dump",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        400
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Collect reply text from whichever branch ran\nlet replyText = 'Captured!';\ntry { replyText = $input.first().json.replyText || replyText; } catch(e) {}\nreturn [{ json: { ...$input.first().json, replyText } }];"
+      },
+      "id": "build-reply",
+      "name": "Build Reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "chat_id",
+              "value": "={{ $json.chatId }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.replyText }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "telegram-reply",
+      "name": "Telegram: Send Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify X-Telegram-Bot-Api-Secret-Token header\n// Set TELEGRAM_WEBHOOK_SECRET in n8n environment variables\nconst secret = $env.TELEGRAM_WEBHOOK_SECRET || '';\nconst provided = $input.first().json.headers?.['x-telegram-bot-api-secret-token'] || \n                 $input.first().json.headers?.['X-Telegram-Bot-Api-Secret-Token'] || '';\n\n// If secret is configured, enforce it; if not configured, log warning but continue\nif (secret && provided !== secret) {\n  throw new Error(`Webhook auth failed: invalid secret token. Set TELEGRAM_WEBHOOK_SECRET in n8n env.`);\n}\nif (!secret) {\n  // Pass through but warn\n  return [{ json: { ...$input.first().json, _securityWarning: 'TELEGRAM_WEBHOOK_SECRET not set — webhook is unprotected' } }];\n}\nreturn $input.all();"
+      },
+      "id": "verify-webhook-secret",
+      "name": "Verify Webhook Secret",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Telegram Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify Webhook Secret",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "Valid Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Valid Message?": {
+      "main": [
+        [
+          {
+            "node": "Is Article URL?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Is Article URL?": {
+      "main": [
+        [
+          {
+            "node": "S3: Read Articles Queue",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Brain Dump Entry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read Articles Queue": {
+      "main": [
+        [
+          {
+            "node": "Append to Articles Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append to Articles Queue": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Articles Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Write Articles Queue": {
+      "main": [
+        [
+          {
+            "node": "Build Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Brain Dump Entry": {
+      "main": [
+        [
+          {
+            "node": "S3: Read Existing Dump",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read Existing Dump": {
+      "main": [
+        [
+          {
+            "node": "Merge Brain Dump",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Brain Dump": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Brain Dump",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Write Brain Dump": {
+      "main": [
+        [
+          {
+            "node": "Build Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Reply": {
+      "main": [
+        [
+          {
+            "node": "Telegram: Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Webhook Secret": {
+      "main": [
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

@@ -3,13 +3,23 @@
   "nodes": [
     {
       "parameters": {
-        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 23 * * 0" }] }
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 23 * * 0"
+            }
+          ]
+        }
       },
       "id": "trigger",
       "name": "Sunday 6PM CDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [220, 300]
+      "position": [
+        220,
+        300
+      ]
     },
     {
       "parameters": {
@@ -21,8 +31,16 @@
       "name": "S3: Read North Star",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [440, 200],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "position": [
+        440,
+        200
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
       "continueOnFail": true
     },
     {
@@ -35,8 +53,16 @@
       "name": "S3: Read MTL",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [440, 400],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "position": [
+        440,
+        400
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      },
       "continueOnFail": true
     },
     {
@@ -47,21 +73,35 @@
       "name": "Build Weekly Digest",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [770, 300]
+      "position": [
+        770,
+        300
+      ]
     },
     {
       "parameters": {
         "fromEmail": "aaron.deyoung@gmail.com",
         "toEmail": "aaron.deyoung@gmail.com",
         "subject": "=📊 Weekly Needle Mover Digest — Week of {{ $json.today }}",
-        "html": "={{ $json.html }}"
+        "html": "={{ $json.html }}",
+        "options": {
+          "emailFormat": "html"
+        }
       },
       "id": "email",
       "name": "Email: Weekly Digest",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [990, 300],
-      "credentials": { "smtp": { "id": "lWGOwsktldwb3iEj", "name": "Gmail SMTP (Aaron)" } }
+      "position": [
+        990,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "lWGOwsktldwb3iEj",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
     },
     {
       "parameters": {
@@ -75,16 +115,129 @@
       "name": "S3: Write Log",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [1210, 300],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+      "position": [
+        1650,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "z9qTyG2NVVbhHkg0",
+          "name": "MinIO S3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const { today } = $input.first().json;\nconst log = JSON.stringify({ workflow: 'weekly-digest', run_date: today, finished_at: new Date().toISOString(), status: 'success' }, null, 2);\nreturn [{ json: { logKey: `99_System/logs/weekly-digest-${today}.json`, logContent: log } }];"
+      },
+      "id": "build-log",
+      "name": "Build Run Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1210,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $json.logContent;\nconst key = $json.logKey;\nconst buf = Buffer.from(content, 'utf-8');\nreturn [{ json: $json, binary: { data: { data: buf.toString('base64'), mimeType: 'application/json', fileName: key.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
+      },
+      "id": "convert-log-binary",
+      "name": "Convert Log to Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1430,
+        300
+      ]
     }
   ],
   "connections": {
-    "Sunday 6PM CDT": { "main": [[{ "node": "S3: Read North Star", "type": "main", "index": 0 }, { "node": "S3: Read MTL", "type": "main", "index": 0 }]] },
-    "S3: Read North Star": { "main": [[{ "node": "Build Weekly Digest", "type": "main", "index": 0 }]] },
-    "S3: Read MTL": { "main": [[{ "node": "Build Weekly Digest", "type": "main", "index": 0 }]] },
-    "Build Weekly Digest": { "main": [[{ "node": "Email: Weekly Digest", "type": "main", "index": 0 }]] },
-    "Email: Weekly Digest": { "main": [[{ "node": "S3: Write Log", "type": "main", "index": 0 }]] }
+    "Sunday 6PM CDT": {
+      "main": [
+        [
+          {
+            "node": "S3: Read North Star",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S3: Read MTL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read North Star": {
+      "main": [
+        [
+          {
+            "node": "Build Weekly Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read MTL": {
+      "main": [
+        [
+          {
+            "node": "Build Weekly Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Weekly Digest": {
+      "main": [
+        [
+          {
+            "node": "Email: Weekly Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email: Weekly Digest": {
+      "main": [
+        [
+          {
+            "node": "Build Run Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Run Log": {
+      "main": [
+        [
+          {
+            "node": "Convert Log to Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Log to Binary": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1"
+  }
 }
