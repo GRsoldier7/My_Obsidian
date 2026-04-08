@@ -37,7 +37,7 @@
       ],
       "credentials": {
         "s3": {
-          "id": "z9qTyG2NVVbhHkg0",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       },
@@ -166,7 +166,7 @@
       ],
       "credentials": {
         "s3": {
-          "id": "z9qTyG2NVVbhHkg0",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       }
@@ -189,7 +189,7 @@
       ],
       "credentials": {
         "s3": {
-          "id": "z9qTyG2NVVbhHkg0",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       }

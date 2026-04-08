@@ -50,7 +50,7 @@
       ],
       "credentials": {
         "s3": {
-          "id": "z9qTyG2NVVbhHkg0",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       },
@@ -102,7 +102,7 @@
       ],
       "credentials": {
         "s3": {
-          "id": "z9qTyG2NVVbhHkg0",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       },
@@ -152,15 +152,15 @@
       ],
       "credentials": {
         "s3": {
-          "id": "z9qTyG2NVVbhHkg0",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       }
     },
     {
       "parameters": {
-        "fromEmail": "aaron.deyoung@gmail.com",
-        "toEmail": "aaron.deyoung@gmail.com",
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "=📅 Daily Note Created — {{ $json.today }}",
         "text": "=Daily note created for {{ $json.today }}.\n\nPath: 40_Timeline_Weekly/Daily/{{ $json.today }}.md\nTasks pre-loaded: {{ $json.taskCount }}"
       },
@@ -174,7 +174,7 @@
       ],
       "credentials": {
         "smtp": {
-          "id": "lWGOwsktldwb3iEj",
+          "id": "__SMTP_CRED_ID__",
           "name": "Gmail SMTP (Aaron)"
         }
       }

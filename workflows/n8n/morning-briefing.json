@@ -50,7 +50,7 @@
       ],
       "credentials": {
         "s3": {
-          "id": "z9qTyG2NVVbhHkg0",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       },
@@ -72,7 +72,7 @@
       ],
       "credentials": {
         "s3": {
-          "id": "z9qTyG2NVVbhHkg0",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       },
@@ -93,8 +93,8 @@
     },
     {
       "parameters": {
-        "fromEmail": "aaron.deyoung@gmail.com",
-        "toEmail": "aaron.deyoung@gmail.com",
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "={{ `🌅 Morning Briefing — ${$json.dayOfWeek}, ${$json.today} | ${$json.overdueCount} overdue, ${$json.todayCount} due today` }}",
         "html": "={{ $json.html }}",
         "options": {
@@ -111,7 +111,7 @@
       ],
       "credentials": {
         "smtp": {
-          "id": "lWGOwsktldwb3iEj",
+          "id": "__SMTP_CRED_ID__",
           "name": "Gmail SMTP (Aaron)"
         }
       }
@@ -160,7 +160,7 @@
       ],
       "credentials": {
         "s3": {
-          "id": "z9qTyG2NVVbhHkg0",
+          "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       }

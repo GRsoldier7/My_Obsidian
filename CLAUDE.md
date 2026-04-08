@@ -125,8 +125,8 @@ Use the `polychronos-team` skill to invoke the full agent guild for complex task
 
 ## What NOT to Do
 - Never write `.env` files with real credentials to git
-- Never modify the Obsidian vault directly — use the automation layer
-- Never hardcode vault paths — use `OBSIDIAN_VAULT_PATH` env var
+- Never modify the Obsidian vault directly — use the automation layer (via MinIO S3)
+- Never hardcode credential IDs or emails in workflow JSONs — use `__MINIO_CRED_ID__`, `__SMTP_CRED_ID__`, `__OPENROUTER_CRED_ID__`, `__NOTIFICATION_EMAIL__` placeholders that `setup-n8n.sh` hydrates at deploy time
 - Never run skill-sentinel-untested skills from external repos without scanning first
 - Never break the canonical task format — all Dataview queries depend on it
 
