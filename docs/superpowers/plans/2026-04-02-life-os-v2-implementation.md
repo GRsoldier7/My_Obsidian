@@ -13,7 +13,7 @@
 **Credentials (live, verified):**
 - MinIO: access=`[REDACTED_MINIO_ACCESS_KEY]`, endpoint=`http://192.168.1.240:9000`, bucket=`obsidian-vault`
 - n8n API key: in `.env` as `N8N_API_KEY`
-- n8n credential IDs: MinIO=`z9qTyG2NVVbhHkg0`, SMTP=`lWGOwsktldwb3iEj`, OpenRouter=`Z7liUYc3Toq3q7W7`
+- n8n credential IDs: MinIO=`[MINIO_CRED_ID]`, SMTP=`[SMTP_CRED_ID]`, OpenRouter=`[OPENROUTER_CRED_ID]`
 
 **CRITICAL RULE:** Every task ends with a verification step. Nothing is marked complete without confirmed output in MinIO or passing test output on screen.
 
@@ -2410,7 +2410,7 @@ Add to bottom of CLAUDE.md:
 ### Live Credentials (stored in .env — never commit)
 - MinIO: access=[REDACTED_MINIO_ACCESS_KEY], endpoint=http://192.168.1.240:9000, bucket=obsidian-vault
 - n8n: http://192.168.1.121:5678, API key in .env as N8N_API_KEY
-- n8n credential IDs: MinIO=z9qTyG2NVVbhHkg0, SMTP=lWGOwsktldwb3iEj, OpenRouter=Z7liUYc3Toq3q7W7
+- n8n credential IDs: MinIO=[MINIO_CRED_ID], SMTP=[SMTP_CRED_ID], OpenRouter=[OPENROUTER_CRED_ID]
 
 ### Vault Sync Architecture
 - Obsidian → Remotely Save → MinIO obsidian-vault bucket (bucket root, NO prefix)

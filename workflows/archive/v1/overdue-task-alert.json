@@ -68,7 +68,7 @@
       ],
       "credentials": {
         "aws": {
-          "id": "jscahbrUH2TCnnSx",
+          "id": "__OLD_MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       },
@@ -90,7 +90,7 @@
       ],
       "credentials": {
         "aws": {
-          "id": "jscahbrUH2TCnnSx",
+          "id": "__OLD_MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       },
@@ -193,7 +193,7 @@
       ],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "Z7liUYc3Toq3q7W7",
+          "id": "__OPENROUTER_CRED_ID__",
           "name": "OpenRouter API"
         }
       },
@@ -227,8 +227,8 @@
     },
     {
       "parameters": {
-        "fromEmail": "aaron.deyoung@gmail.com",
-        "toEmail": "aaron.deyoung@gmail.com",
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "={{ $json.subject }}",
         "emailType": "html",
         "html": "={{ $json.html }}",
@@ -244,7 +244,7 @@
       ],
       "credentials": {
         "smtp": {
-          "id": "lWGOwsktldwb3iEj",
+          "id": "__SMTP_CRED_ID__",
           "name": "Gmail SMTP (Aaron)"
         }
       }

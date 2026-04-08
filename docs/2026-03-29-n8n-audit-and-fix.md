@@ -12,10 +12,10 @@ Full audit of the ObsidianHomeOrchestrator repo and live n8n instance (http://19
 - **Fix:** Deactivated via API. Workflow needs Tailscale connectivity or a valid endpoint before reactivation.
 
 ### 2. MinIO S3 Credential — InvalidAccessKeyId (CRITICAL)
-- **Credential ID (old):** `jscahbrUH2TCnnSx`
-- **Problem:** Access key stored in n8n (`zzfy7Jd3Fsdp...`) did not match any key in MinIO. All S3 operations failed.
+- **Credential ID (old):** `[OLD_MINIO_CRED_ID]`
+- **Problem:** Access key stored in n8n (`[REDACTED]...`) did not match any key in MinIO. All S3 operations failed.
 - **Impact:** Daily Note Creator failing every day since Mar 25. Brain Dump Processor S3 reads failing.
-- **Fix:** Deleted old credential, created new one (ID: `z9qTyG2NVVbhHkg0`) with correct access key from MinIO service account `Claude_Code` (access key: `[REDACTED_MINIO_ACCESS_KEY]`). Updated all 5 workflows referencing MinIO.
+- **Fix:** Deleted old credential, created new one (ID: `[MINIO_CRED_ID]`) with correct access key from MinIO service account `Claude_Code` (access key: `[REDACTED_MINIO_ACCESS_KEY]`). Updated all 5 workflows referencing MinIO.
 
 ### 3. Weekly Digest Merge Node — Configuration Error (HIGH)
 - **Workflow ID:** `qQ4fidC1K755758J`
@@ -65,9 +65,9 @@ Full audit of the ObsidianHomeOrchestrator repo and live n8n instance (http://19
 ### Credentials
 | Name | Type | ID | Status |
 |------|------|-----|--------|
-| MinIO S3 | aws | `z9qTyG2NVVbhHkg0` | NEW — correct access key |
-| Gmail SMTP (Aaron) | smtp | `lWGOwsktldwb3iEj` | Unchanged |
-| OpenRouter API | httpHeaderAuth | `Z7liUYc3Toq3q7W7` | Unchanged |
+| MinIO S3 | aws | `[MINIO_CRED_ID]` | NEW — correct access key |
+| Gmail SMTP (Aaron) | smtp | `[SMTP_CRED_ID]` | Unchanged |
+| OpenRouter API | httpHeaderAuth | `[OPENROUTER_CRED_ID]` | Unchanged |
 
 ### Workflows
 | Workflow | Schedule | Status |

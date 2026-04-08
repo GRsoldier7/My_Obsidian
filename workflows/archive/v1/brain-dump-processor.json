@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## 🧠 Brain Dump Processor\n\n**Schedule:** 7:00 AM daily\n**Source:** MinIO `obsidian-vault` bucket, 8 brain dump files\n**Output:** Tasks appended to Master Task List; brain dumps cleared; digest email sent\n\n### ⚙️ SETUP REQUIRED BEFORE FIRST RUN\n1. **MinIO S3 credential** in n8n → Settings → Credentials:\n   - Name: `MinIO — obsidian-vault`\n   - Type: AWS\n   - Region: `us-east-1`\n   - Access Key: (from .env MINIO_ACCESS_KEY)\n   - Secret: (from .env MINIO_SECRET_KEY)\n   - Custom Endpoint: http://192.168.1.240:9000\n   - Force path style: ✅\n2. **SMTP credential** in n8n → Settings → Credentials:\n   - Name: `Gmail SMTP`\n   - Type: SMTP\n   - Host/Port: smtp.gmail.com:587\n   - User: aaron.deyoung@gmail.com\n   - Password: Gmail App Password\n3. **Verify** Remotely Save syncs to `obsidian-vault` bucket\n4. **Verify** 8 brain dump files exist in vault with `domain:` frontmatter\n5. Toggle workflow **Active**\n\n### Brain Dump File → Domain Map\n| File | Domain |\n|------|--------|\n| BrainDump — Faith.md | Faith |\n| BrainDump — Family.md | Family |\n| BrainDump — Business (Echelon Seven).md | Business |\n| BrainDump — Consulting.md | Consulting |\n| BrainDump — Work (Parallon).md | Work |\n| BrainDump — Health.md | Health |\n| BrainDump — Home.md | Home |\n| BrainDump — Personal.md | Personal |",
+        "content": "## 🧠 Brain Dump Processor\n\n**Schedule:** 7:00 AM daily\n**Source:** MinIO `obsidian-vault` bucket, 8 brain dump files\n**Output:** Tasks appended to Master Task List; brain dumps cleared; digest email sent\n\n### ⚙️ SETUP REQUIRED BEFORE FIRST RUN\n1. **MinIO S3 credential** in n8n → Settings → Credentials:\n   - Name: `MinIO — obsidian-vault`\n   - Type: AWS\n   - Region: `us-east-1`\n   - Access Key: (from .env MINIO_ACCESS_KEY)\n   - Secret: (from .env MINIO_SECRET_KEY)\n   - Custom Endpoint: http://192.168.1.240:9000\n   - Force path style: ✅\n2. **SMTP credential** in n8n → Settings → Credentials:\n   - Name: `Gmail SMTP`\n   - Type: SMTP\n   - Host/Port: smtp.gmail.com:587\n   - User: __NOTIFICATION_EMAIL__\n   - Password: Gmail App Password\n3. **Verify** Remotely Save syncs to `obsidian-vault` bucket\n4. **Verify** 8 brain dump files exist in vault with `domain:` frontmatter\n5. Toggle workflow **Active**\n\n### Brain Dump File → Domain Map\n| File | Domain |\n|------|--------|\n| BrainDump — Faith.md | Faith |\n| BrainDump — Family.md | Family |\n| BrainDump — Business (Echelon Seven).md | Business |\n| BrainDump — Consulting.md | Consulting |\n| BrainDump — Work (Parallon).md | Work |\n| BrainDump — Health.md | Health |\n| BrainDump — Home.md | Home |\n| BrainDump — Personal.md | Personal |",
         "height": 820,
         "width": 480,
         "color": 4
@@ -82,7 +82,7 @@
       ],
       "credentials": {
         "aws": {
-          "id": "jscahbrUH2TCnnSx",
+          "id": "__OLD_MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       },
@@ -212,7 +212,7 @@
       ],
       "credentials": {
         "httpHeaderAuth": {
-          "id": "Z7liUYc3Toq3q7W7",
+          "id": "__OPENROUTER_CRED_ID__",
           "name": "OpenRouter API"
         }
       },
@@ -290,7 +290,7 @@
       ],
       "credentials": {
         "aws": {
-          "id": "jscahbrUH2TCnnSx",
+          "id": "__OLD_MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
       }
@@ -310,8 +310,8 @@
     },
     {
       "parameters": {
-        "fromEmail": "aaron.deyoung@gmail.com",
-        "toEmail": "aaron.deyoung@gmail.com",
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "={{ $json.subject }}",
         "emailType": "html",
         "html": "={{ $json.html }}",
@@ -327,7 +327,7 @@
       ],
       "credentials": {
         "smtp": {
-          "id": "lWGOwsktldwb3iEj",
+          "id": "__SMTP_CRED_ID__",
           "name": "Gmail SMTP (Aaron)"
         }
       }

@@ -149,9 +149,9 @@ Session token required — run `bw unlock --raw` and update `BW_SESSION` in `~/.
 ## n8n Credentials (live)
 | Name | Type | ID |
 |------|------|----|
-| MinIO S3 | aws | `z9qTyG2NVVbhHkg0` |
-| Gmail SMTP (Aaron) | smtp | `lWGOwsktldwb3iEj` |
-| OpenRouter API | httpHeaderAuth | `Z7liUYc3Toq3q7W7` |
+| MinIO S3 | aws | `[see-n8n-ui]` |
+| Gmail SMTP (Aaron) | smtp | `[see-n8n-ui]` |
+| OpenRouter API | httpHeaderAuth | `[see-n8n-ui]` |
 
 ## Active Workflows (v2 — import via setup-n8n.sh)
 | Workflow | Schedule | Purpose |

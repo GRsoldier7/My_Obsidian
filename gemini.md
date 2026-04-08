@@ -81,7 +81,7 @@
 - [x] **NEW: morning-briefing.json** — replaces separate overdue+daily emails; rich HTML; 7AM CDT
 - [x] **NEW: telegram-capture.json** — Telegram bot webhook → brain dump / article queue (needs TELEGRAM_BOT_TOKEN)
 - [x] **NEW: live-dashboard-updater.json** — hourly dashboard note at 000_Master Dashboard/Live Dashboard.md
-- [x] **DONE: MinIO key rotated** — 2026-04-08. New key active. `.env` updated. n8n credential z9qTyG2NVVbhHkg0 still needs updating in n8n UI.
+- [x] **DONE: MinIO key rotated** — 2026-04-08. New key active. `.env` updated. n8n credential [MINIO_CRED_ID] still needs updating in n8n UI.
 - [x] **All 11 workflows deployed and ACTIVE** — 2026-04-08. Fixed timezone-in-rule bug (not supported by this n8n version). Imported directly via n8n API.
 - [ ] **Register Telegram webhook** — create bot via @BotFather, set TELEGRAM_BOT_TOKEN, run curl setWebhook
 - [ ] **Disable v1 workflows** in n8n — brain-dump-processor, daily-note-creator, overdue-task-alert, weekly-digest (replaced by v2)
@@ -136,7 +136,7 @@ v2 overhaul session. Root cause: system ran 14 days without processing a single 
 | system-health-monitor.json | ✅ Ready | Every 6h — infra health check |
 
 ## Remaining Blockers (user action required)
-1. **ROTATE MinIO key** — `[REDACTED_MINIO_ACCESS_KEY]` is compromised. MinIO console: http://192.168.1.240:9001 → Identity → Service Accounts → delete → create new → update n8n credential z9qTyG2NVVbhHkg0 AND update `.env`
+1. **ROTATE MinIO key** — `[REDACTED_MINIO_ACCESS_KEY]` is compromised. MinIO console: http://192.168.1.240:9001 → Identity → Service Accounts → delete → create new → update n8n credential [MINIO_CRED_ID] AND update `.env`
 2. **Import workflows** — re-import all 11 workflows via setup-n8n.sh or n8n UI
 3. **Telegram setup** — create bot via @BotFather → set TELEGRAM_BOT_TOKEN + TELEGRAM_WEBHOOK_SECRET in n8n env → run setWebhook curl
 4. **n8n env vars** — set WEBHOOK_URL, N8N_ENCRYPTION_KEY on Proxmox LXC CT-202
@@ -153,7 +153,7 @@ v2 overhaul session. Root cause: system ran 14 days without processing a single 
 
 ### Remaining Blockers (Next Session)
 1. **Add SMTP_PASS to `.env`** — Gmail App Password needed for setup-n8n.sh
-2. **Update n8n MinIO credential** — UI: Credentials → MinIO S3 (`z9qTyG2NVVbhHkg0`) → update access/secret key
+2. **Update n8n MinIO credential** — UI: Credentials → MinIO S3 (`[MINIO_CRED_ID]`) → update access/secret key
 3. **Run `set -a && source .env && set +a && bash scripts/setup-n8n.sh`** — deploys all 11 workflows
 4. **Bitwarden MCP activation** — install `bw` CLI → `bw config server https://vault.tailfab8a7.ts.net:8443` → `bw login` → `bw unlock --raw` → paste token in `~/.claude/settings.json` → restart Claude Code
 5. **Telegram bot** — @BotFather → TELEGRAM_BOT_TOKEN + TELEGRAM_WEBHOOK_SECRET → n8n env vars → setWebhook

@@ -167,9 +167,9 @@ Domain note output paths:
 
 | Name | Type | Credential ID |
 |------|------|--------------|
-| MinIO S3 | aws | `z9qTyG2NVVbhHkg0` |
-| Gmail SMTP (Aaron) | smtp | `lWGOwsktldwb3iEj` |
-| OpenRouter API | httpHeaderAuth | `Z7liUYc3Toq3q7W7` |
+| MinIO S3 | aws | `[MINIO_CRED_ID]` |
+| Gmail SMTP (Aaron) | smtp | `[SMTP_CRED_ID]` |
+| OpenRouter API | httpHeaderAuth | `[OPENROUTER_CRED_ID]` |
 
 New credential needed:
 | Name | Type | Notes |
