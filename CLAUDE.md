@@ -34,6 +34,9 @@ The automation and configuration layer for Aaron's Life OS — a comprehensive p
 - **Regex extraction primary** — use regex for task extraction (zero cost), AI only as fallback
 - **Verified writes** — every S3 put must be followed by head_object verification
 - **Run logs** — every workflow writes JSON to `99_System/logs/{workflow}-{YYYY-MM-DD}.json`
+- **S3 uploads need binary** — n8n S3 nodes require binary data; Code nodes must output `binary: { fieldName: { data: buf.toString('base64'), mimeType, fileName, fileExtension, fileSize } }`
+- **scheduleTrigger timezone** — do NOT put `timezone` inside the `rule` object; this n8n version doesn't support it. Use UTC-adjusted cron expressions. Set timezone at workflow level via `settings.timezone` only.
+- **Never paste secrets in chat** — use Bitwarden MCP or edit .env directly in the IDE
 
 ## Key Vault Paths (all relative to bucket root)
 ```
@@ -127,6 +130,22 @@ Use the `polychronos-team` skill to invoke the full agent guild for complex task
 - Never run skill-sentinel-untested skills from external repos without scanning first
 - Never break the canonical task format — all Dataview queries depend on it
 
+## Running Scripts
+Always use `set -a` to export `.env` vars to subprocesses:
+```bash
+set -a && source .env && set +a && python3 scripts/e2e_test.py
+set -a && source .env && set +a && bash scripts/setup-n8n.sh
+```
+Without `set -a`, child processes (Python, bash subshells) do NOT inherit shell variables.
+
+## MCP Servers
+| Name | Purpose | Config |
+|------|---------|--------|
+| Bitwarden | Pull secrets from self-hosted vault | `~/.claude/settings.json` |
+
+Bitwarden self-hosted: `https://vault.tailfab8a7.ts.net:8443`
+Session token required — run `bw unlock --raw` and update `BW_SESSION` in `~/.claude/settings.json`.
+
 ## n8n Credentials (live)
 | Name | Type | ID |
 |------|------|----|
@@ -134,5 +153,27 @@ Use the `polychronos-team` skill to invoke the full agent guild for complex task
 | Gmail SMTP (Aaron) | smtp | `lWGOwsktldwb3iEj` |
 | OpenRouter API | httpHeaderAuth | `Z7liUYc3Toq3q7W7` |
 
+## Active Workflows (v2 — import via setup-n8n.sh)
+| Workflow | Schedule | Purpose |
+|----------|----------|---------|
+| brain-dump-processor-v2 | Daily 7AM CDT | Extract tasks from brain dumps → MTL |
+| daily-note-creator-v2 | Daily 6AM CDT | Create daily note from MTL |
+| morning-briefing | Daily 7AM CDT | Rich HTML email: overdue + due today + yesterday captures |
+| overdue-task-alert-v2 | Daily 8AM CDT | Overdue task alert (superseded by morning-briefing) |
+| weekly-digest-v2 | Sunday 6PM CDT | Weekly rock review email |
+| vault-health-report | Sunday 8PM CDT | Inbox health: brain dumps, article queue, processed count |
+| live-dashboard-updater | Hourly | Update 000_Master Dashboard/Live Dashboard.md |
+| link-enricher | Hourly | Enrich article URLs with og:title + og:description |
+| telegram-capture | Webhook | Instant brain dump / article capture via Telegram bot |
+| system-health-monitor | Every 6h | Infrastructure health check |
+| error-handler | On error | Global error capture + email alert |
+| article-processor | 8AM + 7PM CDT | Process queued article URLs into vault notes |
+| ai-brain | Sub-workflow | Shared OpenRouter (Llama 3.3 70B) intelligence layer — called by other workflows for classify/summarize/brief/triage/review jobs |
+| job-search-pipeline | Manual / scheduled | Native n8n v3 job search pipeline (independent system) |
+
+**Repo layout note:** v1 workflows superseded by v2 are kept under [workflows/archive/v1/](workflows/archive/v1/) for one cleanup cycle in case rollback is needed. Reference snippets (S3 upload patterns) live under [docs/snippets/](docs/snippets/), not [workflows/n8n/](workflows/n8n/).
+
 ## Current Status
-v2 pipeline implementation in progress. Python processor working (section-aware, regex extraction, OpenRouter cascade). First successful extraction: tasks + articles written to MinIO 2026-04-02. n8n workflows being rebuilt as v2 with 7-stage pipeline. See gemini.md for task-level status.
+v2 pipeline LIVE (2026-04-08). All 14 v2 + sub-workflows active in n8n. E2E test 11/11 passing. MinIO key rotated.
+Pending: SMTP_PASS in .env (for future credential re-deployment), Telegram bot setup, OpenRouter key rotation, Bitwarden MCP activation.
+See gemini.md for full task history.

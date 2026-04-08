@@ -135,15 +135,26 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "Content-Type", "value": "application/json" },
-            { "name": "HTTP-Referer", "value": "https://github.com/ObsidianHomeOrchestrator" },
-            { "name": "X-Title", "value": "Life OS AI Brain" }
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://github.com/ObsidianHomeOrchestrator"
+            },
+            {
+              "name": "X-Title",
+              "value": "Life OS AI Brain"
+            }
           ]
         },
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000 }) }}",
-        "options": { "timeout": 30000 }
+        "options": {
+          "timeout": 30000
+        }
       },
       "id": "groq-review",
       "name": "OpenRouter: Llama 3.3 70B",
