@@ -56,58 +56,35 @@ The automation and configuration layer for Aaron's Life OS — a comprehensive p
 Priority values: A (critical/needle-mover), B (important), C (nice-to-have)
 Area values: faith, family, business, consulting, work, health, home, personal
 
-## Installed Skills (.claude/commands/)
+## Skill Library
 
-### Core & Orchestration
+**Primary source:** `! Foundation_AddOn_Project/CLAUDE.md` — 60+ skills across 6 tiers (always-on meta-layer, core, engineering, superpowers, strategy, gstack, tech). That file is authoritative. Reference it for the full routing table and skill catalog.
+
+**Always-on meta-layer (Foundation AddOn — no trigger needed):**
+`anti-hallucination` · `prompt-amplifier` · `cognitive-excellence` · `context-guardian` · `efficiency-engine` · `secure-by-design` · `solution-architect-engine` · `verification-before-completion` · `session-optimizer`
+
+**OHO-specific skills (Life OS domain — not in Foundation AddOn):**
+
 | Skill | Purpose |
 |-------|---------|
-| `polychronos-team` | Multi-agent orchestration (B.L.A.S.T. protocol) |
-| `master-orchestrator` | Skill routing and chaining layer |
-| `skill-builder` | Build new custom skills |
-| `skill-sentinel` | Security scanner for AI skills before deployment |
-| `prompt-amplifier` | Prompt enhancement engine |
-| `portable-ai-instructions` | Generate CLAUDE.md/AGENTS.md for any project |
-| `knowledge-management` | PKM architecture and documentation systems |
-
-### Life OS & Productivity
-| Skill | Purpose |
-|-------|---------|
-| `obsidian-vault-architect` | Vault structure, Dataview, templates |
+| `obsidian-vault-architect` | Vault structure, Dataview queries, templates |
 | `obsidian-automation-architect` | n8n + webhook + Python vault automation |
 | `obsidian-project-organizer` | File/folder organization for vault AND code projects |
-| `life-os-designer` | Cross-domain life system design |
+| `life-os-designer` | Cross-domain life system design and weekly rhythms |
 | `personal-productivity-os` | Deep work, energy management, habit systems |
-
-### Infrastructure & Engineering
-| Skill | Purpose |
-|-------|---------|
 | `homelab-life-stack` | Docker Compose, n8n, homelab service design |
-| `n8n-workflow-architect` | n8n workflow design and automation architecture |
-| `docker-infrastructure` | Docker/container infrastructure for self-hosted envs |
-| `mcp-server-builder` | MCP server design and deployment |
-| `app-security-architect` | OWASP, zero-trust, AI/LLM security |
-| `code-review` | Security and correctness review hierarchy |
-| `database-design` | PostgreSQL schema design |
-| `testing-strategy` | pytest patterns, TDD, integration testing |
-| `data-analytics-engine` | SQL, dashboards, statistical analysis |
-
-### Life Domains
-| Skill | Purpose |
-|-------|---------|
 | `bible-study-theologian` | Exegesis, word studies, theological research |
 | `faith-life-integration` | Biblical wisdom applied to decisions |
 | `sunday-school-teacher` | Curriculum design, lesson planning |
 | `health-biohacking-protocol` | Supplement protocols, biomarker interpretation |
 | `biohacking-data-pipeline` | Health data ETL pipelines |
 | `consulting-operations` | SOWs, proposals, client management |
-
-### Business & Strategy
-| Skill | Purpose |
-|-------|---------|
-| `entrepreneurial-os` | Business strategy and operating rhythm |
 | `ai-business-optimizer` | AI automation ROI and process classification |
-| `business-genius` | Business strategy with 15 specialist sub-skills |
-| `financial-model-architect` | SaaS metrics, revenue modeling |
+| `wrapup` | End-of-session: summarize, save memory, push to NotebookLM AI Brain |
+| `notebooklm` | NotebookLM CLI — podcasts, quizzes, slides from any content |
+
+**Engineering + strategy skills (Foundation AddOn):**
+`n8n-workflow-architect` · `code-review` · `testing-strategy` · `app-security-architect` · `database-design` · `docker-infrastructure` · `mcp-server-builder` · `business-genius` · `entrepreneurial-os` · `financial-model-architect` · `polychronos-team` · `master-orchestrator` · `skill-builder` · `parallel-execution-strategist` + 34 gstack skills + 25 tech stack skills
 
 ## Polychronos Omega Integration
 Use the `polychronos-team` skill to invoke the full agent guild for complex tasks:
