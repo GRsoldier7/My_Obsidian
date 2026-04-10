@@ -56,7 +56,7 @@ validate-env:
 
 ## Run unit tests with coverage report (target: ≥80% on tools/)
 coverage:
-	$(PYTEST) tests/ --cov=tools --cov-report=term-missing \
+	COVERAGE_FILE=/tmp/.oho_coverage $(PYTEST) tests/ --cov=tools --cov-report=term-missing \
 		-k "not integration" \
 		--tb=short
 

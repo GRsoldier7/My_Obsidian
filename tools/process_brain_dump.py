@@ -141,7 +141,7 @@ def s3_client():
         endpoint_url=MINIO_ENDPOINT,
         aws_access_key_id=MINIO_ACCESS_KEY,
         aws_secret_access_key=MINIO_SECRET_KEY,
-        config=Config(signature_version="s3v4"),
+        config=Config(signature_version="s3v4", connect_timeout=10, read_timeout=30),
         region_name="us-east-1",
     )
 
@@ -252,8 +252,53 @@ def is_section_empty(section_content: str) -> bool:
     return len(real_lines) == 0
 
 
+def _strip_yaml_frontmatter(text: str) -> str:
+    """Strip YAML front matter block (--- ... ---) and common template boilerplate.
+
+    Also removes:
+    - H1 headings (# Title) — brain dump file titles
+    - Blockquote lines (> ...) — "How to use" template instructions
+    - Horizontal rules (--- / ***)
+    Returns the remaining user-authored body text.
+    """
+    text = text.strip()
+    # Strip YAML block
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            text = text[end + 4:].strip()
+    # Strip line-by-line boilerplate
+    clean_lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        # H1 headings (file title)
+        if re.match(r"^#\s+", stripped):
+            continue
+        # Blockquote instructions
+        if stripped.startswith(">"):
+            continue
+        # Horizontal rules
+        if re.match(r"^-{3,}$|^\*{3,}$|^_{3,}$", stripped):
+            continue
+        clean_lines.append(line)
+    return "\n".join(clean_lines).strip()
+
+
 def extract_real_sections(sections: dict[str, str]) -> dict[str, str]:
-    """Return only sections that have real user content."""
+    """Return only sections that have real user content.
+
+    For files with no ## section headers (e.g. plain-text brain dumps, ad-hoc
+    notes like Coding.md or Website & Business.md), all content lands in
+    '_frontmatter'.  If no named sections have real content we fall back to
+    treating the body of '_frontmatter' (after stripping the YAML block and
+    template boilerplate) as a generic 'To Do's' section so the content is not
+    silently discarded.
+
+    Structured brain dump templates (Faith, Family, etc.) have ## sections and
+    will never trigger the fallback even if the frontmatter body has a H1 title,
+    because the fallback only fires when real{} is still empty after the named
+    section pass.
+    """
     real = {}
     for header, body in sections.items():
         if header.startswith("_"):
@@ -266,6 +311,15 @@ def extract_real_sections(sections: dict[str, str]) -> dict[str, str]:
             if known in header_clean or header_clean in known:
                 real[header] = body
                 break
+
+    # Fallback: header-less files — treat stripped body as a task section.
+    # Only activates when NO named sections were found (i.e. truly header-less
+    # files like Coding.md, Website & Business.md, Bible post on Social Media.md).
+    if not real and "_frontmatter" in sections:
+        body = _strip_yaml_frontmatter(sections["_frontmatter"])
+        if not is_section_empty(body):
+            real["✅ To Do's"] = body
+
     return real
 
 
@@ -389,6 +443,20 @@ def regex_extract_tasks(section_body: str, file_area: str) -> list[str]:
             desc = _clean_task_text(stripped)
             priority = infer_priority(desc)
             tasks.append(_build_task(desc, file_area, priority))
+
+        # Plain sentence with explicit inline priority marker: "Do thing - A"
+        # Catches the user's common shorthand: "Apply to Reggie program ASAP - A"
+        elif re.match(r".{10,}\s+-\s+[ABC](\s*-\s*due\s+\d{4}-\d{2}-\d{2})?$", stripped):
+            # Extract priority from the suffix
+            priority_match = re.search(r"\s+-\s+([ABC])(?:\s+-\s+due\s+(\d{4}-\d{2}-\d{2}))?$", stripped)
+            if priority_match:
+                explicit_priority = priority_match.group(1)
+                due_date = priority_match.group(2)
+                # Strip the " - A" suffix from the description
+                desc = stripped[:priority_match.start()].strip()
+                desc = _clean_task_text(desc)
+                if len(desc) >= 5:
+                    tasks.append(_build_task(desc, file_area, explicit_priority, due_date))
 
     return tasks
 
@@ -701,6 +769,8 @@ def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
     log.items_extracted += tasks_written + notes_written + len(all_articles)
     if tasks_written > 0:
         log.write_verifications_pass += 1
+    elif all_tasks and tasks_written == 0:
+        log.write_verifications_fail += 1
 
     if all_articles:
         append_articles(s3, all_articles, today, dry_run)

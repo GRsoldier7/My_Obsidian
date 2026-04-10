@@ -8,11 +8,13 @@ from process_brain_dump import (
     parse_sections,
     is_section_empty,
     extract_real_sections,
+    _strip_yaml_frontmatter,
     infer_area_from_filename,
     validate_task_line,
     quality_gate_tasks,
     section_type,
     reset_to_template,
+    regex_extract_tasks,
 )
 
 
@@ -136,6 +138,106 @@ def test_extract_real_sections_all_empty():
     }
     real = extract_real_sections(sections)
     assert len(real) == 0
+
+
+# ── extract_real_sections — header-less file fallback ────────────────────────
+
+def test_extract_real_sections_headerless_plain_text():
+    """Files with no ## headers (e.g. Coding.md) fall back to _frontmatter body."""
+    sections = {
+        "_frontmatter": "- Do this thing\n- And this other thing\n",
+    }
+    real = extract_real_sections(sections)
+    assert "✅ To Do's" in real
+    assert "Do this thing" in real["✅ To Do's"]
+
+
+def test_extract_real_sections_headerless_template_file_stays_empty():
+    """A structured brain dump template with all-empty named sections should return {} even
+    though _frontmatter has a H1 title and blockquote instructions."""
+    content = """---
+domain: Consulting
+area: consulting
+status: empty
+---
+
+# 💼 Brain Dump — Consulting
+
+> How to use: drop anything here.
+
+---
+
+## ✅ To Do's
+<!-- Format: - [ ] <task> -->
+"""
+    sections = parse_sections(content)
+    real = extract_real_sections(sections)
+    assert len(real) == 0, f"Template file should be empty, got: {real}"
+
+
+def test_extract_real_sections_headerless_with_yaml():
+    """Header-less file with YAML front matter — YAML stripped, real body detected."""
+    sections = {
+        "_frontmatter": "---\nstatus: empty\n---\nJohn 6:44 - God pulls us into his presence.",
+    }
+    real = extract_real_sections(sections)
+    assert "✅ To Do's" in real
+    assert "John 6:44" in real["✅ To Do's"]
+
+
+# ── _strip_yaml_frontmatter ───────────────────────────────────────────────────
+
+def test_strip_yaml_frontmatter_removes_yaml():
+    text = "---\ndomain: faith\n---\n\nSome real content"
+    result = _strip_yaml_frontmatter(text)
+    assert "domain" not in result
+    assert "Some real content" in result
+
+
+def test_strip_yaml_frontmatter_removes_h1():
+    text = "---\nstatus: empty\n---\n\n# Brain Dump Title\n\nReal content here"
+    result = _strip_yaml_frontmatter(text)
+    assert "Brain Dump Title" not in result
+    assert "Real content here" in result
+
+
+def test_strip_yaml_frontmatter_removes_blockquotes():
+    text = "---\nstatus: empty\n---\n\n> How to use this template\n\nReal content"
+    result = _strip_yaml_frontmatter(text)
+    assert "How to use" not in result
+    assert "Real content" in result
+
+
+def test_strip_yaml_frontmatter_no_yaml():
+    text = "Plain text with no frontmatter\n- item one"
+    result = _strip_yaml_frontmatter(text)
+    assert "Plain text" in result
+    assert "item one" in result
+
+
+# ── regex_extract_tasks — plain-text priority suffix ─────────────────────────
+
+def test_regex_extract_tasks_priority_suffix():
+    """Lines ending in ' - A/B/C' should be captured with the explicit priority."""
+    body = "Apply to Reggie program ASAP - A\nScraping websites for Biohacking - A"
+    tasks = regex_extract_tasks(body, "business")
+    assert len(tasks) == 2
+    assert "[priority:: A]" in tasks[0]
+    assert "Apply to Reggie program ASAP" in tasks[0]
+
+
+def test_regex_extract_tasks_priority_suffix_b():
+    body = "Review the quarterly report - B"
+    tasks = regex_extract_tasks(body, "work")
+    assert len(tasks) == 1
+    assert "[priority:: B]" in tasks[0]
+
+
+def test_regex_extract_tasks_no_false_positive_short():
+    """Short lines like 'A - B' should not match the priority suffix pattern."""
+    body = "A - B"
+    tasks = regex_extract_tasks(body, "personal")
+    assert len(tasks) == 0
 
 
 # ── infer_area_from_filename ──────────────────────────────────────────────────
