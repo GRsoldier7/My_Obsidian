@@ -144,7 +144,8 @@
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
-      }
+      },
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -215,7 +216,8 @@
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
-      }
+      },
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -260,7 +262,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Verify X-Telegram-Bot-Api-Secret-Token header\n// Set TELEGRAM_WEBHOOK_SECRET in n8n environment variables\nconst secret = $env.TELEGRAM_WEBHOOK_SECRET || '';\nconst provided = $input.first().json.headers?.['x-telegram-bot-api-secret-token'] || \n                 $input.first().json.headers?.['X-Telegram-Bot-Api-Secret-Token'] || '';\n\n// If secret is configured, enforce it; if not configured, log warning but continue\nif (secret && provided !== secret) {\n  throw new Error(`Webhook auth failed: invalid secret token. Set TELEGRAM_WEBHOOK_SECRET in n8n env.`);\n}\nif (!secret) {\n  // Pass through but warn\n  return [{ json: { ...$input.first().json, _securityWarning: 'TELEGRAM_WEBHOOK_SECRET not set — webhook is unprotected' } }];\n}\nreturn $input.all();"
+        "jsCode": "// Verify X-Telegram-Bot-Api-Secret-Token header.\n// Set TELEGRAM_WEBHOOK_SECRET in n8n environment variables.\n// On failure: emit a _skip item rather than throwing — throwing would trigger\n// the global error handler and email-spam on every spoofed/malformed request.\nconst secret = $env.TELEGRAM_WEBHOOK_SECRET || '';\nconst headers = $input.first().json.headers || {};\nconst provided = headers['x-telegram-bot-api-secret-token'] || headers['X-Telegram-Bot-Api-Secret-Token'] || '';\n\nif (secret && provided !== secret) {\n  return [{ json: { _skip: true, _reason: 'webhook auth failed' } }];\n}\nreturn [{ json: { ...$input.first().json, _securityWarning: secret ? null : 'TELEGRAM_WEBHOOK_SECRET not set' } }];"
       },
       "id": "verify-webhook-secret",
       "name": "Verify Webhook Secret",

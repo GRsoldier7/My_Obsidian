@@ -4,35 +4,24 @@
     {
       "parameters": {
         "rule": {
-          "interval": [
-            {
-              "field": "cronExpression",
-              "expression": "0 */6 * * *"
-            }
-          ]
+          "interval": [{ "field": "cronExpression", "expression": "0 */6 * * *" }]
         }
       },
       "id": "trigger",
       "name": "Every 6 Hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [
-        220,
-        300
-      ]
+      "position": [220, 300]
     },
     {
       "parameters": {
-        "jsCode": "const checks = [];\nconst today = new Date().toISOString().split('T')[0];\nconst hour = new Date().getUTCHours().toString().padStart(2, '0');\n\n// Check 1: MinIO (list bucket)\ntry {\n  // S3 list will be done via next node\n  checks.push({ name: 'minio', status: 'pending' });\n} catch(e) {\n  checks.push({ name: 'minio', status: 'fail', error: e.message });\n}\n\nreturn [{ json: { checks, today, hour, logKey: `99_System/logs/health-monitor-${today}-${hour}.json` } }];"
+        "jsCode": "const checks = [];\nconst today = new Date().toISOString().split('T')[0];\nconst hour = new Date().getUTCHours().toString().padStart(2, '0');\nreturn [{ json: { checks, today, hour, logKey: `99_System/logs/health-monitor-${today}-${hour}.json` } }];"
       },
       "id": "init",
       "name": "Init Checks",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        440,
-        300
-      ]
+      "position": [440, 300]
     },
     {
       "parameters": {
@@ -44,15 +33,9 @@
       "name": "S3: Check North Star",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        660,
-        200
-      ],
+      "position": [660, 200],
       "credentials": {
-        "s3": {
-          "id": "__MINIO_CRED_ID__",
-          "name": "MinIO S3"
-        }
+        "s3": { "id": "__MINIO_CRED_ID__", "name": "MinIO S3" }
       },
       "continueOnFail": true
     },
@@ -66,15 +49,9 @@
       "name": "S3: Check MTL",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        660,
-        400
-      ],
+      "position": [660, 400],
       "credentials": {
-        "s3": {
-          "id": "__MINIO_CRED_ID__",
-          "name": "MinIO S3"
-        }
+        "s3": { "id": "__MINIO_CRED_ID__", "name": "MinIO S3" }
       },
       "continueOnFail": true
     },
@@ -86,62 +63,53 @@
       "name": "Evaluate Results",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        880,
-        300
-      ]
+      "position": [880, 300]
     },
     {
       "parameters": {
         "conditions": {
-          "options": {
-            "leftValue": "",
-            "caseSensitive": true,
-            "typeValidation": "strict"
-          },
+          "options": { "leftValue": "", "caseSensitive": true, "typeValidation": "strict" },
           "combinator": "and",
-          "conditions": [
-            {
-              "leftValue": "={{ $json.anyFail }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "equals"
-              }
-            }
-          ]
+          "conditions": [{
+            "leftValue": "={{ $json.anyFail }}",
+            "rightValue": true,
+            "operator": { "type": "boolean", "operation": "equals" }
+          }]
         }
       },
       "id": "if-fail",
       "name": "Any Failures?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [
-        1100,
-        300
-      ]
+      "position": [1100, 300]
     },
     {
       "parameters": {
         "fromEmail": "__NOTIFICATION_EMAIL__",
         "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "=🚨 Health Check FAILED — {{ $json.today }}",
-        "text": "=System health check failed.\n\nChecks:\n{{ JSON.stringify($json.checks, null, 2) }}"
+        "html": "=<h2>System Health Check FAILED</h2><p>Date: {{ $json.today }}</p><pre>{{ JSON.stringify($json.checks, null, 2) }}</pre>",
+        "options": { "emailFormat": "html" }
       },
       "id": "email-alert",
       "name": "Email: Health Alert",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [
-        1320,
-        200
-      ],
+      "position": [1320, 200],
       "credentials": {
-        "smtp": {
-          "id": "__SMTP_CRED_ID__",
-          "name": "Gmail SMTP (Aaron)"
-        }
-      }
+        "smtp": { "id": "__SMTP_CRED_ID__", "name": "Gmail SMTP (Aaron)" }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $json.logContent;\nconst key = $json.logKey;\nconst buf = Buffer.from(content, 'utf-8');\nreturn [{ json: $json, binary: { data: { data: buf.toString('base64'), mimeType: 'application/json', fileName: key.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
+      },
+      "id": "convert-log-binary",
+      "name": "Convert Log to Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 400]
     },
     {
       "parameters": {
@@ -155,107 +123,40 @@
       "name": "S3: Write Log",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        1320,
-        400
-      ],
+      "position": [1540, 400],
       "credentials": {
-        "s3": {
-          "id": "__MINIO_CRED_ID__",
-          "name": "MinIO S3"
-        }
-      }
+        "s3": { "id": "__MINIO_CRED_ID__", "name": "MinIO S3" }
+      },
+      "continueOnFail": true
     }
   ],
   "connections": {
     "Every 6 Hours": {
-      "main": [
-        [
-          {
-            "node": "Init Checks",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Init Checks", "type": "main", "index": 0 }]]
     },
     "Init Checks": {
-      "main": [
-        [
-          {
-            "node": "S3: Check North Star",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "S3: Check MTL",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "S3: Check North Star", "type": "main", "index": 0 }]]
     },
     "S3: Check North Star": {
-      "main": [
-        [
-          {
-            "node": "Evaluate Results",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "S3: Check MTL", "type": "main", "index": 0 }]]
     },
     "S3: Check MTL": {
-      "main": [
-        [
-          {
-            "node": "Evaluate Results",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Evaluate Results", "type": "main", "index": 0 }]]
     },
     "Evaluate Results": {
-      "main": [
-        [
-          {
-            "node": "Any Failures?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[
+        { "node": "Any Failures?", "type": "main", "index": 0 },
+        { "node": "Convert Log to Binary", "type": "main", "index": 0 }
+      ]]
     },
     "Any Failures?": {
       "main": [
-        [
-          {
-            "node": "Email: Health Alert",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "S3: Write Log",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "Email: Health Alert", "type": "main", "index": 0 }],
+        []
       ]
     },
-    "Email: Health Alert": {
-      "main": [
-        [
-          {
-            "node": "S3: Write Log",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+    "Convert Log to Binary": {
+      "main": [[{ "node": "S3: Write Log", "type": "main", "index": 0 }]]
     }
   },
   "settings": {

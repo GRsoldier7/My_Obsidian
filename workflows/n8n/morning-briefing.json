@@ -7,7 +7,7 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 7 * * *"
+              "expression": "0 12 * * *"
             }
           ]
         }
@@ -114,7 +114,8 @@
           "id": "__SMTP_CRED_ID__",
           "name": "Gmail SMTP (Aaron)"
         }
-      }
+      },
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -163,7 +164,8 @@
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
-      }
+      },
+      "continueOnFail": true
     }
   ],
   "connections": {

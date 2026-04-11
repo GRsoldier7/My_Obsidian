@@ -4,22 +4,14 @@
     {
       "parameters": {
         "rule": {
-          "interval": [
-            {
-              "field": "cronExpression",
-              "expression": "0 * * * *"
-            }
-          ]
+          "interval": [{ "field": "cronExpression", "expression": "0 * * * *" }]
         }
       },
       "id": "trigger",
       "name": "Every Hour",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [
-        220,
-        300
-      ]
+      "position": [220, 300]
     },
     {
       "parameters": {
@@ -29,10 +21,7 @@
       "name": "Set Time",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        440,
-        300
-      ]
+      "position": [440, 300]
     },
     {
       "parameters": {
@@ -44,30 +33,39 @@
       "name": "S3: Read MTL",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        660,
-        300
-      ],
+      "position": [660, 300],
       "credentials": {
-        "s3": {
-          "id": "__MINIO_CRED_ID__",
-          "name": "MinIO S3"
-        }
+        "s3": { "id": "__MINIO_CRED_ID__", "name": "MinIO S3" }
       },
       "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "const { today, timeStr, dayOfWeek, updatedAt } = $('Set Time').first().json;\n\nlet mtl = '';\ntry {\n  const bin = $('S3: Read MTL').first().binary?.data;\n  if (bin) mtl = Buffer.from(bin.data, 'base64').toString('utf-8');\n} catch(e) {}\n\nconst areaEmoji = { faith:'🙏', family:'👨‍👩‍👧', business:'🚀', consulting:'💼', work:'🏥', health:'💪', home:'🏠', personal:'🎯' };\nconst AREAS = ['faith','family','business','consulting','work','health','home','personal'];\n\n// Parse all open tasks\nconst allTasks = [];\nconst re = /^- \\[ \\] (.+?)\\[area:: (\\w+)\\].*?\\[priority:: ([ABC])\\](?:.*?\\[due:: (\\d{4}-\\d{2}-\\d{2})\\])?/gm;\nlet m;\nwhile ((m = re.exec(mtl)) !== null) {\n  allTasks.push({ task: m[1].trim(), area: m[2], priority: m[3], due: m[4] || null });\n}\n\nconst overdue   = allTasks.filter(t => t.due && t.due < today);\nconst dueToday  = allTasks.filter(t => t.due === today);\nconst upcoming  = allTasks.filter(t => t.due && t.due > today).slice(0, 10);\nconst noDue     = allTasks.filter(t => !t.due);\n\nconst byArea = {};\nfor (const area of AREAS) byArea[area] = allTasks.filter(t => t.area === area).length;\n\nconst priorityCounts = { A: allTasks.filter(t=>t.priority==='A').length, B: allTasks.filter(t=>t.priority==='B').length, C: allTasks.filter(t=>t.priority==='C').length };\n\n// Build Obsidian Markdown dashboard\nconst pct = (n, total) => total > 0 ? Math.round(n/total*100) : 0;\n\nlet md = `---\\ntype: live-dashboard\\nupdated: ${today}T${timeStr}\\n---\\n\\n`;\nmd += `# 🧠 Life OS Dashboard\\n\\n> 🔄 **Last updated:** ${updatedAt}\\n\\n`;\n\n// Summary stats\nmd += `## 📈 Task Overview\\n\\n`;\nmd += `| Metric | Count |\\n|---|---|\\n`;\nmd += `| 🔥 Overdue | **${overdue.length}** |\\n`;\nmd += `| 📅 Due Today | **${dueToday.length}** |\\n`;\nmd += `| 📆 Upcoming | ${upcoming.length} |\\n`;\nmd += `| ❓ No Due Date | ${noDue.length} |\\n`;\nmd += `| 📋 Total Open | ${allTasks.length} |\\n`;\nmd += `| 🔴 Priority A | ${priorityCounts.A} | \\n`;\nmd += `| 🟡 Priority B | ${priorityCounts.B} |\\n`;\nmd += `| ⚪ Priority C | ${priorityCounts.C} |\\n\\n`;\n\n// Area breakdown\nmd += `## 🗂️ By Life Area\\n\\n`;\nfor (const area of AREAS) {\n  const count = byArea[area] || 0;\n  const bar = '█'.repeat(Math.min(count, 20)) + '░'.repeat(Math.max(0, 10-Math.min(count,10)));\n  md += `| ${areaEmoji[area] || '📌'} ${area.charAt(0).toUpperCase()+area.slice(1)} | ${count} tasks | \\`${bar}\\` |\\n`;\n}\nmd += '\\n';\n\n// Overdue section\nif (overdue.length > 0) {\n  md += `## 🔥 Overdue (${overdue.length})\\n\\n`;\n  overdue.sort((a,b) => a.priority < b.priority ? -1 : 1).slice(0, 15).forEach(t => {\n    const days = Math.floor((new Date(today) - new Date(t.due)) / 86400000);\n    md += `- [ ] ${t.task} [area:: ${t.area}] [priority:: ${t.priority}] [due:: ${t.due}] ⚠️ ${days}d overdue\\n`;\n  });\n  md += '\\n';\n}\n\n// Due today\nif (dueToday.length > 0) {\n  md += `## 📅 Due Today (${dueToday.length})\\n\\n`;\n  dueToday.sort((a,b) => a.priority < b.priority ? -1 : 1).forEach(t => {\n    md += `- [ ] ${t.task} [area:: ${t.area}] [priority:: ${t.priority}]\\n`;\n  });\n  md += '\\n';\n}\n\n// Q2 Rocks\nmd += `## 🎯 Q2 2026 Rocks\\n\\n`;\nmd += `- [ ] 🙏 Faith: Launch social media Bible study (4 sessions)\\n`;\nmd += `- [ ] 👨‍👩‍👧 Family: Marriage Alignment Questionnaire + bi-weekly check-in\\n`;\nmd += `- [ ] 🚀 Business: Ship MVP — website live, offer defined, 3 outreach convos\\n`;\nmd += `- [ ] 🏥 Work: Deliver Union project\\n`;\nmd += `- [ ] 💪 Health: Hip decision + 3x/week gym for 8 weeks\\n\\n`;\n\nmd += `---\\n*Auto-refreshed hourly by ObsidianHomeOrchestrator | ${allTasks.length} open tasks across ${AREAS.length} areas*\\n`;\n\nconst buf = Buffer.from(md, 'utf-8');\nreturn [{ json: {\n  key: '000_Master Dashboard/Live Dashboard.md',\n  today, updatedAt,\n  totalTasks: allTasks.length,\n  overdueCount: overdue.length\n}, binary: { data: { data: buf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: 'Live Dashboard.md', fileExtension: 'md', fileSize: buf.length } } }];"
+        "jsCode": "const { today, timeStr, dayOfWeek, updatedAt } = $('Set Time').first().json;\n\nlet mtl = '';\nlet mtlReadFailed = false;\ntry {\n  const bin = $('S3: Read MTL').first().binary?.data;\n  if (bin) mtl = Buffer.from(bin.data, 'base64').toString('utf-8');\n  else mtlReadFailed = true;\n} catch(e) {\n  mtlReadFailed = true;\n}\n\n// SAFETY: if MTL read failed, do NOT overwrite the existing dashboard with an empty one.\nif (mtlReadFailed || !mtl.trim()) {\n  return [{ json: { _skip: true, reason: 'MTL read failed — preserving existing dashboard', today, updatedAt } }];\n}\n\nconst areaEmoji = { faith:'🙏', family:'👨‍👩‍👧', business:'🚀', consulting:'💼', work:'🏥', health:'💪', home:'🏠', personal:'🎯' };\nconst AREAS = ['faith','family','business','consulting','work','health','home','personal'];\n\n// Parse all open tasks\nconst allTasks = [];\nconst re = /^- \\[ \\] (.+?)\\[area:: (\\w+)\\].*?\\[priority:: ([ABC])\\](?:.*?\\[due:: (\\d{4}-\\d{2}-\\d{2})\\])?/gm;\nlet m;\nwhile ((m = re.exec(mtl)) !== null) {\n  allTasks.push({ task: m[1].trim(), area: m[2], priority: m[3], due: m[4] || null });\n}\n\nconst overdue   = allTasks.filter(t => t.due && t.due < today);\nconst dueToday  = allTasks.filter(t => t.due === today);\nconst upcoming  = allTasks.filter(t => t.due && t.due > today).slice(0, 10);\nconst noDue     = allTasks.filter(t => !t.due);\n\nconst byArea = {};\nfor (const area of AREAS) byArea[area] = allTasks.filter(t => t.area === area).length;\n\nconst priorityCounts = { A: allTasks.filter(t=>t.priority==='A').length, B: allTasks.filter(t=>t.priority==='B').length, C: allTasks.filter(t=>t.priority==='C').length };\n\n// Build Obsidian Markdown dashboard\nlet md = `---\\ntype: live-dashboard\\nupdated: ${today}T${timeStr}\\n---\\n\\n`;\nmd += `# 🧠 Life OS Dashboard\\n\\n> 🔄 **Last updated:** ${updatedAt}\\n\\n`;\n\nmd += `## 📈 Task Overview\\n\\n`;\nmd += `| Metric | Count |\\n|---|---|\\n`;\nmd += `| 🔥 Overdue | **${overdue.length}** |\\n`;\nmd += `| 📅 Due Today | **${dueToday.length}** |\\n`;\nmd += `| 📆 Upcoming | ${upcoming.length} |\\n`;\nmd += `| ❓ No Due Date | ${noDue.length} |\\n`;\nmd += `| 📋 Total Open | ${allTasks.length} |\\n`;\nmd += `| 🔴 Priority A | ${priorityCounts.A} | \\n`;\nmd += `| 🟡 Priority B | ${priorityCounts.B} |\\n`;\nmd += `| ⚪ Priority C | ${priorityCounts.C} |\\n\\n`;\n\nmd += `## 🗂️ By Life Area\\n\\n`;\nfor (const area of AREAS) {\n  const count = byArea[area] || 0;\n  const bar = '█'.repeat(Math.min(count, 20)) + '░'.repeat(Math.max(0, 10-Math.min(count,10)));\n  md += `| ${areaEmoji[area] || '📌'} ${area.charAt(0).toUpperCase()+area.slice(1)} | ${count} tasks | \\`${bar}\\` |\\n`;\n}\nmd += '\\n';\n\nif (overdue.length > 0) {\n  md += `## 🔥 Overdue (${overdue.length})\\n\\n`;\n  overdue.sort((a,b) => a.priority < b.priority ? -1 : 1).slice(0, 15).forEach(t => {\n    const days = Math.floor((new Date(today) - new Date(t.due)) / 86400000);\n    md += `- [ ] ${t.task} [area:: ${t.area}] [priority:: ${t.priority}] [due:: ${t.due}] ⚠️ ${days}d overdue\\n`;\n  });\n  md += '\\n';\n}\n\nif (dueToday.length > 0) {\n  md += `## 📅 Due Today (${dueToday.length})\\n\\n`;\n  dueToday.sort((a,b) => a.priority < b.priority ? -1 : 1).forEach(t => {\n    md += `- [ ] ${t.task} [area:: ${t.area}] [priority:: ${t.priority}]\\n`;\n  });\n  md += '\\n';\n}\n\nmd += `## 🎯 Q2 2026 Rocks\\n\\n`;\nmd += `- [ ] 🙏 Faith: Launch social media Bible study (4 sessions)\\n`;\nmd += `- [ ] 👨‍👩‍👧 Family: Marriage Alignment Questionnaire + bi-weekly check-in\\n`;\nmd += `- [ ] 🚀 Business: Ship MVP — website live, offer defined, 3 outreach convos\\n`;\nmd += `- [ ] 🏥 Work: Deliver Union project\\n`;\nmd += `- [ ] 💪 Health: Hip decision + 3x/week gym for 8 weeks\\n\\n`;\n\nmd += `---\\n*Auto-refreshed hourly by ObsidianHomeOrchestrator | ${allTasks.length} open tasks across ${AREAS.length} areas*\\n`;\n\nconst buf = Buffer.from(md, 'utf-8');\nreturn [{ json: {\n  key: '000_Master Dashboard/Live Dashboard.md',\n  today, updatedAt,\n  totalTasks: allTasks.length,\n  overdueCount: overdue.length\n}, binary: { data: { data: buf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: 'Live Dashboard.md', fileExtension: 'md', fileSize: buf.length } } }];"
       },
       "id": "build-dashboard",
       "name": "Build Dashboard",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        880,
-        300
-      ]
+      "position": [880, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "combinator": "and",
+          "conditions": [{
+            "leftValue": "={{ $json._skip }}",
+            "rightValue": true,
+            "operator": { "type": "boolean", "operation": "notEquals" }
+          }]
+        }
+      },
+      "id": "if-not-skip",
+      "name": "Should Write?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [990, 300]
     },
     {
       "parameters": {
@@ -81,61 +79,30 @@
       "name": "S3: Write Dashboard",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        1100,
-        300
-      ],
+      "position": [1100, 300],
       "credentials": {
-        "s3": {
-          "id": "__MINIO_CRED_ID__",
-          "name": "MinIO S3"
-        }
-      }
+        "s3": { "id": "__MINIO_CRED_ID__", "name": "MinIO S3" }
+      },
+      "continueOnFail": true
     }
   ],
   "connections": {
     "Every Hour": {
-      "main": [
-        [
-          {
-            "node": "Set Time",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Set Time", "type": "main", "index": 0 }]]
     },
     "Set Time": {
-      "main": [
-        [
-          {
-            "node": "S3: Read MTL",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "S3: Read MTL", "type": "main", "index": 0 }]]
     },
     "S3: Read MTL": {
-      "main": [
-        [
-          {
-            "node": "Build Dashboard",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Build Dashboard", "type": "main", "index": 0 }]]
     },
     "Build Dashboard": {
+      "main": [[{ "node": "Should Write?", "type": "main", "index": 0 }]]
+    },
+    "Should Write?": {
       "main": [
-        [
-          {
-            "node": "S3: Write Dashboard",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{ "node": "S3: Write Dashboard", "type": "main", "index": 0 }],
+        []
       ]
     }
   },

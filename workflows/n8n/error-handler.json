@@ -7,10 +7,7 @@
       "name": "Error Trigger",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
-      "position": [
-        220,
-        300
-      ]
+      "position": [220, 300]
     },
     {
       "parameters": {
@@ -20,10 +17,7 @@
       "name": "Format Error",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        440,
-        300
-      ]
+      "position": [440, 300]
     },
     {
       "parameters": {
@@ -39,16 +33,24 @@
       "name": "Email: Error Alert",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [
-        660,
-        300
-      ],
+      "position": [660, 300],
       "credentials": {
         "smtp": {
           "id": "__SMTP_CRED_ID__",
           "name": "Gmail SMTP (Aaron)"
         }
-      }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $json.logContent;\nconst key = $json.logKey;\nconst buf = Buffer.from(content, 'utf-8');\nreturn [{ json: $json, binary: { data: { data: buf.toString('base64'), mimeType: 'application/json', fileName: key.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
+      },
+      "id": "convert-log-binary",
+      "name": "Convert Log to Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300]
     },
     {
       "parameters": {
@@ -62,45 +64,30 @@
       "name": "S3: Write Error Log",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        880,
-        300
-      ],
+      "position": [1100, 300],
       "credentials": {
         "s3": {
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
-      }
+      },
+      "continueOnFail": true
     }
   ],
   "connections": {
     "Error Trigger": {
-      "main": [
-        [
-          {
-            "node": "Format Error",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[{ "node": "Format Error", "type": "main", "index": 0 }]]
     },
     "Format Error": {
-      "main": [
-        [
-          {
-            "node": "Email: Error Alert",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "S3: Write Error Log",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
+      "main": [[
+        { "node": "Email: Error Alert", "type": "main", "index": 0 }
+      ]]
+    },
+    "Email: Error Alert": {
+      "main": [[{ "node": "Convert Log to Binary", "type": "main", "index": 0 }]]
+    },
+    "Convert Log to Binary": {
+      "main": [[{ "node": "S3: Write Error Log", "type": "main", "index": 0 }]]
     }
   },
   "settings": {

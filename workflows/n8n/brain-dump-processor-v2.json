@@ -41,7 +41,8 @@
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
-      }
+      },
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -119,7 +120,8 @@
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
-      }
+      },
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -198,7 +200,8 @@
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
-      }
+      },
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -221,7 +224,8 @@
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
-      }
+      },
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -244,7 +248,8 @@
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
-      }
+      },
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -266,7 +271,45 @@
           "id": "__SMTP_CRED_ID__",
           "name": "Gmail SMTP (Aaron)"
         }
-      }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Write a 'no work' run log when there are no brain dump files to process.\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst log = JSON.stringify({\n  workflow: 'brain-dump-processor', run_date: today,\n  finished_at: new Date().toISOString(), status: 'no_work',\n  files_with_content: 0, tasks_extracted: 0,\n  articles_queued: 0, files_processed: []\n}, null, 2);\nconst buf = Buffer.from(log, 'utf-8');\nconst logKey = `99_System/logs/brain-dump-processor-${today}.json`;\nreturn [{ json: { logKey }, binary: { logFile: { data: buf.toString('base64'), mimeType: 'application/json', fileName: logKey.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
+      },
+      "id": "no-work-log",
+      "name": "Build No-Work Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.logKey }}",
+        "binaryPropertyName": "logFile",
+        "additionalFields": {}
+      },
+      "id": "s3-no-work-log",
+      "name": "S3: Write No-Work Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        500
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
     }
   ],
   "connections": {
@@ -312,7 +355,24 @@
             "index": 0
           }
         ],
-        []
+        [
+          {
+            "node": "Build No-Work Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build No-Work Log": {
+      "main": [
+        [
+          {
+            "node": "S3: Write No-Work Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Loop Each File": {
