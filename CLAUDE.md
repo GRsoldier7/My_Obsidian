@@ -147,10 +147,27 @@ Session token required — run `bw unlock --raw` and update `BW_SESSION` in `~/.
 | article-processor | 8AM + 7PM CDT | Process queued article URLs into vault notes |
 | ai-brain | Sub-workflow | Shared OpenRouter (Llama 3.3 70B) intelligence layer — called by other workflows for classify/summarize/brief/triage/review jobs |
 | job-search-pipeline | Manual / scheduled | Native n8n v3 job search pipeline (independent system) |
+| weekend-planner | Friday 5PM CDT | Weekend plan: GCal + MTL → HTML email + vault note (INACTIVE — needs GCAL_CRED_ID) |
 
 **Repo layout note:** v1 workflows superseded by v2 are kept under [workflows/archive/v1/](workflows/archive/v1/) for one cleanup cycle in case rollback is needed. Reference snippets (S3 upload patterns) live under [docs/snippets/](docs/snippets/), not [workflows/n8n/](workflows/n8n/).
 
+## Scripts
+
+| Script | Purpose |
+| ------ | ------- |
+| `scripts/archive_completed_tasks.py` | Archive `- [x]` tasks from MTL to Task Archive. Run manually when MTL has >10 completed tasks. Flags: `--dry-run`, `--verbose` |
+| `scripts/e2e_test.py` | End-to-end pipeline test (11 checks) |
+| `scripts/health_check.py` | MinIO + n8n connectivity checks |
+
+## Daily Note Creator — Key Fixes (2026-04-12)
+
+- **IF node check**: Was `$json.error exists` (broken in v1 executionOrder). Now `$json.ETag notExists` — checks for headObject SUCCESS indicator instead.
+- **Cron**: Changed from `0 11 * * *` (11AM CDT, wrong) to `0 6 * * *` (6AM CDT, correct) with `timezone: America/Chicago`.
+- **Template**: Added `## 🪨 Priority A Rocks` section + `## 🎯 Today's ONE Thing` heading.
+- **Task regex**: Now anchored `^- \[ \]` with `re.MULTILINE` to prevent false matches from header example text.
+
 ## Current Status
-v2 pipeline LIVE (2026-04-08). All 14 v2 + sub-workflows active in n8n. E2E test 11/11 passing. MinIO key rotated.
-Pending: SMTP_PASS in .env (for future credential re-deployment), Telegram bot setup, OpenRouter key rotation, Bitwarden MCP activation.
-See gemini.md for full task history.
+v2 pipeline LIVE (2026-04-12). 15 workflows deployed. Daily note creator fixed. 16 completed tasks archived.
+Weekend Planner deployed but INACTIVE (needs Google Calendar OAuth2 credential — see docs/google-calendar-setup.md).
+Pending: Google Calendar OAuth2 setup → GCAL_CRED_ID in .env → re-deploy to activate Weekend Planner. Telegram bot setup. OpenRouter key rotation.
+Next phase: Phase 3 (Telegram bot, completed task archiver cron, article enricher v2).

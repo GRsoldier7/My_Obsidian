@@ -1,0 +1,403 @@
+{
+  "name": "\ud83d\uddd3\ufe0f Weekend Planner \u2014 Friday 5PM",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 17 * * 5"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Schedule: Friday 5PM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst chicago = new Date(now.toLocaleString('en-US', { timeZone: 'America/Chicago' }));\n\n// Get day of week (0=Sun, 5=Fri, 6=Sat)\nconst dow = chicago.getDay();\n// Saturday is next day (we run Friday)\nconst satOffset = dow === 5 ? 1 : 0;\nconst sat = new Date(chicago);\nsat.setDate(chicago.getDate() + satOffset);\nconst sun = new Date(sat);\nsun.setDate(sat.getDate() + 1);\n\nfunction toISO(d) {\n  return d.toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\n}\n\n// ISO week number\nfunction getWeekNum(d) {\n  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));\n  date.setUTCDate(date.getUTCDate() + 4 - (date.getUTCDay() || 7));\n  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));\n  return Math.ceil((((date - yearStart) / 86400000) + 1) / 7);\n}\n\nconst satDate = toISO(sat);\nconst sunDate = toISO(sun);\nconst weekNum = getWeekNum(sat);\nconst year = sat.getFullYear();\n\nreturn [{ json: { satDate, sunDate, weekNum, year, generatedAt: now.toISOString() } }];"
+      },
+      "id": "set-weekend-dates",
+      "name": "Set Weekend Dates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
+      },
+      "id": "s3-read-mtl",
+      "name": "S3: Read MTL",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decode S3 binary to plain text for downstream cross-reference\nlet text = '';\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  text = buf.toString('utf-8');\n} catch(e) {}\nreturn [{ json: { ...($input.first().json), _text: text } }];"
+      },
+      "id": "decode-mtl",
+      "name": "Decode MTL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "id": "primary",
+          "__rl": true,
+          "mode": "id"
+        },
+        "returnAll": true,
+        "options": {
+          "orderBy": "startTime",
+          "singleEvents": true,
+          "timeMin": "={{ new Date($('Set Weekend Dates').first().json.satDate + 'T00:00:00').toISOString() }}",
+          "timeMax": "={{ new Date($('Set Weekend Dates').first().json.satDate + 'T23:59:59').toISOString() }}"
+        }
+      },
+      "id": "gcal-saturday",
+      "name": "GCal: Saturday Events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.1,
+      "position": [
+        1100,
+        300
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "__GCAL_CRED_ID__",
+          "name": "Google Calendar"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "id": "primary",
+          "__rl": true,
+          "mode": "id"
+        },
+        "returnAll": true,
+        "options": {
+          "orderBy": "startTime",
+          "singleEvents": true,
+          "timeMin": "={{ new Date($('Set Weekend Dates').first().json.sunDate + 'T00:00:00').toISOString() }}",
+          "timeMax": "={{ new Date($('Set Weekend Dates').first().json.sunDate + 'T23:59:59').toISOString() }}"
+        }
+      },
+      "id": "gcal-sunday",
+      "name": "GCal: Sunday Events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.1,
+      "position": [
+        1320,
+        300
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "__GCAL_CRED_ID__",
+          "name": "Google Calendar"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get decoded MTL text\nlet mtlContent = '';\ntry { mtlContent = $('Decode MTL').first().json._text || ''; } catch(e) {}\n\n// Get weekend dates\nconst { satDate, sunDate, weekNum, year } = $('Set Weekend Dates').first().json;\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\n\n// Parse Priority A rocks (open, no due date or due date in next 14 days)\nconst rocksA = [];\nconst re = /^- \\[ \\] (.+?)\\[area:: ([^\\]]+)\\].*?\\[priority:: A\\](?:.*?\\[due:: (\\d{4}-\\d{2}-\\d{2})\\])?/gm;\nlet m;\nwhile ((m = re.exec(mtlContent)) !== null) {\n  const task = m[1].trim();\n  const area = m[2];\n  const due = m[3] || null;\n  const cutoff = new Date(new Date().getTime() + 14*86400000).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\n  if (!due || due <= cutoff) {\n    rocksA.push({ task, area, due });\n  }\n}\n\n// Parse GCal events (graceful \u2014 may not exist)\nconst satEvents = [];\nconst sunEvents = [];\ntry {\n  const satItems = $('GCal: Saturday Events').all();\n  for (const item of satItems) {\n    const e = item.json;\n    if (e.summary && e.start) satEvents.push({ title: e.summary, start: e.start.dateTime || e.start.date, end: e.end?.dateTime || e.end?.date });\n  }\n} catch(e) {}\ntry {\n  const sunItems = $('GCal: Sunday Events').all();\n  for (const item of sunItems) {\n    const e = item.json;\n    if (e.summary && e.start) sunEvents.push({ title: e.summary, start: e.start.dateTime || e.start.date, end: e.end?.dateTime || e.end?.date });\n  }\n} catch(e) {}\n\n// Always add church block to Sunday\nconst churchBlock = { title: '\u26ea Church', start: `${sunDate}T08:30:00`, end: `${sunDate}T11:30:00`, hardBlock: true };\nsunEvents.push(churchBlock);\nsunEvents.sort((a, b) => (a.start || '').localeCompare(b.start || ''));\n\n// Format time from ISO string\nfunction fmtTime(iso) {\n  if (!iso || !iso.includes('T')) return '';\n  const [h, min] = iso.split('T')[1].split(':');\n  const hr = parseInt(h);\n  const ampm = hr >= 12 ? 'PM' : 'AM';\n  return `${hr % 12 || 12}:${min} ${ampm}`;\n}\n\n// Build vault note (Obsidian callout format)\nconst satFmt = new Date(satDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'America/Chicago' });\nconst sunFmt = new Date(sunDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'America/Chicago' });\nconst noteKey = `40_Timeline_Weekly/Weekly/${year}-W${weekNum.toString().padStart(2,'0')}-weekend.md`;\n\nconst topRock = rocksA[0];\nconst topRockLine = topRock ? `**${topRock.task}** \\`${topRock.area}\\` \\`A\\`` : 'Review your Master Task List and set your weekend intention.';\n\nfunction formatEventsObsidian(events) {\n  if (!events.length) return '> *No events scheduled.*\\n>';\n  return events.map(e => {\n    const time = e.start?.includes('T') ? `${fmtTime(e.start)}\u2013${fmtTime(e.end)} ` : '';\n    return `> - ${time}${e.title}`;\n  }).join('\\n') + '\\n>';\n}\n\nconst satLabel = satFmt.replace('Saturday, ', '');\nconst sunLabel = sunFmt.replace('Sunday, ', '');\n\nconst vaultNote = `---\ntype: weekend-plan\nweek: ${year}-W${weekNum.toString().padStart(2,'0')}\ndates: ${satDate} \u2014 ${sunDate}\ngenerated: ${new Date().toISOString()}\n---\n\n# \ud83d\uddd3\ufe0f Weekend Plan \u2014 ${satLabel} \u2013 ${sunLabel}\n\n> [!tip] \ud83c\udfaf Weekend Priority\n> ${topRockLine}\n\n> [!info]- \ud83d\udcc5 ${satFmt}\n>\n${formatEventsObsidian(satEvents)}\n\n> [!info]- \ud83d\udcc5 ${sunFmt}\n>\n${formatEventsObsidian(sunEvents)}\n\n> [!warning]- \ud83e\ude93 Priority A Rocks \u2014 Move These Forward\n>\n${rocksA.slice(0, 8).map(r => `> - [ ] ${r.task} \\`${r.area}\\`${r.due ? ` [due:: ${r.due}]` : ''}`).join('\\n')}\n>\n\n> [!note] \u270d\ufe0f Weekend Intentions\n> <!-- What do you want to accomplish this weekend? -->\n\n---\n*Auto-generated ${new Date().toISOString()} \u2014 ${rocksA.length} A-rocks, ${satEvents.length} Sat events, ${sunEvents.length} Sun events*\n`;\n\n// Build HTML email (same style as morning briefing)\nconst areaEmoji = { faith:'\ud83d\ude4f', family:'\ud83d\udc68\\u200d\ud83d\udc69\\u200d\ud83d\udc67', business:'\ud83d\ude80', consulting:'\ud83d\udcbc', work:'\ud83c\udfe5', health:'\ud83d\udcaa', home:'\ud83c\udfe0', personal:'\ud83c\udfaf' };\n\nfunction eventCard(e) {\n  const time = e.start?.includes('T') ? `<span style=\"color:#6b7280;font-size:11px\">${fmtTime(e.start)}\u2013${fmtTime(e.end)}</span> ` : '';\n  const bg = e.hardBlock ? '#fff3f3' : 'white';\n  const border = e.hardBlock ? '#dc2626' : '#6366f1';\n  return `<div style=\"border-left:3px solid ${border};background:${bg};padding:8px 12px;margin:3px 0;border-radius:0 4px 4px 0\">${time}<strong style=\"font-size:13px\">${e.title}</strong></div>`;\n}\n\nfunction rockCard(r) {\n  const emoji = areaEmoji[r.area] || '\ud83d\udccc';\n  return `<div style=\"border-left:4px solid #2563eb;background:white;padding:10px 14px;margin:4px 0;border-radius:0 4px 4px 0\"><span style=\"font-size:13px;font-weight:500\">${emoji} ${r.task}</span><div style=\"font-size:11px;color:#9ca3af;margin-top:3px;text-transform:capitalize\">${r.area}${r.due ? ` \u00b7 due ${r.due}` : ''}</div></div>`;\n}\n\nlet html = '<div style=\"font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f5f5f5;padding:0\">';\nhtml += `<div style=\"background:#1a1a2e;color:white;padding:24px 20px;border-radius:8px 8px 0 0\"><h1 style=\"margin:0;font-size:22px;font-weight:700\">\ud83d\uddd3\ufe0f Weekend Plan</h1><p style=\"margin:6px 0 0;opacity:0.75;font-size:14px\">${satFmt} \u2013 ${sunFmt}</p></div>`;\n\n// Top priority CTA\nhtml += `<div style=\"background:#2563eb;color:white;padding:14px 20px;margin:2px 0\"><p style=\"margin:0;font-size:10px;text-transform:uppercase;letter-spacing:1.5px;opacity:0.85\">\ud83c\udfaf WEEKEND PRIORITY</p><p style=\"margin:6px 0 0;font-size:15px;font-weight:bold;line-height:1.4\">${topRock ? `${areaEmoji[topRock.area] || ''} ${topRock.task}` : 'Set your weekend intention'}</p></div>`;\n\n// Saturday\nhtml += `<div style=\"padding:16px 20px;background:#f0f4ff;margin-top:2px\"><h2 style=\"margin:0 0 10px;font-size:15px;color:#1e40af;font-weight:700\">\ud83d\udcc5 ${satFmt}</h2>`;\nhtml += satEvents.length > 0 ? satEvents.map(eventCard).join('') : '<div style=\"color:#6b7280;font-size:13px\">No events scheduled \u2014 open time!</div>';\nhtml += '</div>';\n\n// Sunday\nhtml += `<div style=\"padding:16px 20px;background:#fff8f0;margin-top:2px\"><h2 style=\"margin:0 0 10px;font-size:15px;color:#92400e;font-weight:700\">\ud83d\udcc5 ${sunFmt}</h2>`;\nhtml += sunEvents.map(eventCard).join('');\nhtml += '</div>';\n\n// Priority A rocks\nif (rocksA.length > 0) {\n  html += `<div style=\"padding:16px 20px;background:#f0f4ff;margin-top:2px\"><h2 style=\"margin:0 0 10px;font-size:15px;color:#2563eb;font-weight:700\">\ud83e\ude93 Priority A Rocks \u2014 This Weekend</h2>${rocksA.slice(0,6).map(rockCard).join('')}</div>`;\n}\n\n// Footer\nhtml += `<div style=\"padding:14px 20px;background:#1a1a2e;border-radius:0 0 8px 8px;text-align:center\"><p style=\"margin:0;color:#9ca3af;font-size:11px\">${rocksA.length} A-rocks active \u00b7 Weekend Plan auto-generated \u00b7 Life OS</p></div>`;\nhtml += '</div>';\n\nconst subject = `\ud83d\uddd3\ufe0f Weekend Plan: ${satLabel} \u2013 ${sunLabel}`;\n\nreturn [{ json: { html, vaultNote, noteKey, satDate, sunDate, weekNum, year, rockCount: rocksA.length, satEventCount: satEvents.length, sunEventCount: sunEvents.length, subject } }];"
+      },
+      "id": "build-weekend-plan",
+      "name": "Build Weekend Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const vaultNote = $json.vaultNote;\nconst noteKey = $json.noteKey;\nconst fileName = noteKey.split('/').pop();\nconst buf = Buffer.from(vaultNote, 'utf-8');\nreturn [{ json: $json, binary: { vaultNoteFile: { data: buf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName, fileExtension: 'md', fileSize: buf.length } } }];"
+      },
+      "id": "convert-vault-note-binary",
+      "name": "Convert Vault Note to Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.noteKey }}",
+        "binaryPropertyName": "vaultNoteFile",
+        "additionalFields": {}
+      },
+      "id": "s3-write-vault-note",
+      "name": "S3: Write Vault Note",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1980,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $('Build Weekend Plan').first().json;\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst log = JSON.stringify({\n  workflow: 'weekend-planner',\n  run_date: today,\n  finished_at: new Date().toISOString(),\n  status: 'success',\n  week: `${j.year}-W${j.weekNum.toString().padStart(2,'0')}`,\n  sat_date: j.satDate,\n  sun_date: j.sunDate,\n  rock_count: j.rockCount,\n  sat_event_count: j.satEventCount,\n  sun_event_count: j.sunEventCount,\n  note_key: j.noteKey\n}, null, 2);\nreturn [{ json: { logKey: `99_System/logs/weekend-planner-${today}.json`, logContent: log } }];"
+      },
+      "id": "build-run-log",
+      "name": "Build Run Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $json.logContent;\nconst key = $json.logKey;\nconst buf = Buffer.from(content, 'utf-8');\nreturn [{ json: $json, binary: { data: { data: buf.toString('base64'), mimeType: 'application/json', fileName: key.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
+      },
+      "id": "convert-log-binary",
+      "name": "Convert Log to Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2420,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.logKey }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-write-log",
+      "name": "S3: Write Run Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
+        "subject": "={{ $('Build Weekend Plan').first().json.subject }}",
+        "html": "={{ $('Build Weekend Plan').first().json.html }}",
+        "text": "Weekend Plan generated. Open in your email client to view the HTML version.",
+        "options": {
+          "emailFormat": "html"
+        }
+      },
+      "id": "email-weekend-plan",
+      "name": "Email: Weekend Plan",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        2860,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "__SMTP_CRED_ID__",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      },
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Schedule: Friday 5PM": {
+      "main": [
+        [
+          {
+            "node": "Set Weekend Dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Weekend Dates": {
+      "main": [
+        [
+          {
+            "node": "S3: Read MTL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read MTL": {
+      "main": [
+        [
+          {
+            "node": "Decode MTL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode MTL": {
+      "main": [
+        [
+          {
+            "node": "GCal: Saturday Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GCal: Saturday Events": {
+      "main": [
+        [
+          {
+            "node": "GCal: Sunday Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GCal: Sunday Events": {
+      "main": [
+        [
+          {
+            "node": "Build Weekend Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Weekend Plan": {
+      "main": [
+        [
+          {
+            "node": "Convert Vault Note to Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Vault Note to Binary": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Vault Note",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Write Vault Note": {
+      "main": [
+        [
+          {
+            "node": "Build Run Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Run Log": {
+      "main": [
+        [
+          {
+            "node": "Convert Log to Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Log to Binary": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Run Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Write Run Log": {
+      "main": [
+        [
+          {
+            "node": "Email: Weekend Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Chicago",
+    "errorWorkflow": "jIOFmhr37mXEhlHz"
+  }
+}

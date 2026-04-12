@@ -1,5 +1,5 @@
 {
-  "name": "\ud83d\udcc5 Daily Note Creator v2 \u2014 6AM",
+  "name": "📅 Daily Note Creator v2 — 6AM",
   "nodes": [
     {
       "parameters": {
@@ -7,7 +7,7 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 11 * * *"
+              "expression": "0 6 * * *"
             }
           ]
         }
@@ -16,10 +16,7 @@
       "name": "Every Day 6AM CDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [
-        220,
-        300
-      ]
+      "position": [220, 300]
     },
     {
       "parameters": {
@@ -29,10 +26,7 @@
       "name": "Set Today",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        440,
-        300
-      ]
+      "position": [440, 300]
     },
     {
       "parameters": {
@@ -44,10 +38,7 @@
       "name": "S3: Check Exists",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        660,
-        300
-      ],
+      "position": [660, 300],
       "credentials": {
         "s3": {
           "id": "__MINIO_CRED_ID__",
@@ -67,11 +58,11 @@
           "combinator": "and",
           "conditions": [
             {
-              "leftValue": "={{ $json.error }}",
+              "leftValue": "={{ $json.ETag }}",
               "rightValue": "",
               "operator": {
                 "type": "string",
-                "operation": "exists"
+                "operation": "notExists"
               }
             }
           ]
@@ -81,10 +72,7 @@
       "name": "Not Exists?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [
-        880,
-        300
-      ]
+      "position": [880, 300]
     },
     {
       "parameters": {
@@ -96,10 +84,7 @@
       "name": "S3: Read MTL",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        1100,
-        200
-      ],
+      "position": [1100, 200],
       "credentials": {
         "s3": {
           "id": "__MINIO_CRED_ID__",
@@ -110,16 +95,13 @@
     },
     {
       "parameters": {
-        "jsCode": "const today = $('Set Today').first().json.today;\nconst dayOfWeek = new Date(today + 'T18:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/Chicago' });\n\nlet mtl = '';\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  mtl = buf.toString('utf-8');\n} catch(e) {}\n\nconst tasksDue = [];\nconst re = /- \\[ \\] .+?\\[due:: (\\d{4}-\\d{2}-\\d{2})\\]/g;\nlet m;\nwhile ((m = re.exec(mtl)) !== null) {\n  if (m[1] <= today) tasksDue.push(m[0]);\n}\n\nconst note = `---\\ndate: ${today}\\nday: ${dayOfWeek}\\ntype: daily-note\\n---\\n\\n# ${dayOfWeek}, ${today}\\n\\n## Today's Focus\\n<!-- What's the ONE thing that matters most today? -->\\n\\n## Tasks Due Today\\n${tasksDue.length > 0 ? tasksDue.join('\\n') : '*No tasks due today*'}\\n\\n## Notes & Observations\\n<!-- Brain dump throughout the day -->\\n\\n## End of Day Review\\n- [ ] Did I move a Quarterly Rock forward today?\\n- [ ] What went well?\\n- [ ] What would I do differently?\\n\\n---\\n*Auto-generated at ${new Date().toISOString()}*\\n`;\n\nreturn [{ json: { key: `40_Timeline_Weekly/Daily/${today}.md`, content: note, today, taskCount: tasksDue.length } }];"
+        "jsCode": "const today = $('Set Today').first().json.today;\nconst dayOfWeek = new Date(today + 'T18:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/Chicago' });\n\nlet mtl = '';\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  mtl = buf.toString('utf-8');\n} catch(e) {}\n\n// Tasks due today or overdue\nconst tasksDue = [];\nconst reTask = /^- \\[ \\] .+?\\[due:: (\\d{4}-\\d{2}-\\d{2})\\]/gm;\nlet m;\nwhile ((m = reTask.exec(mtl)) !== null) {\n  if (m[1] <= today) tasksDue.push(m[0]);\n}\n\n// Priority A rocks without a due date — the needle-movers\nconst rocksA = [];\nconst reRock = /^- \\[ \\] (.+?)\\[area:: ([^\\]]+)\\].*?\\[priority:: A\\](?!.*\\[due::)/gm;\nlet r;\nwhile ((r = reRock.exec(mtl)) !== null) {\n  rocksA.push(`- [ ] ${r[1].trim()} [area:: ${r[2]}] [priority:: A]`);\n}\n\nconst dueLine = tasksDue.length > 0\n  ? tasksDue.join('\\n')\n  : '*No tasks due today — great time to advance a Rock.*';\n\nconst rocksLine = rocksA.length > 0\n  ? rocksA.slice(0, 5).join('\\n')\n  : '*No undated Priority A rocks found.*';\n\nconst note = `---\ndate: ${today}\nday: ${dayOfWeek}\ntype: daily-note\n---\n\n# ${dayOfWeek}, ${today}\n\n## 🎯 Today's ONE Thing\n<!-- The single most important thing to accomplish today -->\n\n## ⚡ Tasks Due Today (${tasksDue.length})\n${dueLine}\n\n## 🪨 Priority A Rocks — Keep Moving These Forward\n${rocksLine}\n\n## 📝 Notes & Brain Dump\n<!-- Capture thoughts throughout the day -->\n\n## 🔍 End of Day Review\n- [ ] Did I move a Quarterly Rock forward?\n- [ ] What went well?\n- [ ] What would I do differently?\n- [ ] Anything to capture for tomorrow?\n\n---\n*Auto-generated at ${new Date().toISOString()} — ${tasksDue.length} tasks due, ${rocksA.length} A-rocks active*\n`;\n\nreturn [{ json: { key: `40_Timeline_Weekly/Daily/${today}.md`, content: note, today, taskCount: tasksDue.length, rockCount: rocksA.length } }];"
       },
       "id": "build-note",
       "name": "Build Daily Note",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1320,
-        200
-      ]
+      "position": [1320, 200]
     },
     {
       "parameters": {
@@ -129,10 +111,7 @@
       "name": "Convert to Binary",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1540,
-        200
-      ]
+      "position": [1540, 200]
     },
     {
       "parameters": {
@@ -146,10 +125,7 @@
       "name": "S3: Write Daily Note",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [
-        1760,
-        200
-      ],
+      "position": [1760, 200],
       "credentials": {
         "s3": {
           "id": "__MINIO_CRED_ID__",
@@ -160,23 +136,31 @@
     },
     {
       "parameters": {
-        "fromEmail": "__NOTIFICATION_EMAIL__",
-        "toEmail": "__NOTIFICATION_EMAIL__",
-        "subject": "=\ud83d\udcc5 Daily Note Created \u2014 {{ $json.today }}",
-        "text": "=Daily note created for {{ $json.today }}.\n\nPath: 40_Timeline_Weekly/Daily/{{ $json.today }}.md\nTasks pre-loaded: {{ $json.taskCount }}"
+        "jsCode": "// Write run log to MinIO\nconst today = $('Set Today').first().json.today;\nconst log = {\n  workflow: 'daily-note-creator-v2',\n  date: today,\n  status: 'success',\n  taskCount: $json.taskCount,\n  rockCount: $json.rockCount,\n  key: $json.key,\n  ts: new Date().toISOString()\n};\nconst buf = Buffer.from(JSON.stringify(log, null, 2), 'utf-8');\nreturn [{ json: { logKey: `99_System/logs/daily-note-creator-${today}.json`, ...log }, binary: { logFile: { data: buf.toString('base64'), mimeType: 'application/json', fileName: `daily-note-creator-${today}.json`, fileExtension: 'json', fileSize: buf.length } } }];"
       },
-      "id": "email",
-      "name": "Email: Created",
-      "type": "n8n-nodes-base.emailSend",
+      "id": "build-log",
+      "name": "Build Run Log",
+      "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [
-        1980,
-        200
-      ],
+      "position": [1980, 200]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.logKey }}",
+        "binaryPropertyName": "logFile",
+        "additionalFields": {}
+      },
+      "id": "s3-write-log",
+      "name": "S3: Write Run Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [2200, 200],
       "credentials": {
-        "smtp": {
-          "id": "__SMTP_CRED_ID__",
-          "name": "Gmail SMTP (Aaron)"
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
         }
       },
       "continueOnFail": true
@@ -185,95 +169,54 @@
   "connections": {
     "Every Day 6AM CDT": {
       "main": [
-        [
-          {
-            "node": "Set Today",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "Set Today", "type": "main", "index": 0}]
       ]
     },
     "Set Today": {
       "main": [
-        [
-          {
-            "node": "S3: Check Exists",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "S3: Check Exists", "type": "main", "index": 0}]
       ]
     },
     "S3: Check Exists": {
       "main": [
-        [
-          {
-            "node": "Not Exists?",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "Not Exists?", "type": "main", "index": 0}]
       ]
     },
     "Not Exists?": {
       "main": [
-        [
-          {
-            "node": "S3: Read MTL",
-            "type": "main",
-            "index": 0
-          }
-        ],
+        [{"node": "S3: Read MTL", "type": "main", "index": 0}],
         []
       ]
     },
     "S3: Read MTL": {
       "main": [
-        [
-          {
-            "node": "Build Daily Note",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "Build Daily Note", "type": "main", "index": 0}]
       ]
     },
     "Build Daily Note": {
       "main": [
-        [
-          {
-            "node": "Convert to Binary",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "Convert to Binary", "type": "main", "index": 0}]
       ]
     },
     "Convert to Binary": {
       "main": [
-        [
-          {
-            "node": "S3: Write Daily Note",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "S3: Write Daily Note", "type": "main", "index": 0}]
       ]
     },
     "S3: Write Daily Note": {
       "main": [
-        [
-          {
-            "node": "Email: Created",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        [{"node": "Build Run Log", "type": "main", "index": 0}]
+      ]
+    },
+    "Build Run Log": {
+      "main": [
+        [{"node": "S3: Write Run Log", "type": "main", "index": 0}]
       ]
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "timezone": "America/Chicago",
+    "errorWorkflow": "jIOFmhr37mXEhlHz"
   }
 }
