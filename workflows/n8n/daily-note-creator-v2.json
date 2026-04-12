@@ -1,5 +1,5 @@
 {
-  "name": "📅 Daily Note Creator v2 — 6AM",
+  "name": "\ud83d\udcc5 Daily Note Creator v2 \u2014 6AM",
   "nodes": [
     {
       "parameters": {
@@ -110,7 +110,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const today = $('Set Today').first().json.today;\nconst dayOfWeek = new Date(today + 'T18:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/Chicago' });\n\nlet mtl = '';\ntry {\n  const bin = $('S3: Read MTL').first().binary?.data;\n  if (bin) mtl = Buffer.from(bin.data, 'base64').toString('utf-8');\n} catch(e) {}\n\nconst tasksDue = [];\nconst re = /- \\[ \\] .+?\\[due:: (\\d{4}-\\d{2}-\\d{2})\\]/g;\nlet m;\nwhile ((m = re.exec(mtl)) !== null) {\n  if (m[1] <= today) tasksDue.push(m[0]);\n}\n\nconst note = `---\\ndate: ${today}\\nday: ${dayOfWeek}\\ntype: daily-note\\n---\\n\\n# ${dayOfWeek}, ${today}\\n\\n## Today's Focus\\n<!-- What's the ONE thing that matters most today? -->\\n\\n## Tasks Due Today\\n${tasksDue.length > 0 ? tasksDue.join('\\n') : '*No tasks due today*'}\\n\\n## Notes & Observations\\n<!-- Brain dump throughout the day -->\\n\\n## End of Day Review\\n- [ ] Did I move a Quarterly Rock forward today?\\n- [ ] What went well?\\n- [ ] What would I do differently?\\n\\n---\\n*Auto-generated at ${new Date().toISOString()}*\\n`;\n\nreturn [{ json: { key: `40_Timeline_Weekly/Daily/${today}.md`, content: note, today, taskCount: tasksDue.length } }];"
+        "jsCode": "const today = $('Set Today').first().json.today;\nconst dayOfWeek = new Date(today + 'T18:00:00Z').toLocaleDateString('en-US', { weekday: 'long', timeZone: 'America/Chicago' });\n\nlet mtl = '';\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  mtl = buf.toString('utf-8');\n} catch(e) {}\n\nconst tasksDue = [];\nconst re = /- \\[ \\] .+?\\[due:: (\\d{4}-\\d{2}-\\d{2})\\]/g;\nlet m;\nwhile ((m = re.exec(mtl)) !== null) {\n  if (m[1] <= today) tasksDue.push(m[0]);\n}\n\nconst note = `---\\ndate: ${today}\\nday: ${dayOfWeek}\\ntype: daily-note\\n---\\n\\n# ${dayOfWeek}, ${today}\\n\\n## Today's Focus\\n<!-- What's the ONE thing that matters most today? -->\\n\\n## Tasks Due Today\\n${tasksDue.length > 0 ? tasksDue.join('\\n') : '*No tasks due today*'}\\n\\n## Notes & Observations\\n<!-- Brain dump throughout the day -->\\n\\n## End of Day Review\\n- [ ] Did I move a Quarterly Rock forward today?\\n- [ ] What went well?\\n- [ ] What would I do differently?\\n\\n---\\n*Auto-generated at ${new Date().toISOString()}*\\n`;\n\nreturn [{ json: { key: `40_Timeline_Weekly/Daily/${today}.md`, content: note, today, taskCount: tasksDue.length } }];"
       },
       "id": "build-note",
       "name": "Build Daily Note",
@@ -162,7 +162,7 @@
       "parameters": {
         "fromEmail": "__NOTIFICATION_EMAIL__",
         "toEmail": "__NOTIFICATION_EMAIL__",
-        "subject": "=📅 Daily Note Created — {{ $json.today }}",
+        "subject": "=\ud83d\udcc5 Daily Note Created \u2014 {{ $json.today }}",
         "text": "=Daily note created for {{ $json.today }}.\n\nPath: 40_Timeline_Weekly/Daily/{{ $json.today }}.md\nTasks pre-loaded: {{ $json.taskCount }}"
       },
       "id": "email",

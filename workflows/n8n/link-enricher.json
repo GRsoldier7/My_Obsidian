@@ -1,17 +1,25 @@
 {
-  "name": "🔗 Link Enricher — Hourly",
+  "name": "\ud83d\udd17 Link Enricher \u2014 Hourly",
   "nodes": [
     {
       "parameters": {
         "rule": {
-          "interval": [{ "field": "cronExpression", "expression": "0 * * * *" }]
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 * * * *"
+            }
+          ]
         }
       },
       "id": "trigger",
       "name": "Every Hour",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [220, 300]
+      "position": [
+        220,
+        300
+      ]
     },
     {
       "parameters": {
@@ -23,39 +31,60 @@
       "name": "S3: Read Articles",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [440, 300],
+      "position": [
+        440,
+        300
+      ],
       "credentials": {
-        "s3": { "id": "__MINIO_CRED_ID__", "name": "MinIO S3" }
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
       },
       "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "// SSRF protection helper\nfunction isSafeUrl(url) {\n  try {\n    const u = new URL(url);\n    if (!['http:', 'https:'].includes(u.protocol)) return false;\n    const h = u.hostname.toLowerCase();\n    if (['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(h)) return false;\n    if (/^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.|169\\.254\\.|fc|fd|fe80)/i.test(h)) return false;\n    if (h === '169.254.169.254' || h.endsWith('.internal') || h.endsWith('.local')) return false;\n    return true;\n  } catch(e) { return false; }\n}\n\nlet content = '';\ntry {\n  const bin = $input.first().binary?.data;\n  if (bin) content = Buffer.from(bin.data, 'base64').toString('utf-8');\n} catch(e) {}\n\nif (!content.trim()) return [{ json: { noWork: true, reason: 'file not found or empty' } }];\n\nconst lines = content.split('\\n');\nconst toProcess = [];\nlet ssrfBlocked = 0;\nfor (let i = 0; i < lines.length; i++) {\n  const line = lines[i];\n  const urlMatch = line.match(/https?:\\/\\/[^\\s\\)\\]>]+/);\n  if (!urlMatch || line.includes('[title::')) continue;\n  const url = urlMatch[0].replace(/[.,;>]+$/, '');\n  if (!isSafeUrl(url)) { ssrfBlocked++; continue; }\n  toProcess.push({ url, lineIndex: i, originalLine: line });\n}\n\nconst batch = toProcess.slice(0, 8);\nif (batch.length === 0) return [{ json: { noWork: true, reason: `all URLs enriched or blocked (${ssrfBlocked} SSRF-blocked)`, totalLines: lines.length } }];\n\nreturn batch.map(item => ({ json: { ...item, fileLines: lines, totalUnenriched: toProcess.length, ssrfBlocked } }));"
+        "jsCode": "// SSRF protection helper\nfunction isSafeUrl(url) {\n  try {\n    const u = new URL(url);\n    if (!['http:', 'https:'].includes(u.protocol)) return false;\n    const h = u.hostname.toLowerCase();\n    if (['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(h)) return false;\n    if (/^(10\\.|172\\.(1[6-9]|2[0-9]|3[01])\\.|192\\.168\\.|169\\.254\\.|fc|fd|fe80)/i.test(h)) return false;\n    if (h === '169.254.169.254' || h.endsWith('.internal') || h.endsWith('.local')) return false;\n    return true;\n  } catch(e) { return false; }\n}\n\nlet content = '';\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  content = buf.toString('utf-8');\n} catch(e) {}\n\nif (!content.trim()) return [{ json: { noWork: true, reason: 'file not found or empty' } }];\n\nconst lines = content.split('\\n');\nconst toProcess = [];\nlet ssrfBlocked = 0;\nfor (let i = 0; i < lines.length; i++) {\n  const line = lines[i];\n  const urlMatch = line.match(/https?:\\/\\/[^\\s\\)\\]>]+/);\n  if (!urlMatch || line.includes('[title::')) continue;\n  const url = urlMatch[0].replace(/[.,;>]+$/, '');\n  if (!isSafeUrl(url)) { ssrfBlocked++; continue; }\n  toProcess.push({ url, lineIndex: i, originalLine: line });\n}\n\nconst batch = toProcess.slice(0, 8);\nif (batch.length === 0) return [{ json: { noWork: true, reason: `all URLs enriched or blocked (${ssrfBlocked} SSRF-blocked)`, totalLines: lines.length } }];\n\nreturn batch.map(item => ({ json: { ...item, fileLines: lines, totalUnenriched: toProcess.length, ssrfBlocked } }));"
       },
       "id": "parse-unenriched",
       "name": "Parse Unenriched URLs",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 300]
+      "position": [
+        660,
+        300
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "combinator": "and",
-          "conditions": [{
-            "leftValue": "={{ $json.noWork }}",
-            "rightValue": true,
-            "operator": { "type": "boolean", "operation": "notEquals" }
-          }]
+          "conditions": [
+            {
+              "leftValue": "={{ $json.noWork }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ]
         }
       },
       "id": "if-work",
       "name": "Has URLs to Enrich?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [880, 300]
+      "position": [
+        880,
+        300
+      ]
     },
     {
       "parameters": {
@@ -64,20 +93,33 @@
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
-            { "name": "User-Agent", "value": "Mozilla/5.0 (compatible; ObsidianHomeOrchestrator/1.0)" },
-            { "name": "Accept", "value": "text/html,application/xhtml+xml,*/*;q=0.8" }
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; ObsidianHomeOrchestrator/1.0)"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,*/*;q=0.8"
+            }
           ]
         },
         "options": {
           "timeout": 8000,
-          "response": { "response": { "responseFormat": "text" } }
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
         }
       },
       "id": "http-fetch",
       "name": "HTTP: Fetch Page",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [1100, 300],
+      "position": [
+        1100,
+        300
+      ],
       "continueOnFail": true
     },
     {
@@ -88,7 +130,10 @@
       "name": "Extract Titles",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 300],
+      "position": [
+        1320,
+        300
+      ],
       "continueOnFail": true
     },
     {
@@ -99,26 +144,41 @@
       "name": "Rebuild Enriched File",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1540, 300],
+      "position": [
+        1540,
+        300
+      ],
       "continueOnFail": true
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
           "combinator": "and",
-          "conditions": [{
-            "leftValue": "={{ $json.skipped }}",
-            "rightValue": true,
-            "operator": { "type": "boolean", "operation": "notEquals" }
-          }]
+          "conditions": [
+            {
+              "leftValue": "={{ $json.skipped }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ]
         }
       },
       "id": "if-not-skipped",
       "name": "Has Enrichments?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1760, 300]
+      "position": [
+        1760,
+        300
+      ]
     },
     {
       "parameters": {
@@ -132,9 +192,15 @@
       "name": "S3: Write Enriched Articles",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [1980, 200],
+      "position": [
+        1980,
+        200
+      ],
       "credentials": {
-        "s3": { "id": "__MINIO_CRED_ID__", "name": "MinIO S3" }
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
       },
       "continueOnFail": true
     },
@@ -150,43 +216,111 @@
       "name": "S3: Write Log",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [1980, 400],
+      "position": [
+        1980,
+        400
+      ],
       "credentials": {
-        "s3": { "id": "__MINIO_CRED_ID__", "name": "MinIO S3" }
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
       },
       "continueOnFail": true
     }
   ],
   "connections": {
     "Every Hour": {
-      "main": [[{ "node": "S3: Read Articles", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "S3: Read Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "S3: Read Articles": {
-      "main": [[{ "node": "Parse Unenriched URLs", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Parse Unenriched URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Parse Unenriched URLs": {
-      "main": [[{ "node": "Has URLs to Enrich?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Has URLs to Enrich?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Has URLs to Enrich?": {
       "main": [
-        [{ "node": "HTTP: Fetch Page", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "HTTP: Fetch Page",
+            "type": "main",
+            "index": 0
+          }
+        ],
         []
       ]
     },
     "HTTP: Fetch Page": {
-      "main": [[{ "node": "Extract Titles", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Extract Titles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Extract Titles": {
-      "main": [[{ "node": "Rebuild Enriched File", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Rebuild Enriched File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Rebuild Enriched File": {
-      "main": [[{ "node": "Has Enrichments?", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Has Enrichments?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Has Enrichments?": {
       "main": [
         [
-          { "node": "S3: Write Enriched Articles", "type": "main", "index": 0 },
-          { "node": "S3: Write Log", "type": "main", "index": 0 }
+          {
+            "node": "S3: Write Enriched Articles",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
         ],
         []
       ]

@@ -1,5 +1,5 @@
 {
-  "name": "📱 Telegram Capture — Instant Brain Dump",
+  "name": "\ud83d\udcf1 Telegram Capture \u2014 Instant Brain Dump",
   "nodes": [
     {
       "parameters": {
@@ -112,7 +112,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const { text, ts } = $input.first().json;\n\n// Append URL to articles-to-process.md\nlet existing = '';\ntry {\n  const bin = $('S3: Read Articles Queue').first().binary?.data;\n  if (bin) existing = Buffer.from(bin.data, 'base64').toString('utf-8');\n} catch(e) {}\n\n// Extract all URLs from message\nconst urls = text.match(/https?:\\/\\/[^\\s]+/g) || [];\nconst newLines = urls.map(u => `- [ ] ${u} [captured:: ${ts.split('T')[0]}] [source:: telegram]`);\n\nconst updated = existing.trimEnd() + '\\n' + newLines.join('\\n') + '\\n';\nconst buf = Buffer.from(updated, 'utf-8');\n\nreturn [{ json: {\n  ...$input.first().json,\n  content: updated,\n  key: '00_Inbox/articles-to-process.md',\n  urlCount: urls.length,\n  replyText: `✅ Queued ${urls.length} article${urls.length!==1?'s':''} for processing.`\n}, binary: { data: { data: buf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: 'articles-to-process.md', fileExtension: 'md', fileSize: buf.length } } }];"
+        "jsCode": "const { text, ts } = $input.first().json;\n\n// Append URL to articles-to-process.md\nlet existing = '';\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  existing = buf.toString('utf-8');\n} catch(e) {}\n\n// Extract all URLs from message\nconst urls = text.match(/https?:\\/\\/[^\\s]+/g) || [];\nconst newLines = urls.map(u => `- [ ] ${u} [captured:: ${ts.split('T')[0]}] [source:: telegram]`);\n\nconst updated = existing.trimEnd() + '\\n' + newLines.join('\\n') + '\\n';\nconst buf = Buffer.from(updated, 'utf-8');\n\nreturn [{ json: {\n  ...$input.first().json,\n  content: updated,\n  key: '00_Inbox/articles-to-process.md',\n  urlCount: urls.length,\n  replyText: `\u2705 Queued ${urls.length} article${urls.length!==1?'s':''} for processing.`\n}, binary: { data: { data: buf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: 'articles-to-process.md', fileExtension: 'md', fileSize: buf.length } } }];"
       },
       "id": "append-article",
       "name": "Append to Articles Queue",
@@ -149,7 +149,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Append text capture to today's brain dump file\nconst { text, today, ts } = $input.first().json;\nconst key = `00_Inbox/brain-dumps/BrainDump-Telegram-${today}.md`;\n\n// Brain dump entry with timestamp\nconst entry = `\\n## ${ts.replace('T',' ').substring(0,16)} (Telegram)\\n${text}\\n`;\n\n// We always append — create file if new, or append if exists (n8n: write full content)\n// Strategy: read existing -> append -> write back\nconst replyText = `✅ Brain dump captured! (${text.length} chars)`;\n\nreturn [{ json: { ...$input.first().json, key, entry, replyText } }];"
+        "jsCode": "// Append text capture to today's brain dump file\nconst { text, today, ts } = $input.first().json;\nconst key = `00_Inbox/brain-dumps/BrainDump-Telegram-${today}.md`;\n\n// Brain dump entry with timestamp\nconst entry = `\\n## ${ts.replace('T',' ').substring(0,16)} (Telegram)\\n${text}\\n`;\n\n// We always append \u2014 create file if new, or append if exists (n8n: write full content)\n// Strategy: read existing -> append -> write back\nconst replyText = `\u2705 Brain dump captured! (${text.length} chars)`;\n\nreturn [{ json: { ...$input.first().json, key, entry, replyText } }];"
       },
       "id": "build-braindump",
       "name": "Build Brain Dump Entry",
@@ -184,7 +184,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const { key, entry, today, replyText } = $('Build Brain Dump Entry').first().json;\n\n// Get existing content (may be empty if new file)\nlet existing = `---\\ndate: ${today}\\ntype: brain-dump\\nsource: telegram\\n---\\n\\n# Telegram Brain Dump — ${today}\\n`;\ntry {\n  const bin = $('S3: Read Existing Dump').first().binary?.data;\n  if (bin) existing = Buffer.from(bin.data, 'base64').toString('utf-8');\n} catch(e) {}\n\nconst updated = existing.trimEnd() + entry;\nconst buf = Buffer.from(updated, 'utf-8');\n\nreturn [{ json: {\n  ...$('Build Brain Dump Entry').first().json,\n  content: updated,\n  replyText\n}, binary: { data: { data: buf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: key.split('/').pop(), fileExtension: 'md', fileSize: buf.length } } }];"
+        "jsCode": "const { key, entry, today, replyText } = $('Build Brain Dump Entry').first().json;\n\n// Get existing content (may be empty if new file)\nlet existing = `---\\ndate: ${today}\\ntype: brain-dump\\nsource: telegram\\n---\\n\\n# Telegram Brain Dump \u2014 ${today}\\n`;\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  const readContent = buf.toString('utf-8');\n  if (readContent.trim()) existing = readContent;\n} catch(e) {}\n\nconst updated = existing.trimEnd() + entry;\nconst buf = Buffer.from(updated, 'utf-8');\n\nreturn [{ json: {\n  ...$('Build Brain Dump Entry').first().json,\n  content: updated,\n  replyText\n}, binary: { data: { data: buf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: key.split('/').pop(), fileExtension: 'md', fileSize: buf.length } } }];"
       },
       "id": "merge-braindump",
       "name": "Merge Brain Dump",
@@ -258,11 +258,12 @@
       "position": [
         2200,
         300
-      ]
+      ],
+      "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "// Verify X-Telegram-Bot-Api-Secret-Token header.\n// Set TELEGRAM_WEBHOOK_SECRET in n8n environment variables.\n// On failure: emit a _skip item rather than throwing — throwing would trigger\n// the global error handler and email-spam on every spoofed/malformed request.\nconst secret = $env.TELEGRAM_WEBHOOK_SECRET || '';\nconst headers = $input.first().json.headers || {};\nconst provided = headers['x-telegram-bot-api-secret-token'] || headers['X-Telegram-Bot-Api-Secret-Token'] || '';\n\nif (secret && provided !== secret) {\n  return [{ json: { _skip: true, _reason: 'webhook auth failed' } }];\n}\nreturn [{ json: { ...$input.first().json, _securityWarning: secret ? null : 'TELEGRAM_WEBHOOK_SECRET not set' } }];"
+        "jsCode": "// Verify X-Telegram-Bot-Api-Secret-Token header.\n// Set TELEGRAM_WEBHOOK_SECRET in n8n environment variables.\n// On failure: emit a _skip item rather than throwing \u2014 throwing would trigger\n// the global error handler and email-spam on every spoofed/malformed request.\nconst secret = $env.TELEGRAM_WEBHOOK_SECRET || '';\nconst headers = $input.first().json.headers || {};\nconst provided = headers['x-telegram-bot-api-secret-token'] || headers['X-Telegram-Bot-Api-Secret-Token'] || '';\n\nif (secret && provided !== secret) {\n  return [{ json: { _skip: true, _reason: 'webhook auth failed' } }];\n}\nreturn [{ json: { ...$input.first().json, _securityWarning: secret ? null : 'TELEGRAM_WEBHOOK_SECRET not set' } }];"
       },
       "id": "verify-webhook-secret",
       "name": "Verify Webhook Secret",

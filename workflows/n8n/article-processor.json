@@ -41,31 +41,28 @@
     },
     {
       "parameters": {
-        "resource": "file",
         "operation": "download",
         "bucketName": "obsidian-vault",
-        "fileKey": "00_Inbox/articles-to-process.md",
-        "options": {}
+        "fileKey": "00_Inbox/articles-to-process.md"
       },
       "id": "read-article-queue",
       "name": "S3: Read Article Queue",
-      "type": "n8n-nodes-base.awsS3",
-      "typeVersion": 2,
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
       "position": [
         480,
         340
       ],
       "credentials": {
-        "aws": {
+        "s3": {
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
-      },
-      "onError": "continueRegularOutput"
+      }
     },
     {
       "parameters": {
-        "jsCode": "let content = '';\ntry {\n  const binary = $input.first().binary;\n  const key = Object.keys(binary || {})[0] || 'data';\n  if (binary && binary[key]) {\n    content = Buffer.from(binary[key].data, 'base64').toString('utf-8');\n  }\n} catch (e) {}\n\n// Strip frontmatter\ncontent = content.replace(/^---[\\s\\S]*?---\\s*/m, '').trim();\n\nif (!content) {\n  return [{ json: { hasUrls: false, urls: [] } }];\n}\n\n// Parse URLs — one per line, optional context after \" — \"\nconst lines = content.split('\\n').filter(l => l.trim());\nconst urls = [];\n\nfor (const line of lines) {\n  const trimmed = line.trim();\n  if (!trimmed || trimmed.startsWith('#')) continue;\n\n  const parts = trimmed.split(' — ');\n  const urlPart = parts[0].trim();\n  const context = parts.length > 1 ? parts.slice(1).join(' — ').trim() : '';\n\n  // Basic URL validation\n  if (urlPart.startsWith('http://') || urlPart.startsWith('https://')) {\n    urls.push({ url: urlPart, context });\n  }\n}\n\n// Return one item per URL so SplitInBatches iterates once per URL\n// Gate check: single hasUrls:false item if queue is empty\nif (urls.length === 0) {\n  return [{ json: { hasUrls: false, url: null, context: '', urlCount: 0 } }];\n}\nreturn urls.map(u => ({ json: { hasUrls: true, url: u.url, context: u.context, urlCount: urls.length } }));"
+        "jsCode": "const first = $input.first();\nif (first.json?.error) {\n  throw new Error(`Article queue read failed: ${first.json.error}`);\n}\n\nlet content = '';\ntry {\n  const binary = first.binary;\n  const key = Object.keys(binary || {})[0] || 'data';\n  if (binary && binary[key]) {\n    content = Buffer.from(binary[key].data, 'base64').toString('utf-8');\n  }\n} catch (e) {}\n\n// Strip frontmatter\ncontent = content.replace(/^---[\\s\\S]*?---\\s*/m, '').trim();\n\nif (!content) {\n  return [{ json: { hasUrls: false, urls: [] } }];\n}\n\n// Parse URLs — one per line, optional context after \" — \"\nconst lines = content.split('\\n').filter(l => l.trim());\nconst urls = [];\n\nfor (const line of lines) {\n  const trimmed = line.trim();\n  if (!trimmed || trimmed.startsWith('#')) continue;\n\n  const parts = trimmed.split(' — ');\n  const urlPart = parts[0].trim();\n  const context = parts.length > 1 ? parts.slice(1).join(' — ').trim() : '';\n\n  // Basic URL validation\n  if (urlPart.startsWith('http://') || urlPart.startsWith('https://')) {\n    urls.push({ url: urlPart, context });\n  }\n}\n\n// Return one item per URL so SplitInBatches iterates once per URL\n// Gate check: single hasUrls:false item if queue is empty\nif (urls.length === 0) {\n  return [{ json: { hasUrls: false, url: null, context: '', urlCount: 0 } }];\n}\nreturn urls.map(u => ({ json: { hasUrls: true, url: u.url, context: u.context, urlCount: urls.length } }));"
       },
       "id": "parse-urls",
       "name": "Parse URLs",
@@ -269,23 +266,22 @@
     },
     {
       "parameters": {
-        "resource": "file",
         "operation": "upload",
         "bucketName": "obsidian-vault",
         "fileName": "={{ $json.fileKey }}",
         "binaryPropertyName": "data",
-        "options": {}
+        "additionalFields": {}
       },
       "id": "upload-article-note",
       "name": "S3: Upload Article Note",
-      "type": "n8n-nodes-base.awsS3",
-      "typeVersion": 2,
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
       "position": [
         3840,
         160
       ],
       "credentials": {
-        "aws": {
+        "s3": {
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
@@ -332,23 +328,22 @@
     },
     {
       "parameters": {
-        "resource": "file",
         "operation": "upload",
         "bucketName": "obsidian-vault",
         "fileName": "={{ $json.fileKey }}",
         "binaryPropertyName": "data",
-        "options": {}
+        "additionalFields": {}
       },
       "id": "upload-clear-queue",
       "name": "S3: Clear Article Queue",
-      "type": "n8n-nodes-base.awsS3",
-      "typeVersion": 2,
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
       "position": [
         1920,
         440
       ],
       "credentials": {
-        "aws": {
+        "s3": {
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
