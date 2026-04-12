@@ -71,36 +71,6 @@
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict"
-          },
-          "combinator": "and",
-          "conditions": [
-            {
-              "leftValue": "={{ $json._skip }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "notEquals"
-              }
-            }
-          ]
-        }
-      },
-      "id": "if-not-skip",
-      "name": "Should Write?",
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2,
-      "position": [
-        990,
-        300
-      ]
-    },
-    {
-      "parameters": {
         "operation": "upload",
         "bucketName": "obsidian-vault",
         "fileName": "000_Master Dashboard/Live Dashboard.md",
@@ -162,23 +132,11 @@
       "main": [
         [
           {
-            "node": "Should Write?",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Should Write?": {
-      "main": [
-        [
-          {
             "node": "S3: Write Dashboard",
             "type": "main",
             "index": 0
           }
-        ],
-        []
+        ]
       ]
     }
   },

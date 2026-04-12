@@ -62,7 +62,7 @@
           "options": {
             "leftValue": "",
             "caseSensitive": true,
-            "typeValidation": "strict"
+            "typeValidation": "loose"
           },
           "combinator": "and",
           "conditions": [
