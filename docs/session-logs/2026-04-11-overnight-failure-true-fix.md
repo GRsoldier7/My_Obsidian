@@ -1,5 +1,8 @@
 # ObsidianHomeOrchestrator Overnight Failure — True Root-Cause Fix
 
+> Superseded in part by [2026-04-11-credential-root-cause-reanalysis.md](./2026-04-11-credential-root-cause-reanalysis.md).
+> The later analysis corrects the MinIO diagnosis: the recurring failure was not just a stale secret. It also involved mixed `s3` / `awsS3` workflow families, live-vs-repo drift, and a broken SMTP payload in `setup-n8n.sh` that could stop redeploys halfway through.
+
 **Date:** 2026-04-11
 **Branch:** polish/prod-ready
 **Commit:** 48f6631

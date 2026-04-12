@@ -12,7 +12,7 @@
 #   make coverage       — unit tests with coverage report
 #   make deploy         — full deploy: validate + setup + health check
 
-.PHONY: setup test e2e health validate-env coverage deploy lint-workflows logs help
+.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows logs help
 
 PYTHON := python3
 PYTEST := pytest
@@ -27,7 +27,7 @@ endif
 # ── Primary targets ───────────────────────────────────────────────────────────
 
 ## Setup: validate env then deploy all workflows to n8n
-setup: validate-env
+setup: validate-env audit-workflows
 	@echo "→ Deploying workflows to n8n..."
 	$(ENV_PREFIX) bash scripts/setup-n8n.sh
 	@echo "✓ Setup complete. Run 'make health' to verify."
@@ -61,7 +61,7 @@ coverage:
 		--tb=short
 
 ## Full deploy: validate + setup + health + e2e
-deploy: validate-env setup health e2e
+deploy: validate-env audit-workflows setup health e2e
 	@echo "✓ Full deploy complete — all checks passed."
 
 # ── Workflow targets ──────────────────────────────────────────────────────────
@@ -73,6 +73,12 @@ lint-workflows:
 		$(PYTHON) -c "import json; json.load(open('$$f'))" && echo "  OK: $$f" || echo "  FAIL: $$f"; \
 	done
 	@echo "✓ Lint complete."
+
+## Enforce a single supported MinIO credential family across all workflows
+audit-workflows:
+	@echo "→ Auditing workflow credential consistency..."
+	@$(PYTHON) scripts/audit_workflow_credentials.py
+	@$(PYTHON) scripts/audit_workflow_connections.py
 
 # ── Operational targets ───────────────────────────────────────────────────────
 
@@ -113,6 +119,7 @@ help:
 	@echo "  make coverage       Unit tests with coverage report"
 	@echo "  make deploy         Full deploy: validate + setup + health + e2e"
 	@echo "  make lint-workflows Validate all workflow JSONs"
+	@echo "  make audit-workflows Block mixed awsS3/s3 credential families"
 	@echo "  make logs           Tail today's brain-dump-processor log"
 	@echo "  make run            Run processor manually (verbose)"
 	@echo "  make dry-run        Processor dry-run (no S3 writes)"

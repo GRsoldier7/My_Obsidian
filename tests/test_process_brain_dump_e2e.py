@@ -11,6 +11,7 @@ Tests marked @pytest.mark.integration require:
   RUN_INTEGRATION_TESTS=1 pytest -m integration
 """
 import json
+import runpy
 import sys
 import os
 from datetime import datetime, timezone
@@ -258,11 +259,11 @@ def test_integration_full_run_against_live_minio():
     if not os.environ.get("RUN_INTEGRATION_TESTS"):
         pytest.skip("Set RUN_INTEGRATION_TESTS=1 to run integration tests")
 
-    import subprocess
-    result = subprocess.run(
-        [sys.executable, "scripts/e2e_test.py"],
-        capture_output=True,
-        cwd=os.path.join(os.path.dirname(__file__), ".."),
-        env=os.environ.copy(),
-    )
-    assert result.returncode == 0, f"e2e test failed:\n{result.stdout.decode()}"
+    repo_root = os.path.join(os.path.dirname(__file__), "..")
+    script_path = os.path.join(repo_root, "scripts", "e2e_test.py")
+
+    with patch.object(sys, "argv", [script_path]):
+        with pytest.raises(SystemExit) as exc:
+            runpy.run_path(script_path, run_name="__main__")
+
+    assert exc.value.code == 0

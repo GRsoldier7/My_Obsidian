@@ -26,8 +26,11 @@ MINIO_ENDPOINT = "http://localhost:9000"  # used by moto as fake endpoint
 # ── Environment ──────────────────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
-def mock_env(monkeypatch):
-    """Set required env vars for all tests — prevents reading real .env."""
+def mock_env(monkeypatch, request):
+    """Set fake env vars for mocked tests, but preserve real env for integration."""
+    if request.node.get_closest_marker("integration"):
+        return
+
     monkeypatch.setenv("MINIO_ENDPOINT", MINIO_ENDPOINT)
     monkeypatch.setenv("MINIO_ACCESS_KEY", "test-access-key")
     monkeypatch.setenv("MINIO_SECRET_KEY", "test-secret-key")

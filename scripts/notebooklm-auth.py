@@ -1,23 +1,23 @@
 """
 Build notebooklm storage_state.json from Chrome cookies via browser_cookie3.
-This handles macOS Keychain decryption so we get the real SID / auth cookies.
+Works cross-platform: macOS Keychain, Windows DPAPI, Linux Secret Service.
+Chrome must be signed in to Google before running.
+
+Linux extra deps (if needed): pip install secretstorage jeepney
 """
-import json, time
+import json
 from pathlib import Path
 
 try:
     import browser_cookie3
 except ImportError:
-    print("Run: ~/.notebooklm-venv/bin/pip install browser_cookie3")
+    print("Run: python3 -m pip install browser_cookie3")
     raise
 
 STORAGE_FILE = Path.home() / ".notebooklm" / "storage_state.json"
 STORAGE_FILE.parent.mkdir(exist_ok=True)
 
-# Domains to capture for NotebookLM auth
-DOMAINS = [".google.com", "accounts.google.com", "notebooklm.google.com", ".notebooklm.google.com"]
-
-print("Reading Chrome cookies (may prompt for Keychain access)...")
+print("Reading Chrome cookies from OS credential store...")
 jar = browser_cookie3.chrome(domain_name=".google.com")
 
 cookies = []
@@ -33,23 +33,17 @@ for c in jar:
         "sameSite": "Lax",
     })
 
-# Filter to Google-related cookies only
 google_cookies = [c for c in cookies if "google" in c["domain"]]
-
 sid_cookies = [c for c in google_cookies if c["name"] == "SID"]
+
 print(f"Total Google cookies: {len(google_cookies)}")
 print(f"SID cookies: {len(sid_cookies)}")
 
 if not sid_cookies:
-    print("\nWARNING: No SID cookies found. Make sure you're signed in to Google in Chrome.")
+    print("\nWARNING: No SID cookies found. Make sure Chrome is signed in to Google.")
     print("Cookies found:", sorted(set(c['name'] for c in google_cookies)))
 else:
     print("SID domains:", [c['domain'] for c in sid_cookies])
 
-storage_state = {
-    "cookies": google_cookies,
-    "origins": []
-}
-
-STORAGE_FILE.write_text(json.dumps(storage_state, indent=2))
+STORAGE_FILE.write_text(json.dumps({"cookies": google_cookies, "origins": []}, indent=2))
 print(f"\nSaved {len(google_cookies)} cookies to {STORAGE_FILE}")

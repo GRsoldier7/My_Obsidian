@@ -167,7 +167,7 @@ Domain note output paths:
 
 | Name | Type | Credential ID |
 |------|------|--------------|
-| MinIO S3 | aws | `[MINIO_CRED_ID]` |
+| MinIO S3 | s3 | `[MINIO_CRED_ID]` |
 | Gmail SMTP (Aaron) | smtp | `[SMTP_CRED_ID]` |
 | OpenRouter API | httpHeaderAuth | `[OPENROUTER_CRED_ID]` |
 

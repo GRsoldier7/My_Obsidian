@@ -23,11 +23,11 @@ import sys
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
-from openai import OpenAI
 
 try:
     from dotenv import load_dotenv
@@ -463,14 +463,20 @@ def regex_extract_tasks(section_body: str, file_area: str) -> list[str]:
 
 # ── OpenRouter AI extraction ─────────────────────────────────────────────────
 
-def openrouter_client() -> OpenAI:
+def openrouter_client() -> Any:
     api_key = OPENROUTER_API_KEY
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY not set in environment")
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError(
+            "openai package is required for OpenRouter calls. Install dependencies from requirements.txt."
+        ) from exc
     return OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
 
 
-def _chat_with_fallback(client: OpenAI, prompt: str, max_tokens: int = 600) -> str | None:
+def _chat_with_fallback(client: Any, prompt: str, max_tokens: int = 600) -> str | None:
     """Try models in cascade order. Return response text or None if all fail."""
     for model in EXTRACT_MODELS:
         try:
@@ -490,7 +496,7 @@ def _chat_with_fallback(client: OpenAI, prompt: str, max_tokens: int = 600) -> s
     return None
 
 
-def extract_tasks_from_section(client: OpenAI, section_header: str, section_body: str,
+def extract_tasks_from_section(client: Any, section_header: str, section_body: str,
                                 file_area: str, today: str) -> list[str]:
     """Ask OpenRouter to extract canonical tasks from a section."""
     prompt = f"""Extract tasks from this brain dump section into Obsidian task format.

@@ -156,12 +156,18 @@ python3 scripts/validate_env.py
 2. Navigate to: Identity → Service Accounts → find the OHO service account
 3. Click "Rotate" → copy new Access Key + Secret Key
 4. Update `.env`: set `MINIO_ACCESS_KEY` and `MINIO_SECRET_KEY`
-5. Re-run setup to push new creds to n8n:
+5. Re-run the workflow audit before redeploying:
+   ```bash
+   python3 scripts/audit_workflow_credentials.py
+   ```
+6. Re-run setup to push new creds to n8n:
    ```bash
    set -a && source .env && set +a
    bash scripts/setup-n8n.sh
    ```
-6. Verify: `python3 scripts/health_check.py` → minio: PASS
+7. Verify: `python3 scripts/health_check.py` → minio: PASS
+
+If you see `Credential with ID "..." does not exist for type "s3"`, do not just re-select credentials in the UI. That symptom can mean live workflows are still out of sync with the repo or a legacy `awsS3` workflow is still present.
 
 ### OpenRouter API key rotation
 
