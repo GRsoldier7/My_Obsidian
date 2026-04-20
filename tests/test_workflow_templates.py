@@ -1,12 +1,40 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = REPO_ROOT / "workflows" / "n8n"
 SETUP_SCRIPT = (REPO_ROOT / "scripts" / "setup-n8n.sh").read_text()
+
+GLOBAL_ERROR_WF_ID = "jIOFmhr37mXEhlHz"
+
+SCHEDULED_WORKFLOWS = [
+    "article-processor.json",
+    "brain-dump-processor-v2.json",
+    "daily-note-creator-v2.json",
+    "job-search-pipeline.json",
+    "link-enricher.json",
+    "live-dashboard-updater.json",
+    "morning-briefing.json",
+    "overdue-task-alert-v2.json",
+    "system-health-monitor.json",
+    "vault-health-report.json",
+    "weekend-planner.json",
+    "weekly-digest-v2.json",
+]
+
+ALLOWED_SKIP_REASONS = {
+    "source_prefix_empty",
+    "minio_offline",
+    "queue_missing",
+    "queue_empty",
+    "no_new_items",
+}
 
 
 def iter_targets(connection_block: object) -> list[str]:
@@ -48,3 +76,114 @@ def test_setup_n8n_does_not_swallow_workflow_import_failures():
     assert "ERROR: Import returned no workflow id" in SETUP_SCRIPT
     assert "ERROR: Failed to update" in SETUP_SCRIPT
     assert "ERROR: Failed to activate" in SETUP_SCRIPT
+
+
+def _load(name: str) -> dict:
+    return json.loads((WORKFLOW_DIR / name).read_text())
+
+
+def _cron_minutes(workflow: dict) -> int | None:
+    """Return the first scheduleTrigger cron's (hour*60 + minute) in UTC, or None."""
+    for node in workflow.get("nodes", []):
+        if node.get("type") != "n8n-nodes-base.scheduleTrigger":
+            continue
+        for iv in node.get("parameters", {}).get("rule", {}).get("interval", []):
+            expr = iv.get("expression")
+            if expr:
+                parts = expr.split()
+                if len(parts) >= 2:
+                    minute = int(parts[0]) if parts[0].isdigit() else 0
+                    hour = int(parts[1]) if parts[1].isdigit() else 0
+                    return hour * 60 + minute
+    return None
+
+
+@pytest.mark.parametrize("wf_name", SCHEDULED_WORKFLOWS)
+def test_scheduled_workflows_wire_error_workflow(wf_name):
+    wf = _load(wf_name)
+    error_wf = wf.get("settings", {}).get("errorWorkflow")
+    assert error_wf == GLOBAL_ERROR_WF_ID, (
+        f"{wf_name}: settings.errorWorkflow must equal {GLOBAL_ERROR_WF_ID!r}, "
+        f"got {error_wf!r}"
+    )
+
+
+def test_email_nodes_have_text_fallback():
+    violations: list[str] = []
+    for path in sorted(WORKFLOW_DIR.glob("*.json")):
+        wf = json.loads(path.read_text())
+        for node in wf.get("nodes", []):
+            if node.get("type") != "n8n-nodes-base.emailSend":
+                continue
+            params = node.get("parameters", {}) or {}
+            opts = params.get("options", {}) or {}
+            fmt = opts.get("emailFormat", "html")
+            has_text = bool(params.get("text"))
+            if fmt in ("html", "both") and not has_text:
+                violations.append(
+                    f"{path.name}:{node.get('name', '<unnamed>')}"
+                    f" emailFormat={fmt!r} missing text fallback"
+                )
+    assert not violations, (
+        "Email nodes using html/both must provide a text fallback:\n"
+        + "\n".join(violations)
+    )
+
+
+def test_minio_download_nodes_have_continue_on_fail():
+    violations: list[str] = []
+    for path in sorted(WORKFLOW_DIR.glob("*.json")):
+        wf = json.loads(path.read_text())
+        for node in wf.get("nodes", []):
+            if node.get("type") != "n8n-nodes-base.s3":
+                continue
+            op = node.get("parameters", {}).get("operation")
+            if op != "download":
+                continue
+            if not node.get("continueOnFail"):
+                violations.append(
+                    f"{path.name}:{node.get('name', '<unnamed>')}"
+                    f" S3 download missing continueOnFail"
+                )
+    assert not violations, (
+        "Every S3 download node must set continueOnFail: true so offline "
+        "errors can be branched on without firing the global error handler:\n"
+        + "\n".join(violations)
+    )
+
+
+_SKIP_REASON_RE = re.compile(
+    r"""skip_reason\s*:\s*['"]([a-z_]+)['"]""",
+    re.VERBOSE,
+)
+
+
+def test_skip_reasons_use_canonical_enum():
+    bad: list[str] = []
+    for path in sorted(WORKFLOW_DIR.glob("*.json")):
+        wf = json.loads(path.read_text())
+        for node in wf.get("nodes", []):
+            code = node.get("parameters", {}).get("jsCode", "") or ""
+            for match in _SKIP_REASON_RE.finditer(code):
+                value = match.group(1)
+                if value not in ALLOWED_SKIP_REASONS:
+                    bad.append(
+                        f"{path.name}:{node.get('name', '<unnamed>')}"
+                        f" uses skip_reason={value!r}"
+                        f" (allowed: {sorted(ALLOWED_SKIP_REASONS)})"
+                    )
+    assert not bad, "\n".join(bad)
+
+
+def test_morning_briefing_runs_after_brain_dump():
+    bd = _load("brain-dump-processor-v2.json")
+    mb = _load("morning-briefing.json")
+    bd_min = _cron_minutes(bd)
+    mb_min = _cron_minutes(mb)
+    assert bd_min is not None, "brain-dump-processor-v2 missing cron expression"
+    assert mb_min is not None, "morning-briefing missing cron expression"
+    assert mb_min > bd_min, (
+        f"morning-briefing ({mb_min} UTC minutes) must run strictly after "
+        f"brain-dump-processor-v2 ({bd_min} UTC minutes) so the briefing "
+        f"reflects today's captures, not yesterday's"
+    )
