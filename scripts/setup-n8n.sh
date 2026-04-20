@@ -247,6 +247,7 @@ WORKFLOWS=(
   "link-enricher.json"
   "vault-health-report.json"
   "system-health-monitor.json"
+  "weekend-planner.json"
 )
 # V1 legacy (kept for rollback, do NOT activate alongside v2):
 # "brain-dump-processor.json" "daily-note-creator.json"
@@ -286,6 +287,7 @@ raw = raw.replace('__MINIO_CRED_ID__', '$MINIO_CRED_ID')
 raw = raw.replace('__SMTP_CRED_ID__', '$SMTP_CRED_ID')
 raw = raw.replace('__OPENROUTER_CRED_ID__', '$OPENROUTER_CRED_ID')
 raw = raw.replace('__NOTIFICATION_EMAIL__', '$NOTIFICATION_EMAIL')
+raw = raw.replace('__GCAL_CRED_ID__', '${GCAL_CRED_ID:-__GCAL_CRED_ID__}')
 with open('$wf_hydrated', 'w') as f:
     f.write(raw)
 "

@@ -54,6 +54,7 @@ EXTRACT_MODELS = [
 BRAIN_DUMPS_PREFIX = "00_Inbox/brain-dumps/"
 PROCESSED_PREFIX = "00_Inbox/processed/"
 ARTICLES_FILE = "00_Inbox/articles-to-process.md"
+MTL_KEY = "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
 LOGS_PREFIX = "99_System/logs/"
 
 VALID_AREAS = {"faith", "family", "business", "consulting", "work", "health", "home", "personal"}
@@ -614,6 +615,67 @@ type: extracted-tasks
     return len(tasks) if ok else 0
 
 
+def append_tasks_to_mtl(s3, tasks: list[str], source_file: str, today: str,
+                        dry_run: bool) -> int:
+    """Append extracted tasks to the Master Task List.
+
+    Reads MTL, deduplicates against existing tasks, appends new ones
+    under the appropriate priority section, writes back with verification.
+    Returns count of tasks actually appended (after dedup).
+    """
+    if not tasks:
+        return 0
+
+    # Read current MTL
+    try:
+        mtl = s3_get(s3, MTL_KEY)
+    except Exception as e:
+        logging.error(f"Failed to read MTL for append: {e}")
+        return 0
+
+    # Extract existing task descriptions for dedup
+    existing = set()
+    for line in mtl.splitlines():
+        m = re.match(r'^- \[[ x]\] (.+?)(?:\s*\[area::|\s*$)', line)
+        if m:
+            existing.add(m.group(1).strip().lower())
+
+    # Filter out duplicates
+    new_tasks = []
+    for task in tasks:
+        m = re.match(r'^- \[ \] (.+?)(?:\s*\[area::|\s*$)', task)
+        if m:
+            desc = m.group(1).strip().lower()
+            if desc not in existing:
+                new_tasks.append(task)
+                existing.add(desc)
+            else:
+                logging.info(f"      dedup: skipping '{desc[:50]}...' (already in MTL)")
+
+    if not new_tasks:
+        logging.info(f"      all {len(tasks)} tasks already in MTL (deduped)")
+        return 0
+
+    # Append to end of MTL with a source marker
+    append_block = (
+        f"\n\n## Brain Dump Capture — {today} ({source_file})\n"
+        + "\n".join(new_tasks)
+        + "\n"
+    )
+    updated_mtl = mtl.rstrip() + append_block
+
+    if dry_run:
+        logging.info(f"      [dry-run] would append {len(new_tasks)} tasks to MTL")
+        return len(new_tasks)
+
+    ok = s3_put_verified(s3, MTL_KEY, updated_mtl, dry_run=False)
+    if ok:
+        logging.info(f"      appended {len(new_tasks)} tasks to MTL")
+    else:
+        logging.error(f"      FAILED to append tasks to MTL")
+    return len(new_tasks) if ok else 0
+
+
 def write_note_file(s3, note: dict, source_file: str, today: str, dry_run: bool) -> bool:
     """Write a single note to its domain folder."""
     area = note.get("area", "personal")
@@ -777,6 +839,12 @@ def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
         log.write_verifications_pass += 1
     elif all_tasks and tasks_written == 0:
         log.write_verifications_fail += 1
+
+    # Stage 6b: Append to Master Task List (the canonical source of truth)
+    if all_tasks:
+        mtl_appended = append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
+        if mtl_appended > 0:
+            log.write_verifications_pass += 1
 
     if all_articles:
         append_articles(s3, all_articles, today, dry_run)

@@ -38,6 +38,7 @@
       "parameters": {
         "operation": "list",
         "bucketName": "obsidian-vault",
+        "returnAll": true,
         "prefix": "00_Inbox/brain-dumps/",
         "additionalFields": {}
       },
@@ -96,6 +97,7 @@
       "parameters": {
         "operation": "list",
         "bucketName": "obsidian-vault",
+        "returnAll": true,
         "prefix": "00_Inbox/processed/",
         "additionalFields": {}
       },

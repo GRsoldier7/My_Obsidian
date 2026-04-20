@@ -25,6 +25,7 @@
       "parameters": {
         "operation": "list",
         "bucketName": "obsidian-vault",
+        "returnAll": true,
         "prefix": "00_Inbox/brain-dumps/",
         "additionalFields": {}
       },
@@ -310,6 +311,65 @@
         }
       },
       "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
+      },
+      "id": "s3-read-mtl",
+      "name": "S3: Read MTL",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        0
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Read current MTL and append new tasks (with dedup)\nconst parseOutput = $('Parse & Extract').first().json;\nconst buildOutput = $('Build Output Files').first().json;\nconst tasks = parseOutput.tasks || [];\nconst today = buildOutput.today || parseOutput.today;\nconst fileName = buildOutput.fileName || parseOutput.fileName;\n\nif (!tasks || tasks.length === 0) {\n  return [{ json: { mtlUpdated: false, reason: 'no tasks to append' } }];\n}\n\n// Read MTL content from binary\nlet mtlContent = '';\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  mtlContent = buf.toString('utf-8');\n} catch(e) {\n  // MTL read failed — still proceed, just can't dedup\n  mtlContent = '';\n}\n\n// Dedup: extract existing task descriptions\nconst existing = new Set();\nfor (const line of mtlContent.split('\\n')) {\n  const m = line.match(/^- \\[[ x]\\] (.+?)(?:\\s*\\[area::|\\s*$)/);\n  if (m) existing.add(m[1].trim().toLowerCase());\n}\n\nconst newTasks = tasks.filter(t => {\n  const m = t.match(/^- \\[ \\] (.+?)(?:\\s*\\[area::|\\s*$)/);\n  if (!m) return true;\n  const desc = m[1].trim().toLowerCase();\n  if (existing.has(desc)) return false;\n  existing.add(desc);\n  return true;\n});\n\nif (newTasks.length === 0) {\n  return [{ json: { mtlUpdated: false, reason: 'all tasks already in MTL (deduped)' } }];\n}\n\n// Append\nconst appendBlock = `\\n\\n## Brain Dump Capture — ${today} (${fileName})\\n${newTasks.join('\\n')}\\n`;\nconst updatedMtl = mtlContent.trimEnd() + appendBlock;\nconst buf = Buffer.from(updatedMtl, 'utf-8');\n\nreturn [{ json: {\n  mtlUpdated: true, tasksAppended: newTasks.length, totalTasks: tasks.length\n}, binary: {\n  mtlFile: { data: buf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: '!!! MASTER TASK LIST.md', fileExtension: 'md', fileSize: buf.length }\n}}];"
+      },
+      "id": "append-mtl",
+      "name": "Append Tasks to MTL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2640,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md",
+        "binaryPropertyName": "mtlFile",
+        "additionalFields": {}
+      },
+      "id": "s3-write-mtl",
+      "name": "S3: Write Updated MTL",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        2860,
+        0
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
     }
   ],
   "connections": {
@@ -449,6 +509,39 @@
       ]
     },
     "S3: Write Tasks": {
+      "main": [
+        [
+          {
+            "node": "S3: Read MTL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read MTL": {
+      "main": [
+        [
+          {
+            "node": "Append Tasks to MTL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append Tasks to MTL": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Updated MTL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Write Updated MTL": {
       "main": [
         [
           {
