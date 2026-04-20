@@ -58,7 +58,8 @@
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
         }
-      }
+      },
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -553,7 +554,8 @@
     "callerPolicy": "workflowsFromSameOwner",
     "timezone": "America/Chicago",
     "availableInMCP": false,
-    "binaryMode": "separate"
+    "binaryMode": "separate",
+    "errorWorkflow": "jIOFmhr37mXEhlHz"
   },
   "staticData": {
     "node:8AM & 7PM Daily": {

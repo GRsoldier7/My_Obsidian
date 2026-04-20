@@ -105,8 +105,9 @@
         "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "={{ $json.subject }}",
         "html": "={{ $json.html }}",
+        "text": "={{ $json.count }} overdue tasks as of {{ $json.today }}. See HTML view for the full breakdown by area and urgency.",
         "options": {
-          "emailFormat": "html"
+          "emailFormat": "both"
         }
       },
       "id": "email",
@@ -265,6 +266,6 @@
     "executionOrder": "v1",
     "timezone": "America/Chicago",
     "callerPolicy": "workflowsFromSameOwner",
-    "errorWorkflow": ""
+    "errorWorkflow": "jIOFmhr37mXEhlHz"
   }
 }

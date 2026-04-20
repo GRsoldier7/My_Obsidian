@@ -7,7 +7,7 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 12 * * *"
+              "expression": "30 12 * * *"
             }
           ]
         }
@@ -97,8 +97,9 @@
         "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "={{ `\ud83c\udf05 Morning Briefing \u2014 ${$json.dayOfWeek}, ${$json.today} | ${$json.overdueCount} overdue, ${$json.todayCount} due today` }}",
         "html": "={{ $json.html }}",
+        "text": "=Good morning, Aaron \u2014 {{ $json.dayOfWeek }}, {{ $json.today }}.\n\nOverdue: {{ $json.overdueCount }} tasks\nDue today: {{ $json.todayCount }} tasks\n\nYesterday's captures: {{ $json.capturedTasks }} tasks extracted, {{ $json.capturedArticles }} articles queued.\n\n(Full briefing in HTML view \u2014 this is a plain-text fallback for clients that strip HTML.)",
         "options": {
-          "emailFormat": "html"
+          "emailFormat": "both"
         }
       },
       "id": "email",
@@ -277,6 +278,7 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "errorWorkflow": "jIOFmhr37mXEhlHz"
   }
 }

@@ -533,7 +533,8 @@
     "saveExecutionProgress": true,
     "callerPolicy": "workflowsFromSameOwner",
     "availableInMCP": false,
-    "binaryMode": "separate"
+    "binaryMode": "separate",
+    "errorWorkflow": "jIOFmhr37mXEhlHz"
   },
   "staticData": {
     "node:Every 6 Hours": {

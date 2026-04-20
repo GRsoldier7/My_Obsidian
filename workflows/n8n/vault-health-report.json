@@ -149,8 +149,9 @@
         "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "={{ $json.subject }}",
         "html": "={{ $json.html }}",
+        "text": "=Vault Health: {{ $json.badge }} for {{ $json.today }}. Brain dumps waiting: {{ $json.braindumpCount }}. Unenriched articles: {{ $json.unenrichedCount }}. Processed this week: {{ $json.processedCount }}. See HTML view for details.",
         "options": {
-          "emailFormat": "html"
+          "emailFormat": "both"
         }
       },
       "id": "email",
@@ -338,6 +339,7 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "errorWorkflow": "jIOFmhr37mXEhlHz"
   }
 }

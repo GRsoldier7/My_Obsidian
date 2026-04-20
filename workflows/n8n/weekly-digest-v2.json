@@ -84,8 +84,9 @@
         "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "=\ud83d\udcca Weekly Life OS Review \u2014 Week of {{ $json.weekOf }}",
         "html": "={{ $json.html }}",
+        "text": "=Weekly Life OS Review for week of {{ $json.weekOf }} (generated {{ $json.today }}). See HTML view for area health summary, Q2 rock progress, and undated Priority A focus rocks.",
         "options": {
-          "emailFormat": "html"
+          "emailFormat": "both"
         }
       },
       "id": "email",
@@ -232,6 +233,6 @@
     "executionOrder": "v1",
     "timezone": "America/Chicago",
     "callerPolicy": "workflowsFromSameOwner",
-    "errorWorkflow": ""
+    "errorWorkflow": "jIOFmhr37mXEhlHz"
   }
 }

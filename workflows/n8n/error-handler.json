@@ -11,7 +11,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const error = $input.first().json;\nconst today = new Date().toISOString().split('T')[0];\nconst ts = new Date().toISOString();\n\nconst workflowName = error.workflow?.name || 'Unknown';\nconst nodeName = error.execution?.lastNodeExecuted || 'Unknown';\nconst errorMsg = error.execution?.error?.message || JSON.stringify(error).substring(0, 500);\n\nconst html = `<h2>n8n Workflow Error</h2>\n<table border=\"1\" cellpadding=\"5\">\n<tr><td><strong>Workflow</strong></td><td>${workflowName}</td></tr>\n<tr><td><strong>Node</strong></td><td>${nodeName}</td></tr>\n<tr><td><strong>Time</strong></td><td>${ts}</td></tr>\n<tr><td><strong>Error</strong></td><td><pre>${errorMsg}</pre></td></tr>\n</table>`;\n\nconst log = JSON.stringify({\n  workflow: 'error-handler',\n  source_workflow: workflowName,\n  source_node: nodeName,\n  error: errorMsg,\n  timestamp: ts\n}, null, 2);\n\nreturn [{ json: {\n  subject: `n8n Error: ${workflowName} — ${nodeName}`,\n  html, today, ts,\n  logKey: `99_System/logs/errors-${today}.json`,\n  logContent: log\n}}];"
+        "jsCode": "const error = $input.first().json;\nconst today = new Date().toISOString().split('T')[0];\nconst ts = new Date().toISOString();\n\nconst workflowName = error.workflow?.name || 'Unknown';\nconst nodeName = error.execution?.lastNodeExecuted || 'Unknown';\nconst errorMsg = error.execution?.error?.message || JSON.stringify(error).substring(0, 500);\n\nconst html = `<h2>n8n Workflow Error</h2>\n<table border=\"1\" cellpadding=\"5\">\n<tr><td><strong>Workflow</strong></td><td>${workflowName}</td></tr>\n<tr><td><strong>Node</strong></td><td>${nodeName}</td></tr>\n<tr><td><strong>Time</strong></td><td>${ts}</td></tr>\n<tr><td><strong>Error</strong></td><td><pre>${errorMsg}</pre></td></tr>\n</table>`;\n\nconst textBody = `n8n Workflow Error\\n\\nWorkflow: ${workflowName}\\nNode: ${nodeName}\\nTime: ${ts}\\n\\nError:\\n${errorMsg}\\n`;\n\nconst log = JSON.stringify({\n  workflow: 'error-handler',\n  source_workflow: workflowName,\n  source_node: nodeName,\n  error: errorMsg,\n  timestamp: ts\n}, null, 2);\n\nreturn [{ json: {\n  subject: `n8n Error: ${workflowName} — ${nodeName}`,\n  html, textBody, today, ts,\n  logKey: `99_System/logs/errors-${today}.json`,\n  logContent: log\n}}];"
       },
       "id": "format-error",
       "name": "Format Error",
@@ -25,8 +25,9 @@
         "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "={{ $json.subject }}",
         "html": "={{ $json.html }}",
+        "text": "={{ $json.textBody }}",
         "options": {
-          "emailFormat": "html"
+          "emailFormat": "both"
         }
       },
       "id": "email",

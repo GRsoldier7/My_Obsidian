@@ -89,7 +89,8 @@
         "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "=🚨 Health Check FAILED — {{ $json.today }}",
         "html": "=<h2>System Health Check FAILED</h2><p>Date: {{ $json.today }}</p><pre>{{ JSON.stringify($json.checks, null, 2) }}</pre>",
-        "options": { "emailFormat": "html" }
+        "text": "=System Health Check FAILED on {{ $json.today }}. Checks: {{ JSON.stringify($json.checks) }}. See HTML view for details.",
+        "options": { "emailFormat": "both" }
       },
       "id": "email-alert",
       "name": "Email: Health Alert",
@@ -160,6 +161,7 @@
     }
   },
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "errorWorkflow": "jIOFmhr37mXEhlHz"
   }
 }
