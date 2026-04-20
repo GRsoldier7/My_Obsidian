@@ -1,6 +1,8 @@
 # ObsidianHomeOrchestrator — Full Memory Snapshot
 **Date:** 2026-04-12 | **Branch:** polish/prod-ready | **Commits this session:** 48f6631, c25a279, 69137af, b8c673a, cebbdcf, 1498829, 5a684f7
 
+> **SUPERSEDED NOTE (2026-04-19):** The NotebookLM ID `a428969b-c3f1-480b-b54c-876974650674` referenced below is stale. The authoritative OHO notebook is now `d056e9d5-64d9-4f64-aa94-faff603de835`. See [2026-04-19-production-readiness-recovery.md](2026-04-19-production-readiness-recovery.md). Do not use the a428... ID as a write target.
+
 ---
 
 ## WHO IS AARON (User Profile)

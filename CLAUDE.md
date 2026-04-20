@@ -126,16 +126,18 @@ Session token required — run `bw unlock --raw` and update `BW_SESSION` in `~/.
 ## n8n Credentials (live)
 | Name | Type | ID |
 |------|------|----|
-| MinIO S3 | aws | `[see-n8n-ui]` |
+| MinIO S3 | s3 | `[see-n8n-ui]` |
 | Gmail SMTP (Aaron) | smtp | `[see-n8n-ui]` |
 | OpenRouter API | httpHeaderAuth | `[see-n8n-ui]` |
+
+Enforced by [scripts/audit_workflow_credentials.py](scripts/audit_workflow_credentials.py) — `s3` family only, never `aws`. Mixing families creates oscillating failures (one credential ID cannot back both `n8n-nodes-base.s3` and `n8n-nodes-base.awsS3`).
 
 ## Active Workflows (v2 — import via setup-n8n.sh)
 | Workflow | Schedule | Purpose |
 |----------|----------|---------|
 | brain-dump-processor-v2 | Daily 7AM CDT | Extract tasks from brain dumps → MTL |
 | daily-note-creator-v2 | Daily 6AM CDT | Create daily note from MTL |
-| morning-briefing | Daily 7AM CDT | Rich HTML email: overdue + due today + yesterday captures |
+| morning-briefing | Daily 7:30AM CDT | Rich HTML+text email: overdue + due today + yesterday captures (cron-decoupled from brain-dump since 2026-04-19) |
 | overdue-task-alert-v2 | Daily 8AM CDT | Overdue task alert (superseded by morning-briefing) |
 | weekly-digest-v2 | Sunday 6PM CDT | Weekly rock review email |
 | vault-health-report | Sunday 8PM CDT | Inbox health: brain dumps, article queue, processed count |
@@ -158,6 +160,9 @@ Session token required — run `bw unlock --raw` and update `BW_SESSION` in `~/.
 | `scripts/archive_completed_tasks.py` | Archive `- [x]` tasks from MTL to Task Archive. Run manually when MTL has >10 completed tasks. Flags: `--dry-run`, `--verbose` |
 | `scripts/e2e_test.py` | End-to-end pipeline test (11 checks) |
 | `scripts/health_check.py` | MinIO + n8n connectivity checks |
+| `scripts/audit_workflow_credentials.py` | Enforce S3 credential family consistency (`s3`, not mixed `aws`) |
+| `scripts/audit_workflow_connections.py` | Enforce email nodes are dead-ends (no downstream log/S3 writes) |
+| `scripts/audit_workflow_runlogs.py` | Enforce `skip_reason` canonical enum + `status: "skipped"` always carries a reason |
 
 ## Daily Note Creator — Key Fixes (2026-04-12)
 
@@ -166,8 +171,20 @@ Session token required — run `bw unlock --raw` and update `BW_SESSION` in `~/.
 - **Template**: Added `## 🪨 Priority A Rocks` section + `## 🎯 Today's ONE Thing` heading.
 - **Task regex**: Now anchored `^- \[ \]` with `re.MULTILINE` to prevent false matches from header example text.
 
+## NotebookLM (project memory)
+
+| Notebook | ID | Status |
+|----------|-----|--------|
+| ObsidianHomeOrchestrator — Life OS Project Memory | `d056e9d5-64d9-4f64-aa94-faff603de835` | ACTIVE (authoritative, 2026-04-19) |
+| (legacy) OHO project memory | `a428969b-c3f1-480b-b54c-876974650674` | SUPERSEDED 2026-04-19 |
+
+The 2026-04-12 memory snapshot still references the legacy ID. Treat `d056e9d5-...` as the only authoritative notebook for this project. Push new session logs as sources via `notebooklm source add <path>`.
+
 ## Current Status
-v2 pipeline LIVE (2026-04-12). 15 workflows deployed. Daily note creator fixed. 16 completed tasks archived.
+v2 pipeline LIVE. Production-readiness recovery landed 2026-04-19 (branch `polish/prod-ready`): MinIO outage resolved, dual-body emails across 6 workflows, `errorWorkflow` wired on 12 scheduled workflows, skip_reason enum + run-log auditor, morning-briefing cron decoupled from brain-dump (7:30 CDT). Test suite: 151 pass, 1 skip. All three audit scripts green.
+
 Weekend Planner deployed but INACTIVE (needs Google Calendar OAuth2 credential — see docs/google-calendar-setup.md).
+
 Pending: Google Calendar OAuth2 setup → GCAL_CRED_ID in .env → re-deploy to activate Weekend Planner. Telegram bot setup. OpenRouter key rotation.
+
 Next phase: Phase 3 (Telegram bot, completed task archiver cron, article enricher v2).
