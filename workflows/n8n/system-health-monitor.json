@@ -4,14 +4,22 @@
     {
       "parameters": {
         "rule": {
-          "interval": [{ "field": "cronExpression", "expression": "0 */6 * * *" }]
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */6 * * *"
+            }
+          ]
         }
       },
       "id": "trigger",
       "name": "Every 6 Hours",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [220, 300]
+      "position": [
+        220,
+        300
+      ]
     },
     {
       "parameters": {
@@ -21,7 +29,10 @@
       "name": "Init Checks",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 300]
+      "position": [
+        440,
+        300
+      ]
     },
     {
       "parameters": {
@@ -33,9 +44,15 @@
       "name": "S3: Check North Star",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [660, 200],
+      "position": [
+        660,
+        200
+      ],
       "credentials": {
-        "s3": { "id": "__MINIO_CRED_ID__", "name": "MinIO S3" }
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
       },
       "continueOnFail": true
     },
@@ -49,56 +66,83 @@
       "name": "S3: Check MTL",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [660, 400],
+      "position": [
+        660,
+        400
+      ],
       "credentials": {
-        "s3": { "id": "__MINIO_CRED_ID__", "name": "MinIO S3" }
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
       },
       "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "const init = $('Init Checks').first().json;\nconst nsCheck = $('S3: Check North Star').first().json;\nconst mtlCheck = $('S3: Check MTL').first().json;\n\nconst checks = [\n  { name: 'minio_north_star', status: nsCheck.error ? 'fail' : 'pass', detail: nsCheck.error || 'OK' },\n  { name: 'minio_mtl', status: mtlCheck.error ? 'fail' : 'pass', detail: mtlCheck.error || 'OK' }\n];\n\nconst anyFail = checks.some(c => c.status === 'fail');\n\nconst log = JSON.stringify({\n  workflow: 'system-health-monitor',\n  run_date: init.today,\n  finished_at: new Date().toISOString(),\n  status: anyFail ? 'fail' : 'pass',\n  checks\n}, null, 2);\n\nreturn [{ json: { checks, anyFail, logKey: init.logKey, logContent: log, today: init.today } }];"
+        "jsCode": "const init = $('Init Checks').first().json;\nconst nsCheck = $('S3: Check North Star').first().json;\nconst mtlCheck = $('S3: Check MTL').first().json;\nconst nowIso = new Date().toISOString();\n\nfunction toCheck(name, label, raw, suggestion) {\n  const failed = !!raw.error;\n  return {\n    name,\n    label,\n    status: failed ? 'fail' : 'pass',\n    detail: failed ? String(raw.error).slice(0, 200) : 'reachable',\n    last_checked: nowIso,\n    suggestion: failed ? suggestion : ''\n  };\n}\nconst checks = [\n  toCheck('minio_north_star', 'MinIO · North Star', nsCheck, 'Check MinIO at http://192.168.1.240:9000 — verify the obsidian-vault bucket and the 000_Master Dashboard/North Star.md key.'),\n  toCheck('minio_mtl', 'MinIO · Master Task List', mtlCheck, 'Check the MTL key path. If MinIO is up but this fails, the key was renamed or the bucket policy changed.')\n];\nconst anyFail = checks.some(c => c.status === 'fail');\nconst passCount = checks.filter(c => c.status === 'pass').length;\n\n// Pretty subject + html for the alert email\nfunction badge(status) {\n  const color = status === 'pass' ? '#16a34a' : '#dc2626';\n  const glyph = status === 'pass' ? '✓' : '✗';\n  return `<span style=\"display:inline-block;background:${color};color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700\">${glyph} ${status.toUpperCase()}</span>`;\n}\nlet rows = '';\nfor (const c of checks) {\n  rows += `<tr style=\"border-bottom:1px solid #e5e7eb\">\n    <td style=\"padding:10px 12px;font-size:13px\"><strong>${c.label}</strong><div style=\"font-size:11px;color:#6b7280;margin-top:2px\">${c.detail}</div></td>\n    <td style=\"padding:10px 12px;text-align:right;white-space:nowrap\">${badge(c.status)}</td>\n  </tr>`;\n  if (c.status === 'fail' && c.suggestion) {\n    rows += `<tr style=\"background:#fef2f2;border-bottom:1px solid #fecaca\"><td colspan=\"2\" style=\"padding:8px 12px;font-size:11px;color:#991b1b\"><strong>Action:</strong> ${c.suggestion}</td></tr>`;\n  }\n}\nconst html = `<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head><body style=\"margin:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a;line-height:1.5\">\n<div style=\"max-width:600px;margin:0 auto;background:#ffffff\">\n<noscript style=\"display:block;padding:8px 16px;background:#fef2f2;color:#991b1b;font-size:12px\">Health check FAILED · ${passCount}/${checks.length} services up · ${init.today}</noscript>\n<div style=\"background:${anyFail ? '#dc2626' : '#16a34a'};color:white;padding:20px\">\n  <h1 style=\"margin:0;font-size:18px;font-weight:700\">${anyFail ? '🚨' : '✅'} Infrastructure Health</h1>\n  <p style=\"margin:6px 0 0;font-size:13px;opacity:0.9\">${passCount}/${checks.length} services up · ${init.today}</p>\n</div>\n<div style=\"padding:0\">\n  <table style=\"width:100%;border-collapse:collapse\"><tbody>${rows}</tbody></table>\n</div>\n<div style=\"padding:14px 20px;background:#f9fafb;font-size:11px;color:#6b7280\">Checked at ${nowIso} · Logs: <code>99_System/logs/health-monitor-*</code></div>\n<div style=\"background:#1a1a1a;color:#9ca3af;padding:10px 20px;text-align:center;font-size:11px\">Life OS Health Monitor</div>\n</div></body></html>`;\nconst subject = anyFail ? `🚨 Health Check FAILED — ${passCount}/${checks.length} up — ${init.today}` : `✓ Health OK — ${passCount}/${checks.length} up — ${init.today}`;\n\nconst log = JSON.stringify({\n  workflow: 'system-health-monitor',\n  run_date: init.today,\n  finished_at: nowIso,\n  status: anyFail ? 'fail' : 'pass',\n  checks\n}, null, 2);\n\nreturn [{ json: { checks, anyFail, html, subject, logKey: init.logKey, logContent: log, today: init.today } }];"
       },
       "id": "evaluate",
       "name": "Evaluate Results",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [880, 300]
+      "position": [
+        880,
+        300
+      ]
     },
     {
       "parameters": {
         "conditions": {
-          "options": { "leftValue": "", "caseSensitive": true, "typeValidation": "strict" },
+          "options": {
+            "leftValue": "",
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
           "combinator": "and",
-          "conditions": [{
-            "leftValue": "={{ $json.anyFail }}",
-            "rightValue": true,
-            "operator": { "type": "boolean", "operation": "equals" }
-          }]
+          "conditions": [
+            {
+              "leftValue": "={{ $json.anyFail }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
         }
       },
       "id": "if-fail",
       "name": "Any Failures?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1100, 300]
+      "position": [
+        1100,
+        300
+      ]
     },
     {
       "parameters": {
         "fromEmail": "__NOTIFICATION_EMAIL__",
         "toEmail": "__NOTIFICATION_EMAIL__",
-        "subject": "=🚨 Health Check FAILED — {{ $json.today }}",
-        "html": "=<h2>System Health Check FAILED</h2><p>Date: {{ $json.today }}</p><pre>{{ JSON.stringify($json.checks, null, 2) }}</pre>",
-        "text": "=System Health Check FAILED on {{ $json.today }}. Checks: {{ JSON.stringify($json.checks) }}. See HTML view for details.",
-        "options": { "emailFormat": "both" }
+        "subject": "={{ $json.subject }}",
+        "html": "={{ $json.html }}",
+        "options": {},
+        "emailFormat": "html"
       },
       "id": "email-alert",
       "name": "Email: Health Alert",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [1320, 200],
+      "position": [
+        1320,
+        200
+      ],
       "credentials": {
-        "smtp": { "id": "__SMTP_CRED_ID__", "name": "Gmail SMTP (Aaron)" }
+        "smtp": {
+          "id": "__SMTP_CRED_ID__",
+          "name": "Gmail SMTP (Aaron)"
+        }
       },
       "continueOnFail": true
     },
@@ -110,7 +154,10 @@
       "name": "Convert Log to Binary",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 400]
+      "position": [
+        1320,
+        400
+      ]
     },
     {
       "parameters": {
@@ -124,44 +171,107 @@
       "name": "S3: Write Log",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [1540, 400],
+      "position": [
+        1540,
+        400
+      ],
       "credentials": {
-        "s3": { "id": "__MINIO_CRED_ID__", "name": "MinIO S3" }
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
       },
       "continueOnFail": true
     }
   ],
   "connections": {
     "Every 6 Hours": {
-      "main": [[{ "node": "Init Checks", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Init Checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Init Checks": {
-      "main": [[{ "node": "S3: Check North Star", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "S3: Check North Star",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "S3: Check North Star": {
-      "main": [[{ "node": "S3: Check MTL", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "S3: Check MTL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "S3: Check MTL": {
-      "main": [[{ "node": "Evaluate Results", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Evaluate Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Evaluate Results": {
-      "main": [[
-        { "node": "Any Failures?", "type": "main", "index": 0 },
-        { "node": "Convert Log to Binary", "type": "main", "index": 0 }
-      ]]
+      "main": [
+        [
+          {
+            "node": "Any Failures?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Convert Log to Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Any Failures?": {
       "main": [
-        [{ "node": "Email: Health Alert", "type": "main", "index": 0 }],
+        [
+          {
+            "node": "Email: Health Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
         []
       ]
     },
     "Convert Log to Binary": {
-      "main": [[{ "node": "S3: Write Log", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "jIOFmhr37mXEhlHz"
+    "errorWorkflow": "jIOFmhr37mXEhlHz",
+    "timezone": "America/Chicago"
   }
 }

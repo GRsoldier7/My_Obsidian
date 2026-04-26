@@ -44,7 +44,7 @@ def load_workflows() -> list[Path]:
 def audit_file(path: Path) -> list[Finding]:
     findings: list[Finding] = []
     try:
-        workflow = json.loads(path.read_text())
+        workflow = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:  # pragma: no cover - lint-workflows already catches malformed JSON
         return [Finding(path.name, "<file>", f"invalid JSON: {exc}")]
 
@@ -122,7 +122,7 @@ def main() -> int:
     saw_legacy = False
 
     for path in files:
-        data = json.loads(path.read_text())
+        data = json.loads(path.read_text(encoding="utf-8"))
         for node in data.get("nodes", []):
             node_type = node.get("type")
             if node_type == SUPPORTED_S3_NODE_TYPE:

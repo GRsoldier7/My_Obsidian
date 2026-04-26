@@ -181,10 +181,17 @@ Enforced by [scripts/audit_workflow_credentials.py](scripts/audit_workflow_crede
 The 2026-04-12 memory snapshot still references the legacy ID. Treat `d056e9d5-...` as the only authoritative notebook for this project. Push new session logs as sources via `notebooklm source add <path>`.
 
 ## Current Status
-v2 pipeline LIVE. Production-readiness recovery landed 2026-04-19 (branch `polish/prod-ready`): MinIO outage resolved, dual-body emails across 6 workflows, `errorWorkflow` wired on 12 scheduled workflows, skip_reason enum + run-log auditor, morning-briefing cron decoupled from brain-dump (7:30 CDT). Test suite: 151 pass, 1 skip. All three audit scripts green.
+v2 pipeline LIVE. Production-readiness recovery landed 2026-04-19. Value-first triage landed 2026-04-25 (branch `polish/prod-ready`):
+- **Emails**: HTML across 6 workflows, `parameters.emailFormat` at top level (n8n emailSend@2 ignores `options.emailFormat`). Live SMTP messageSize 13,710–15,493 B post-fix (was 355–678). `scripts/audit_workflow_email_format.py` + `scripts/render_emails_dryrun.py` ship.
+- **Brain-dump pipeline (Python path)**: `tools/process_brain_dump.py` rewritten — section-aware, prose-imperative regex, OpenRouter on every dump, intent classification, auto `[explore::]` tag, source-link wikilinks, fuzzy dedup, confidence-gated review queue. Proven E2E on operator's 2026-04-25 brain dump (5 tasks → MTL with `[source:: [[...]]]`). Brain-dump n8n S3 List node rewired to HTTP-Request + presigned URL; needs `setup-n8n.sh` placeholder hydration before cron path works again — manual Python invocation is the working path TODAY.
+- **Home.md**: `000_Master Dashboard/Home.md` (4258 B) — Morning Setup, Today, Active Projects, This Week, Reading Queue, To Look Into, Inbox Health, Quick Actions. Built by `tools/build_home_view.py`.
+- **Pipeline Health observability**: `99_System/Pipeline Health.md` (3658 B) auto-updated by `tools/build_pipeline_health.py`; anomaly rules in `tools/anomaly_detector.py`.
+- **Windows encoding fix**: 3 audit scripts + 1 test file were silently crashing on `cp1252` → all four audits now green on Windows. Always pass `encoding="utf-8"` to `Path.read_text()` and prefix interactive Python with `PYTHONIOENCODING=utf-8`.
+- **Validation bug recovery**: `TASK_FORMAT_PATTERN` rejected tasks with trailing `[explore::]` and `[source:: [[...]]]` extensions, causing data loss before the fix landed. MinIO bucket versioning is **enabled** — recover via `s3.list_object_versions(Prefix=key)`. 3 regression tests guard this.
+- Test suite: 189 pass, 1 skip.
 
 Weekend Planner deployed but INACTIVE (needs Google Calendar OAuth2 credential — see docs/google-calendar-setup.md).
 
-Pending: Google Calendar OAuth2 setup → GCAL_CRED_ID in .env → re-deploy to activate Weekend Planner. Telegram bot setup. OpenRouter key rotation.
+Pending: GCAL OAuth2 → GCAL_CRED_ID in .env → re-deploy Weekend Planner. Telegram bot. OpenRouter key rotation. Brain-dump n8n cron placeholder hydration. `reset_to_template` should be conditional on successful MTL append (currently fires regardless). MTL backfill of `[due::]` (only 11% populated) and `[completion::]` (0%).
 
-Next phase: Phase 3 (Telegram bot, completed task archiver cron, article enricher v2).
+Next phase: Phase 3 (Telegram bot, completed task archiver cron, article enricher v2, brain-dump cron restoration).

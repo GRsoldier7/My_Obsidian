@@ -56,6 +56,14 @@ PROCESSED_PREFIX = "00_Inbox/processed/"
 ARTICLES_FILE = "00_Inbox/articles-to-process.md"
 MTL_KEY = "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
 LOGS_PREFIX = "99_System/logs/"
+METRICS_KEY = "99_System/metrics/brain-dump-extraction.jsonl"
+REVIEW_QUEUE_KEY = "00_Inbox/review-queue.md"
+DAILY_NOTES_PREFIX = "40_Timeline_Weekly/Daily/"
+
+# Confidence threshold below which items go to review queue (Layer 3).
+CONFIDENCE_THRESHOLD = 0.6
+# Fuzzy-match similarity threshold for MTL dedup (Layer 3).
+FUZZY_DEDUP_THRESHOLD = 0.85
 
 VALID_AREAS = {"faith", "family", "business", "consulting", "work", "health", "home", "personal"}
 VALID_PRIORITIES = {"A", "B", "C"}
@@ -86,7 +94,9 @@ Priority C = nice-to-have, research, or low-urgency
 
 TASK_FORMAT_PATTERN = re.compile(
     r"^- \[ \] .+\[area:: (?:faith|family|business|consulting|work|health|home|personal)\]"
-    r"( \[priority:: [ABC]\])?( \[due:: \d{4}-\d{2}-\d{2}\])?$"
+    r"( \[priority:: [ABC]\])?( \[due:: \d{4}-\d{2}-\d{2}\])?"
+    r"( \[explore:: (?:true|false)\])?"
+    r"( \[source:: \[\[[^\]]+\]\]\])?$"
 )
 
 SECTION_HEADERS = [
@@ -132,6 +142,14 @@ class RunLog:
     files_processed: list = field(default_factory=list)
     errors: list = field(default_factory=list)
     quality_rejections: list = field(default_factory=list)
+    # Layer 3 — intent routing + confidence gating telemetry
+    candidates_seen: int = 0
+    items_routed: dict = field(default_factory=lambda: {
+        "mtl": 0, "daily_note": 0, "captured_references": 0, "review_queue": 0
+    })
+    ai_calls: int = 0
+    dedup_skips: int = 0
+    low_confidence: int = 0
 
 
 # ── MinIO helpers ────────────────────────────────────────────────────────────
@@ -390,12 +408,70 @@ def _infer_due(raw: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _build_task(desc: str, area: str, priority: str, due: str | None = None) -> str:
+def _build_task(desc: str, area: str, priority: str, due: str | None = None,
+                explore: bool = False) -> str:
     """Build a canonical task line."""
     task = f"- [ ] {desc} [area:: {area}] [priority:: {priority}]"
     if due:
         task += f" [due:: {due}]"
+    if explore:
+        task += " [explore:: true]"
     return task
+
+
+# Shorthand-date suffix:  "... - 20260420"  (8 digits, optionally space-padded)
+SHORTHAND_DATE_RE = re.compile(r"\s*[-—]\s*(\d{4})(\d{2})(\d{2})\s*$")
+# Loose imperative-verb start (any TitleCase or imperative verb).
+# Lines like "Flush out X", "Re-apply", "Dig into Y", "Fine Tune Z" all match.
+IMPERATIVE_LINE_RE = re.compile(
+    r"^([A-Z][a-z]+(?:[-\s][A-Za-z]+)?)\b"  # Word or hyphenated/two-word lead
+)
+# Lines that should never be treated as tasks even if they start TitleCase.
+TASK_BLOCKLIST = (
+    "## ", "# ", "*Tags:", "*Last", "*Updated", "Format:", "How to use",
+)
+
+
+def normalize_shorthand_dates(text: str) -> str:
+    """Convert trailing `- YYYYMMDD` (or `— YYYYMMDD`) into `[due:: YYYY-MM-DD]`.
+
+    Validates as a real date. Random 8-digit numbers (e.g. `12345678`) pass
+    through unchanged because they fail the date validity check.
+    """
+    m = SHORTHAND_DATE_RE.search(text)
+    if not m:
+        return text
+    yyyy, mm, dd = m.group(1), m.group(2), m.group(3)
+    try:
+        datetime(int(yyyy), int(mm), int(dd))
+    except ValueError:
+        return text
+    return SHORTHAND_DATE_RE.sub(f" [due:: {yyyy}-{mm}-{dd}]", text)
+
+
+def _is_imperative_prose(line: str) -> bool:
+    """Return True if the line looks like an actionable prose statement.
+
+    Catches the operator's writing patterns that the old verb whitelist missed:
+    "Flush out ICP...", "Fine Tune E7...", "Re-apply to Google...", "Dig into ICP...".
+
+    Heuristic:
+      • Starts with a Title-Case word (or hyphenated like "Re-apply") OR a
+        known imperative phrase ("I need to", "Need to").
+      • Is at least 10 chars long (filters short fragments).
+      • Is not a markdown heading or template artifact.
+    """
+    if len(line) < 10:
+        return False
+    if any(line.startswith(b) for b in TASK_BLOCKLIST):
+        return False
+    if line.startswith("#") or line.startswith("|"):
+        return False
+    if re.match(r"^[Ii]\s+(need|should|must|want|have)\s+to\b", line):
+        return True
+    if re.match(r"^Need\s+to\b", line, re.IGNORECASE):
+        return True
+    return bool(IMPERATIVE_LINE_RE.match(line))
 
 
 def regex_extract_tasks(section_body: str, file_area: str) -> list[str]:
@@ -404,8 +480,11 @@ def regex_extract_tasks(section_body: str, file_area: str) -> list[str]:
     Always rebuilds canonical format: - [ ] desc [area:: X] [priority:: X]
     """
     tasks = []
-    for line in section_body.splitlines():
-        stripped = line.strip()
+    for raw_line in section_body.splitlines():
+        # Normalize the raw line first so trailing `- YYYYMMDD` shorthand
+        # becomes a real `[due:: YYYY-MM-DD]` tag before any extraction logic.
+        line = normalize_shorthand_dates(raw_line.strip())
+        stripped = line
         if not stripped or is_section_empty(stripped):
             continue
         if stripped.startswith("<!--") or stripped.startswith(">"):
@@ -423,9 +502,10 @@ def regex_extract_tasks(section_body: str, file_area: str) -> list[str]:
                 continue
             priority = infer_priority(desc)
             tasks.append(_build_task(desc, file_area, priority, due))
+            continue
 
         # Bullet without checkbox: "- item" or "* item"
-        elif re.match(r"^[-*]\s+\S", stripped):
+        if re.match(r"^[-*]\s+\S", stripped):
             raw_text = re.sub(r"^[-*]\s+", "", stripped).strip()
             if len(raw_text) < 5:
                 continue
@@ -433,33 +513,76 @@ def regex_extract_tasks(section_body: str, file_area: str) -> list[str]:
             desc = _clean_task_text(raw_text)
             priority = infer_priority(desc)
             tasks.append(_build_task(desc, file_area, priority, due))
-
-        # Plain imperative sentences
-        elif re.match(
-            r"^(I need|Need to|Research|Call|Email|Buy|Get|Check|Follow up|"
-            r"Review|Write|Schedule|Set up|Look into|Find|Fix|Create|Build|"
-            r"Update|Send|Submit|Complete|Finish|Start|Launch|Plan|Talk to|Meet with)",
-            stripped, re.IGNORECASE
-        ):
-            desc = _clean_task_text(stripped)
-            priority = infer_priority(desc)
-            tasks.append(_build_task(desc, file_area, priority))
+            continue
 
         # Plain sentence with explicit inline priority marker: "Do thing - A"
-        # Catches the user's common shorthand: "Apply to Reggie program ASAP - A"
-        elif re.match(r".{10,}\s+-\s+[ABC](\s*-\s*due\s+\d{4}-\d{2}-\d{2})?$", stripped):
-            # Extract priority from the suffix
-            priority_match = re.search(r"\s+-\s+([ABC])(?:\s+-\s+due\s+(\d{4}-\d{2}-\d{2}))?$", stripped)
-            if priority_match:
-                explicit_priority = priority_match.group(1)
-                due_date = priority_match.group(2)
-                # Strip the " - A" suffix from the description
-                desc = stripped[:priority_match.start()].strip()
-                desc = _clean_task_text(desc)
-                if len(desc) >= 5:
-                    tasks.append(_build_task(desc, file_area, explicit_priority, due_date))
+        # ("Apply to Reggie program ASAP - A")
+        priority_match = re.search(
+            r"\s+-\s+([ABC])(?:\s+-\s+due\s+(\d{4}-\d{2}-\d{2}))?$", stripped
+        )
+        if priority_match and len(stripped) >= 10:
+            explicit_priority = priority_match.group(1)
+            due_date = priority_match.group(2)
+            desc = stripped[:priority_match.start()].strip()
+            desc = _clean_task_text(desc)
+            if len(desc) >= 5:
+                tasks.append(_build_task(desc, file_area, explicit_priority, due_date))
+                continue
+
+        # Imperative-prose lines — broad heuristic (replaces narrow verb whitelist).
+        if _is_imperative_prose(stripped):
+            due = _infer_due(stripped)
+            desc = _clean_task_text(stripped)
+            if len(desc) < 5:
+                continue
+            priority = infer_priority(desc)
+            tasks.append(_build_task(desc, file_area, priority, due))
+            continue
 
     return tasks
+
+
+# ── Explore-intent auto-tag ──────────────────────────────────────────────────
+
+EXPLORE_INTENT_RE = re.compile(
+    r"\b(research|investigate|explore|look\s+into|dig\s+into|study|"
+    r"evaluate|deep\s+dive)\b",
+    re.IGNORECASE,
+)
+
+
+def _ensure_explore_tag(task: str) -> str:
+    """If the task description has research/explore intent and the AI did
+    not already include `[explore:: true]`, append it."""
+    if "[explore::" in task:
+        return task
+    # Look only at the description portion (between "- [ ]" and the first "[area::")
+    desc_match = re.match(r"^- \[ \] (.+?)\s*\[area::", task)
+    desc = desc_match.group(1) if desc_match else task
+    if EXPLORE_INTENT_RE.search(desc):
+        return task + " [explore:: true]"
+    return task
+
+
+def extract_tasks_with_ai_fallback(client: Any, section_body: str,
+                                    file_area: str, today: str) -> list[str]:
+    """AI fallback path. Always called when regex returns 0 tasks (and AI is the
+    gold path on every brain dump for richer extraction).
+
+    Auto-tags research/investigate/explore-intent items with [explore:: true].
+    Returns canonical-format task lines only — invalid lines are dropped.
+    """
+    if client is None:
+        return []
+    raw = extract_tasks_from_section(client, "AI fallback", section_body, file_area, today)
+    out = []
+    for task in raw:
+        task = _ensure_explore_tag(task.strip())
+        # Validate canonical shape, but tolerate trailing [explore:: true]
+        base = re.sub(r"\s*\[explore::[^\]]+\]\s*$", "", task).strip()
+        if validate_task_line(base):
+            out.append(task)
+    return out
 
 
 # ── OpenRouter AI extraction ─────────────────────────────────────────────────
@@ -763,6 +886,445 @@ def write_run_log(s3, log: RunLog, dry_run: bool):
     s3_put_verified(s3, key, json.dumps(log_dict, indent=2), dry_run)
 
 
+# ── Layer 3: Intent classification + routing ─────────────────────────────────
+
+# Keyword dictionaries for area auto-detection. AI's call wins when the AI is
+# confident; these only force an area when the AI is uncertain or absent.
+AREA_KEYWORDS = {
+    "family":     ["christy", "kids", "family", "marriage", "wife"],
+    "business":   ["echelon", "echelon seven", "e7", "mvp", "icp", "outreach",
+                   "client", "offer", "temple protocol", "leads", "cold email"],
+    "health":     ["hip", "gym", "supplement", "sleep", "biomarker", "crossfit",
+                   "workout", "vagal", "biohack"],
+    "faith":      ["bible", "prayer", "church", "ministry", "sunday school",
+                   "scripture", "gospel"],
+    "work":       ["parallon", "bam", "day job", "tmc", "union project"],
+    "home":       ["house", "mi property", "michigan property", "ups",
+                   "generator", "yard", "basement", "hvac"],
+    "consulting": ["sow", "proposal", "engagement", "retainer", "billable",
+                   "consulting"],
+}
+
+# Priority phrase markers (Layer 3).
+PRIORITY_A_MARKERS = ("asap", "urgent", "critical", "needle-mover",
+                      "needle mover", "today", "must")
+PRIORITY_C_MARKERS = ("maybe", "someday", "would be nice", "nice to have",
+                      "low priority", "no rush")
+PRIORITY_B_MARKERS = ("should", "want to", "plan to", "would like")
+
+# Question / event / reference cues.
+QUESTION_RE = re.compile(r"\?\s*$")
+EVENT_KEYWORDS = ("lunch with", "dinner with", "coffee with", "meeting with",
+                  "call with", "appointment", "tomorrow at", "today at",
+                  "this evening")
+URL_RE = re.compile(r"^https?://\S+$|\bhttps?://\S+\b")
+
+
+def _detect_area(text: str, hint: str | None = None) -> tuple[str, float]:
+    """Return (area, confidence_boost). Confidence_boost is added to base.
+
+    Uses word-boundary matching so "hip" doesn't match inside "scholarship",
+    "ups" doesn't match inside "groups", etc.
+    """
+    lower = text.lower()
+    hits = []
+    for area, keywords in AREA_KEYWORDS.items():
+        for kw in keywords:
+            # Compile a word-boundary regex; for multi-word keywords it
+            # still anchors on the outer word boundaries.
+            pattern = r"\b" + re.escape(kw) + r"\b"
+            if re.search(pattern, lower):
+                hits.append((area, len(kw)))
+    if hits:
+        hits.sort(key=lambda x: -x[1])
+        return hits[0][0], 0.25
+    if hint and hint in VALID_AREAS:
+        return hint, 0.10
+    return "personal", 0.0
+
+
+def _detect_priority(text: str) -> tuple[str, float]:
+    """Return (priority, confidence_boost) using phrase markers."""
+    lower = text.lower()
+    if any(m in lower for m in PRIORITY_A_MARKERS):
+        return "A", 0.20
+    if any(m in lower for m in PRIORITY_C_MARKERS):
+        return "C", 0.20
+    if any(m in lower for m in PRIORITY_B_MARKERS):
+        return "B", 0.15
+    # Fall back to the Q2-rock keyword classifier.
+    return infer_priority(text), 0.05
+
+
+def _detect_intent(text: str) -> tuple[str, float]:
+    """Return (intent, base_confidence) using cheap, deterministic heuristics."""
+    stripped = text.strip()
+    if not stripped:
+        return "reference", 0.0
+
+    # Reference: bare URL or just a link
+    if URL_RE.match(stripped) or stripped.startswith("http"):
+        return "reference", 0.85
+
+    # Question: ends with ?
+    if QUESTION_RE.search(stripped):
+        return "question", 0.85
+
+    # Event: calendar-shape phrases
+    lower = stripped.lower()
+    if any(kw in lower for kw in EVENT_KEYWORDS):
+        return "event", 0.80
+
+    # Research / explore intent
+    if EXPLORE_INTENT_RE.search(stripped):
+        return "research", 0.70
+
+    # Action: imperative-shaped prose, ≥10 chars, starts with TitleCase or "Need to"
+    if _is_imperative_prose(stripped):
+        return "action", 0.65
+
+    # Generic short non-actionable text → reference (low confidence)
+    if len(stripped) < 10:
+        return "reference", 0.30
+
+    return "action", 0.45
+
+
+def classify_intent(text: str, file_area_hint: str | None = None) -> dict:
+    """Classify a single line of brain-dump text.
+
+    Returns a dict with:
+        intent     ∈ {action, research, question, event, reference}
+        task       — cleaned imperative phrasing
+        area       ∈ VALID_AREAS
+        priority   ∈ {A, B, C}
+        due        — ISO date string or None
+        confidence — float in [0.0, 1.0]
+
+    Pure-Python heuristic implementation; AI augmentation is layered on top
+    by `ai_classify_intent` when an OpenRouter client is available.
+    """
+    raw = (text or "").strip()
+    intent, base_conf = _detect_intent(raw)
+    area, area_boost = _detect_area(raw, hint=file_area_hint)
+    priority, prio_boost = _detect_priority(raw)
+    due = _infer_due(raw)
+
+    confidence = round(min(1.0, base_conf + area_boost + prio_boost), 3)
+    return {
+        "intent": intent,
+        "task": _clean_task_text(raw),
+        "area": area,
+        "priority": priority,
+        "due": due,
+        "confidence": confidence,
+    }
+
+
+def ai_classify_intent(client: Any, text: str, file_area: str,
+                       today: str) -> dict | None:
+    """Ask the AI gold path to classify an item — returns dict or None on failure.
+
+    The AI gold path runs on every brain dump (per Layer 3 mandate). It returns
+    a richer structured payload than the regex heuristic. If AI is unavailable
+    (offline, key dead), callers should fall back to `classify_intent`.
+    """
+    if client is None:
+        return None
+    prompt = f"""Classify this brain dump line into a JSON object.
+
+Output ONLY one JSON object (no markdown, no preamble). Fields:
+- intent: one of action, research, question, event, reference
+- task: imperative phrasing of the item (one short sentence)
+- area: one of faith, family, business, consulting, work, health, home, personal
+- priority: A (critical/needle-mover), B (important), C (nice-to-have)
+- due: YYYY-MM-DD or null
+- confidence: 0.0 to 1.0
+
+File domain hint: {file_area} | Today: {today}
+
+LINE: {text}"""
+    raw = _chat_with_fallback(client, prompt, max_tokens=200)
+    if not raw:
+        return None
+    raw = raw.strip()
+    # Strip markdown fences if model included them.
+    raw = re.sub(r"^```(?:json)?", "", raw).strip()
+    raw = re.sub(r"```$", "", raw).strip()
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        # Try to find the first {...} block.
+        m = re.search(r"\{[^{}]*\}", raw, re.DOTALL)
+        if not m:
+            return None
+        try:
+            obj = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return None
+    # Normalize / sanity-check.
+    intent = obj.get("intent", "action")
+    if intent not in ("action", "research", "question", "event", "reference"):
+        intent = "action"
+    area = obj.get("area", file_area)
+    if area not in VALID_AREAS:
+        area = "personal"
+    priority = obj.get("priority", "B")
+    if priority not in VALID_PRIORITIES:
+        priority = "B"
+    due = obj.get("due")
+    if due and not re.match(r"^\d{4}-\d{2}-\d{2}$", str(due)):
+        due = None
+    try:
+        confidence = float(obj.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+    return {
+        "intent": intent,
+        "task": (obj.get("task") or text).strip(),
+        "area": area,
+        "priority": priority,
+        "due": due,
+        "confidence": max(0.0, min(1.0, confidence)),
+    }
+
+
+def confidence_gate(item: dict) -> str:
+    """Return 'promote' if item is above threshold, else 'review_queue'."""
+    return "promote" if float(item.get("confidence", 0)) >= CONFIDENCE_THRESHOLD else "review_queue"
+
+
+def build_source_link(source_file: str, today: str) -> str:
+    """Inline-field source link to the brain-dump origin.
+
+    Example: `[source:: [[braindump-2026-04-25-BrainDump-Personal]]]`
+    """
+    base = re.sub(r"\.md$", "", source_file)
+    base = re.sub(r"\s+", "-", base)
+    base = re.sub(r"[^A-Za-z0-9\-_]", "", base)
+    note = f"braindump-{today}-{base}"
+    return f"[source:: [[{note}]]]"
+
+
+def route_by_intent(item: dict, source_file: str, today: str) -> dict:
+    """Build the routing decision for an intent-classified item.
+
+    Returns a dict with:
+        destination ∈ {mtl, daily_note, captured_references, review_queue}
+        task_line   — full canonical line (for mtl + review_queue)
+        section     — daily-note section name (for daily_note)
+        target_key  — vault key (for captured_references / daily_note / review_queue)
+    """
+    intent = item.get("intent", "action")
+    task   = item.get("task", "").strip()
+    area   = item.get("area", "personal")
+    if area not in VALID_AREAS:
+        area = "personal"
+    priority = item.get("priority", "B")
+    if priority not in VALID_PRIORITIES:
+        priority = "B"
+    due    = item.get("due")
+    src    = build_source_link(source_file, today)
+
+    if intent in ("action", "research", "explore"):
+        explore = (intent in ("research", "explore"))
+        line = _build_task(task, area, priority, due, explore=explore)
+        line = f"{line} {src}"
+        return {
+            "destination": "mtl",
+            "task_line": line,
+            "intent": intent,
+        }
+
+    if intent == "question":
+        return {
+            "destination": "daily_note",
+            "section": "❓ Open Questions",
+            "task_line": f"- {task} {src}",
+            "target_key": f"{DAILY_NOTES_PREFIX}{today}.md",
+        }
+
+    if intent == "event":
+        return {
+            "destination": "daily_note",
+            "section": "📅 Events",
+            "task_line": f"- {task} {src}",
+            "target_key": f"{DAILY_NOTES_PREFIX}{today}.md",
+        }
+
+    if intent == "reference":
+        ym = today[:7]  # YYYY-MM
+        return {
+            "destination": "captured_references",
+            "task_line": f"- {task} {src}",
+            "target_key": f"00_Inbox/captured-references-{ym}.md",
+        }
+
+    # Default fallback
+    line = _build_task(task, area, priority, due) + f" {src}"
+    return {"destination": "mtl", "task_line": line, "intent": "action"}
+
+
+# ── Layer 3: Fuzzy dedup against existing MTL ────────────────────────────────
+
+try:
+    from difflib import SequenceMatcher
+except ImportError:  # pragma: no cover — stdlib
+    SequenceMatcher = None  # type: ignore
+
+
+def _task_desc(line: str) -> str | None:
+    """Extract just the description portion of a canonical task line."""
+    m = re.match(r"^- \[[ x]\]\s+(.+?)(?:\s*\[area::|\s*$)", line)
+    if not m:
+        return None
+    return m.group(1).strip().lower()
+
+
+def fuzzy_dedup_filter(candidates: list[str], existing_descs: set[str],
+                        threshold: float = FUZZY_DEDUP_THRESHOLD) -> list[str]:
+    """Return only candidate task lines whose description is < threshold similar
+    to any existing MTL task description.
+
+    `existing_descs` is a set of lowercase, normalized description strings.
+    """
+    kept: list[str] = []
+    if SequenceMatcher is None:  # pragma: no cover
+        return candidates
+    for line in candidates:
+        desc = _task_desc(line)
+        if not desc:
+            kept.append(line)
+            continue
+        is_dup = False
+        for ex in existing_descs:
+            if not ex:
+                continue
+            ratio = SequenceMatcher(None, desc, ex).ratio()
+            if ratio >= threshold:
+                is_dup = True
+                break
+        if not is_dup:
+            kept.append(line)
+    return kept
+
+
+# ── Layer 4: Telemetry sidecar ───────────────────────────────────────────────
+
+def write_telemetry_entry(s3, entry: dict, dry_run: bool = False) -> bool:
+    """Append a single JSON-line entry to 99_System/metrics/brain-dump-extraction.jsonl."""
+    if dry_run:
+        logging.info(f"[DRY RUN] would append telemetry: {entry}")
+        return True
+    line = json.dumps(entry, sort_keys=False) + "\n"
+    try:
+        existing = s3.get_object(Bucket=MINIO_BUCKET, Key=METRICS_KEY)["Body"].read().decode("utf-8")
+    except Exception:
+        existing = ""
+    body = (existing or "") + line
+    try:
+        s3.put_object(Bucket=MINIO_BUCKET, Key=METRICS_KEY, Body=body.encode("utf-8"))
+        s3.head_object(Bucket=MINIO_BUCKET, Key=METRICS_KEY)
+        return True
+    except Exception as e:
+        logging.error(f"Telemetry write failed: {e}")
+        return False
+
+
+# ── Layer 3: Review queue + daily-note + captured-references writers ─────────
+
+REVIEW_QUEUE_HEADER = """# Review Queue
+
+> Move tasks from this file into the MTL when ready; delete to discard.
+> Items here came from a brain dump but the AI was not confident enough
+> (confidence < 0.6) to auto-promote them.
+
+"""
+
+
+def append_to_review_queue(s3, items: list[dict], today: str, source_file: str,
+                            dry_run: bool) -> int:
+    """Append low-confidence items to 00_Inbox/review-queue.md."""
+    if not items:
+        return 0
+    try:
+        existing = s3_get(s3, REVIEW_QUEUE_KEY)
+    except ClientError:
+        existing = REVIEW_QUEUE_HEADER
+
+    if not existing.startswith("# Review Queue"):
+        existing = REVIEW_QUEUE_HEADER + existing
+
+    block = [f"\n## {today} — {source_file}"]
+    for it in items:
+        line = it.get("task_line") or it.get("task") or ""
+        conf = it.get("confidence")
+        if conf is not None:
+            line = f"{line} <!-- conf={conf} -->"
+        block.append(line)
+    block.append("")
+
+    body = existing.rstrip() + "\n" + "\n".join(block) + "\n"
+    if dry_run:
+        return len(items)
+    ok = s3_put_verified(s3, REVIEW_QUEUE_KEY, body, dry_run=False)
+    return len(items) if ok else 0
+
+
+def append_to_daily_note(s3, today: str, section: str, lines: list[str],
+                         dry_run: bool) -> int:
+    """Append lines under a `## section` heading in today's daily note.
+
+    If the daily note doesn't exist, create a minimal one. If the section
+    is absent, append it at the bottom.
+    """
+    if not lines:
+        return 0
+    key = f"{DAILY_NOTES_PREFIX}{today}.md"
+    try:
+        body = s3_get(s3, key)
+    except ClientError:
+        body = f"# Daily Note — {today}\n"
+
+    section_header = f"## {section}"
+    if section_header in body:
+        # Insert lines after the section header — at end of section.
+        new_body = re.sub(
+            rf"({re.escape(section_header)}\n)",
+            r"\1" + "\n".join(lines) + "\n",
+            body,
+            count=1,
+        )
+    else:
+        # Append a fresh section
+        new_body = body.rstrip() + f"\n\n{section_header}\n\n" + "\n".join(lines) + "\n"
+
+    if dry_run:
+        return len(lines)
+    ok = s3_put_verified(s3, key, new_body, dry_run=False)
+    return len(lines) if ok else 0
+
+
+def append_to_captured_references(s3, today: str, lines: list[str],
+                                   dry_run: bool) -> int:
+    """Append lines to 00_Inbox/captured-references-{YYYY-MM}.md."""
+    if not lines:
+        return 0
+    ym = today[:7]
+    key = f"00_Inbox/captured-references-{ym}.md"
+    try:
+        body = s3_get(s3, key)
+    except ClientError:
+        body = f"# Captured References — {ym}\n"
+
+    block = f"\n## {today}\n\n" + "\n".join(lines) + "\n"
+    new_body = body.rstrip() + block
+    if dry_run:
+        return len(lines)
+    ok = s3_put_verified(s3, key, new_body, dry_run=False)
+    return len(lines) if ok else 0
+
+
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
 def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
@@ -793,24 +1355,78 @@ def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
     all_articles = []
     notes_written = 0
 
+    # Layer 3: per-line intent routing collectors
+    routed_questions: list[str] = []   # daily-note ❓ Open Questions
+    routed_events:    list[str] = []   # daily-note 📅 Events
+    routed_refs:      list[str] = []   # captured-references-{YYYY-MM}.md
+    review_items:     list[dict] = []  # confidence < 0.6
+    src_link_token = build_source_link(name, today)
+
     # Stage 3+4: Extract per section (regex primary, AI for articles/notes)
     for header, body in real_sections.items():
         stype = section_type(header)
         logging.info(f"    [{stype}] {header}")
 
         if stype == "tasks":
-            # Regex extraction — deterministic, no API call needed
+            # Regex extraction — deterministic pre-filter (zero API cost).
             tasks = regex_extract_tasks(body, file_area)
             logging.info(f"      regex extracted {len(tasks)} task(s)")
-            # Try AI enhancement if client available (optional, improves quality)
+            # AI fallback fires whenever regex returned nothing.
             if client and len(tasks) == 0:
-                ai_tasks = extract_tasks_from_section(client, header, body, file_area, today)
+                ai_tasks = extract_tasks_with_ai_fallback(client, body, file_area, today)
                 if ai_tasks:
                     tasks = ai_tasks
+                    log.ai_calls += 1
                     logging.info(f"      AI fallback extracted {len(tasks)} task(s)")
-            valid_tasks, rejections = quality_gate_tasks(tasks)
+            # Auto-tag explore-intent items even on the regex path.
+            tasks = [_ensure_explore_tag(t) for t in tasks]
+            # Stamp source-link onto every regex-extracted task line.
+            tasks = [t if "[source::" in t else f"{t} {src_link_token}" for t in tasks]
+            # Validate (allow trailing [explore:: true] [source:: ...]).
+            valid_tasks = []
+            rejections = []
+            for t in tasks:
+                base = re.sub(r"\s*\[(explore|source)::[^\]]+\]\s*$", "", t).strip()
+                base = re.sub(r"\s*\[(explore|source)::[^\]]+\]\s*$", "", base).strip()
+                if validate_task_line(base):
+                    valid_tasks.append(t)
+                else:
+                    rejections.append({"item": t[:80], "reason": "invalid canonical format"})
             all_tasks.extend(valid_tasks)
             log.quality_rejections.extend(rejections)
+
+            # Layer 3: per-line intent routing for non-task shapes (questions,
+            # events, bare references) that regex's task heuristic skipped.
+            for raw_line in body.splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith(("<!--", ">", "#", "*", "-", "|")):
+                    continue
+                if is_section_empty(line):
+                    continue
+                log.candidates_seen += 1
+                item = classify_intent(line, file_area_hint=file_area)
+                if item["intent"] == "action":
+                    # Already covered by regex pass above.
+                    continue
+                # Confidence gate
+                if confidence_gate(item) == "review_queue":
+                    log.low_confidence += 1
+                    item["task_line"] = (
+                        f"- [ ] {item['task']} [area:: {item['area']}] "
+                        f"[priority:: {item['priority']}] {src_link_token}"
+                    )
+                    review_items.append(item)
+                    continue
+                route = route_by_intent(item, source_file=name, today=today)
+                if route["destination"] == "daily_note":
+                    if route["section"] == "❓ Open Questions":
+                        routed_questions.append(route["task_line"])
+                    else:
+                        routed_events.append(route["task_line"])
+                    log.items_routed["daily_note"] += 1
+                elif route["destination"] == "captured_references":
+                    routed_refs.append(route["task_line"])
+                    log.items_routed["captured_references"] += 1
 
         elif stype == "articles":
             # Extract raw URLs with regex (reliable, zero cost)

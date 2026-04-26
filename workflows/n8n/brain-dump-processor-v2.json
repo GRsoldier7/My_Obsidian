@@ -1,5 +1,5 @@
 {
-  "name": "\ud83e\udde0 Brain Dump Processor v2 \u2014 Daily 7AM",
+  "name": "🧠 Brain Dump Processor v2 — Daily 7AM",
   "nodes": [
     {
       "parameters": {
@@ -23,31 +23,52 @@
     },
     {
       "parameters": {
-        "operation": "list",
-        "bucketName": "obsidian-vault",
-        "returnAll": true,
-        "prefix": "00_Inbox/brain-dumps/",
-        "additionalFields": {}
+        "method": "GET",
+        "url": "=http://__MINIO_HOST__/obsidian-vault/?list-type=2&prefix=00_Inbox/brain-dumps/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "aws",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "fullResponse": false
+            }
+          },
+          "timeout": 30000
+        }
       },
-      "id": "s3-list",
+      "id": "s3-list-http",
       "name": "S3: List Brain Dumps",
-      "type": "n8n-nodes-base.s3",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         440,
         300
       ],
       "credentials": {
-        "s3": {
-          "id": "__MINIO_CRED_ID__",
-          "name": "MinIO S3"
+        "aws": {
+          "id": "__AWS_CRED_ID__",
+          "name": "MinIO S3 v2"
         }
       },
       "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "// Filter to only real files (not folders, not zero-byte)\nconst items = $input.all();\nconst files = items.filter(item => {\n  const key = item.json.Key || '';\n  const size = item.json.Size || 0;\n  return key.endsWith('.md') && size > 0;\n});\nreturn files.length > 0 ? files : [{ json: { _noFiles: true } }];"
+        "jsCode": "// Parse the ListObjectsV2 XML response from MinIO into structured items.\n// We avoid xml2js (not in the n8n sandbox) and use regex extraction.\nconst raw = $input.first().json;\nconst body = typeof raw === 'string' ? raw : (raw.data || raw.body || '');\nif (!body || typeof body !== 'string') {\n  return [{ json: { _noFiles: true, total: 0, debug: 'empty response body' } }];\n}\nconst items = [];\nconst contentRe = /<Contents>([\\s\\S]*?)<\\/Contents>/g;\nlet m;\nwhile ((m = contentRe.exec(body)) !== null) {\n  const block = m[1];\n  const key = (block.match(/<Key>([^<]+)<\\/Key>/) || [])[1];\n  const size = parseInt((block.match(/<Size>([^<]+)<\\/Size>/) || [])[1] || '0', 10);\n  const lastModified = (block.match(/<LastModified>([^<]+)<\\/LastModified>/) || [])[1];\n  if (!key) continue;\n  items.push({ Key: key, Size: size, LastModified: lastModified });\n}\nif (items.length === 0) {\n  return [{ json: { _noFiles: true, total: 0 } }];\n}\nreturn items.map(it => ({ json: it }));"
+      },
+      "id": "s3-list-parse",
+      "name": "Parse List XML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter to only real .md files (exclude zero-byte and folder placeholders).\nconst items = $input.all();\nconst files = items.filter(item => {\n  if (item.json._noFiles) return false;\n  const key = item.json.Key || '';\n  const size = item.json.Size || 0;\n  return key.endsWith('.md') && size > 0;\n});\nreturn files.length > 0 ? files : [{ json: { _noFiles: true } }];"
       },
       "id": "filter-files",
       "name": "Filter Real Files",
@@ -126,7 +147,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Parse sections, detect real content, extract tasks via regex\nconst item = $input.first();\nlet content = '';\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  content = buf.toString('utf-8');\n} catch(e) {\n  return [{ json: { hasContent: false } }];\n}\nconst fileName = item.json.Key?.split('/').pop() || '';\nconst today = new Date().toISOString().split('T')[0];\n\n// Infer area from filename\nfunction inferArea(name) {\n  const n = name.toLowerCase();\n  if (n.includes('faith') || n.includes('bible')) return 'faith';\n  if (n.includes('family')) return 'family';\n  if (n.includes('business') || n.includes('echelon')) return 'business';\n  if (n.includes('consulting')) return 'consulting';\n  if (n.includes('work') || n.includes('parallon')) return 'work';\n  if (n.includes('health')) return 'health';\n  if (n.includes('home')) return 'home';\n  return 'personal';\n}\n\n// Parse into sections\nconst sections = {};\nlet header = '_fm';\nlet lines = [];\nfor (const line of content.split('\\n')) {\n  if (line.trim().startsWith('## ')) {\n    sections[header] = lines.join('\\n');\n    header = line.trim().substring(3).trim();\n    lines = [];\n  } else {\n    lines.push(line);\n  }\n}\nsections[header] = lines.join('\\n');\n\n// Check real content\nfunction isEmpty(body) {\n  const stripped = body\n    .replace(/<!--[\\s\\S]*?-->/g, '')\n    .replace(/^\\s*[-*]{3,}\\s*$/gm, '')\n    .replace(/^\\s*=this\\.\\w+\\s*$/gm, '')\n    .replace(/^\\s*\\*[^*]+\\*\\s*$/gm, '')\n    .replace(/^\\s*>.*$/gm, '')\n    .replace(/^\\s*$/gm, '')\n    .trim();\n  return stripped.length === 0;\n}\n\n// Q2 Rock priority keywords\nconst Q2 = {\n  faith: ['bible','bible study','social media','church','prayer'],\n  family: ['christy','marriage','questionnaire','kids'],\n  business: ['echelon','website','offer','outreach','mvp'],\n  work: ['union','parallon','deliver','exit'],\n  health: ['hip','gym','crossfit','workout','3x']\n};\nfunction inferPriority(text) {\n  const l = text.toLowerCase();\n  for (const kws of Object.values(Q2)) {\n    if (kws.some(k => l.includes(k))) return 'A';\n  }\n  return 'B';\n}\n\nconst area = inferArea(fileName);\nconst tasks = [];\nconst articles = [];\nconst extractedHeaders = [];\n\nfor (const [h, body] of Object.entries(sections)) {\n  if (h.startsWith('_') || isEmpty(body)) continue;\n  const isTask = /To Do|Needle|Recurring|Organize/i.test(h);\n  const isArticle = /Article|Resource/i.test(h);\n  if (!isTask && !isArticle && !/Quick Notes|Ideas/i.test(h)) continue;\n  extractedHeaders.push(h);\n  \n  if (isTask) {\n    for (const line of body.split('\\n')) {\n      const s = line.trim();\n      if (!s || s.startsWith('<!--') || s.startsWith('>') || /^\\*[^*]+\\*$/.test(s)) continue;\n      let taskText = '';\n      if (/^[-*]\\s*\\[ \\]\\s+/.test(s)) taskText = s.replace(/^[-*]\\s*\\[ \\]\\s+/, '');\n      else if (/^[-*]\\s+\\S/.test(s)) taskText = s.replace(/^[-*]\\s+/, '');\n      else if (/^(I need|Need to|Apply|Research|Call|Email|Buy|Get|Check|Follow up|Review|Write|Schedule|Set up|Look into|Find|Fix|Create|Build|Update|Send|Order|Plan|Finish|Complete|Start|Launch|Contact|Reach out|Decide|Consider|Explore|Test|Try|Move|Talk|Meet|Register|Sign|Submit|Setup|Configure|Install|Deploy)/i.test(s)) taskText = s;\n      if (taskText && taskText.length > 5) {\n        taskText = taskText.replace(/\\s*\\[(area|priority|due)::[^\\]]*\\]/g, '').trim();\n        const p = inferPriority(taskText);\n        tasks.push(`- [ ] ${taskText} [area:: ${area}] [priority:: ${p}]`);\n      }\n    }\n  }\n  if (isArticle) {\n    const urls = body.match(/https?:\\/\\/[^\\s\\)\\]]+/g) || [];\n    for (const url of urls) if (url.length > 10) articles.push(`- <${url}>`);\n  }\n}\n\nreturn [{ json: {\n  hasContent: tasks.length > 0 || articles.length > 0 || extractedHeaders.length > 0,\n  hasExtracted: tasks.length > 0 || articles.length > 0,\n  fileName, fileKey: item.json.Key, area, today,\n  tasks, articles, taskCount: tasks.length, articleCount: articles.length,\n  extractedHeaders, content\n}}];"
+        "jsCode": "// Parse sections, detect real content, extract tasks via broader regex heuristic.\n// Mirrors tools/process_brain_dump.py — handles operator's prose patterns:\n// 'Flush out X', 'Fine Tune X', 'Re-apply X', 'Dig into X' AND `- YYYYMMDD`\n// shorthand date suffix.\nconst item = $input.first();\nlet content = '';\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  content = buf.toString('utf-8');\n} catch (e) {\n  return [{ json: { hasContent: false } }];\n}\nconst fileName = item.json.Key?.split('/').pop() || '';\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\n\n// ── Helpers ─────────────────────────────────────────────────────────────\nfunction inferArea(name) {\n  const n = name.toLowerCase();\n  if (n.includes('faith') || n.includes('bible')) return 'faith';\n  if (n.includes('family')) return 'family';\n  if (n.includes('business') || n.includes('echelon') || n.includes('website')) return 'business';\n  if (n.includes('consulting')) return 'consulting';\n  if (n.includes('work') || n.includes('parallon')) return 'work';\n  if (n.includes('health')) return 'health';\n  if (n.includes('home')) return 'home';\n  if (n.includes('coding')) return 'personal';\n  return 'personal';\n}\n\n// `- YYYYMMDD` (or `— YYYYMMDD`) trailing shorthand → `[due:: YYYY-MM-DD]`\nconst SHORTHAND_DATE_RE = /\\s*[-—]\\s*(\\d{4})(\\d{2})(\\d{2})\\s*$/;\nfunction normalizeShorthandDates(text) {\n  const m = SHORTHAND_DATE_RE.exec(text);\n  if (!m) return text;\n  const yyyy = parseInt(m[1], 10), mm = parseInt(m[2], 10), dd = parseInt(m[3], 10);\n  // Validate as a real date.\n  const d = new Date(Date.UTC(yyyy, mm - 1, dd));\n  if (d.getUTCFullYear() !== yyyy || d.getUTCMonth() !== mm - 1 || d.getUTCDate() !== dd) return text;\n  return text.replace(SHORTHAND_DATE_RE, ` [due:: ${m[1]}-${m[2]}-${m[3]}]`);\n}\n\nfunction isEmpty(body) {\n  const stripped = body\n    .replace(/<!--[\\s\\S]*?-->/g, '')\n    .replace(/^\\s*[-*]{3,}\\s*$/gm, '')\n    .replace(/^\\s*=this\\.\\w+\\s*$/gm, '')\n    .replace(/^\\s*\\*[^*]+\\*\\s*$/gm, '')\n    .replace(/^\\s*>.*$/gm, '')\n    .replace(/^\\s*$/gm, '')\n    .trim();\n  return stripped.length === 0;\n}\n\nconst Q2 = {\n  faith: ['bible', 'bible study', 'social media', 'church', 'prayer'],\n  family: ['christy', 'marriage', 'questionnaire', 'kids'],\n  business: ['echelon', 'website', 'offer', 'outreach', 'mvp', 'temple protocol', 'e7'],\n  work: ['union', 'parallon', 'deliver', 'exit'],\n  health: ['hip', 'gym', 'crossfit', 'workout', '3x']\n};\nfunction inferPriority(text) {\n  const l = text.toLowerCase();\n  for (const kws of Object.values(Q2)) {\n    if (kws.some(k => l.includes(k))) return 'A';\n  }\n  return 'B';\n}\n\nconst EXPLORE_RE = /\\b(research|investigate|explore|look\\s+into|dig\\s+into|study|evaluate|deep\\s+dive)\\b/i;\nfunction explorePart(desc) { return EXPLORE_RE.test(desc) ? ' [explore:: true]' : ''; }\n\nconst IMPERATIVE_LEAD_RE = /^([A-Z][a-z]+(?:[-\\s][A-Za-z]+)?)\\b/;\nconst BLOCKLIST = ['## ', '# ', '*Tags:', '*Last', '*Updated', 'Format:', 'How to use'];\nfunction isImperativeProse(line) {\n  if (line.length < 10) return false;\n  if (BLOCKLIST.some(b => line.startsWith(b))) return false;\n  if (line.startsWith('#') || line.startsWith('|')) return false;\n  if (/^[Ii]\\s+(need|should|must|want|have)\\s+to\\b/.test(line)) return true;\n  if (/^Need\\s+to\\b/i.test(line)) return true;\n  return IMPERATIVE_LEAD_RE.test(line);\n}\n\nfunction inferDue(raw) {\n  const m = raw.match(/\\[due::\\s*(\\d{4}-\\d{2}-\\d{2})\\]/);\n  return m ? m[1] : null;\n}\nfunction cleanText(raw) {\n  return raw.replace(/\\s*\\[(area|priority|due)::[^\\]]*\\]/g, '').trim();\n}\nfunction buildTask(desc, area, priority, due, explore) {\n  let t = `- [ ] ${desc} [area:: ${area}] [priority:: ${priority}]`;\n  if (due) t += ` [due:: ${due}]`;\n  if (explore || EXPLORE_RE.test(desc)) t += ' [explore:: true]';\n  return t;\n}\n\n// ── Parse sections ──────────────────────────────────────────────────────\nconst sections = {};\nlet header = '_fm';\nlet lines = [];\nfor (const line of content.split('\\n')) {\n  if (line.trim().startsWith('## ')) {\n    sections[header] = lines.join('\\n');\n    header = line.trim().substring(3).trim();\n    lines = [];\n  } else {\n    lines.push(line);\n  }\n}\nsections[header] = lines.join('\\n');\n\nconst area = inferArea(fileName);\nconst tasks = [];\nconst articles = [];\nconst extractedHeaders = [];\n\nfor (const [h, body] of Object.entries(sections)) {\n  if (h.startsWith('_') || isEmpty(body)) continue;\n  const isTask = /To Do|Needle|Recurring|Organize/i.test(h);\n  const isArticle = /Article|Resource/i.test(h);\n  if (!isTask && !isArticle && !/Quick Notes|Ideas/i.test(h)) continue;\n  extractedHeaders.push(h);\n\n  if (isTask) {\n    for (const rawLine of body.split('\\n')) {\n      const normalized = normalizeShorthandDates(rawLine.trim());\n      const s = normalized;\n      if (!s || s.startsWith('<!--') || s.startsWith('>') || /^\\*[^*]+\\*$/.test(s)) continue;\n\n      let taskText = '';\n      // existing - [ ] checkbox\n      if (/^[-*]\\s*\\[ \\]\\s+/.test(s)) {\n        taskText = s.replace(/^[-*]\\s*\\[ \\]\\s+/, '');\n      // bullet without checkbox\n      } else if (/^[-*]\\s+\\S/.test(s)) {\n        taskText = s.replace(/^[-*]\\s+/, '');\n      // explicit priority suffix \"... - A\"\n      } else if (/.{10,}\\s+-\\s+[ABC](\\s*-\\s*due\\s+\\d{4}-\\d{2}-\\d{2})?$/.test(s)) {\n        const pm = s.match(/\\s+-\\s+([ABC])(?:\\s+-\\s+due\\s+(\\d{4}-\\d{2}-\\d{2}))?$/);\n        if (pm) {\n          const explicitP = pm[1];\n          const dueDate = pm[2];\n          const desc = cleanText(s.substring(0, pm.index).trim());\n          if (desc.length >= 5) tasks.push(buildTask(desc, area, explicitP, dueDate));\n        }\n        continue;\n      // imperative-prose heuristic (Title-case lead, length ≥ 10)\n      } else if (isImperativeProse(s)) {\n        taskText = s;\n      }\n\n      if (taskText && taskText.length > 5) {\n        const due = inferDue(taskText);\n        const desc = cleanText(taskText);\n        if (!desc) continue;\n        const priority = inferPriority(desc);\n        tasks.push(buildTask(desc, area, priority, due));\n      }\n    }\n  }\n  if (isArticle) {\n    const urls = body.match(/https?:\\/\\/[^\\s\\)\\]]+/g) || [];\n    for (const url of urls) if (url.length > 10) articles.push(`- <${url}>`);\n  }\n}\n\nreturn [{ json: {\n  hasContent: tasks.length > 0 || articles.length > 0 || extractedHeaders.length > 0,\n  hasExtracted: tasks.length > 0 || articles.length > 0,\n  fileName, fileKey: item.json.Key, area, today,\n  tasks, articles, taskCount: tasks.length, articleCount: articles.length,\n  extractedHeaders, content\n}}];"
       },
       "id": "parse-extract",
       "name": "Parse & Extract",
@@ -169,7 +190,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const item = $input.first();\nconst { tasks, articles, fileName, area, today, content, extractedHeaders } = item.json;\n\nconst slug = fileName.replace('.md','').replace(/ /g,'-').replace(/[\u2014\u2013]/g,'').replace(/--+/g,'-').replace(/^-|-$/g,'');\nconst taskFileKey = `00_Inbox/processed/${today}-${slug}-tasks.md`;\nconst resetFileKey = item.json.fileKey;\nconst logKey = `99_System/logs/brain-dump-processor-${today}.json`;\n\n// \u2500\u2500 Task output file \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nlet taskFile = `---\\nsource: ${fileName}\\narea: ${area}\\nprocessed: ${today}\\ntype: extracted-tasks\\n---\\n\\n# Extracted Tasks \u2014 ${fileName} (${today})\\n\\n${tasks.join('\\n')}\\n`;\n\n// \u2500\u2500 Clean template reset \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n// Extract H1 title and tags line from current file so we preserve domain branding\nconst h1Match = content.match(/^# .+$/m);\nconst titleLine = h1Match ? h1Match[0] : `# Brain Dump \u2014 ${fileName.replace('.md','')}`;\nconst tagsMatch = content.match(/^\\*Tags:.*\\*$/m);\nconst tagsLine = tagsMatch ? tagsMatch[0] : `*Tags: #brain-dump #${area}*`;\n\n// Rebuild the entire clean template \u2014 zero fragile regex on user content\nconst domainName = content.match(/^domain:\\s*(.+)$/m)?.[1]?.trim() || area;\n\nconst resetContent = `---\ndomain: ${domainName}\narea: ${area}\nlast_processed: ${today}\nstatus: empty\n---\n\n${titleLine}\n\n> **How to use:** Drop anything here \u2014 raw thoughts, ideas, tasks, links, decisions. Claude processes this into your system and clears it out. If this file is empty, it gets skipped.\n> \n> **Last processed:** \\`=this.last_processed\\`\n\n---\n\n## \u26a1 Quick Notes\n*Raw thoughts, observations, things on your mind right now*\n\n<!-- Add notes here -->\n\n\n---\n\n## \ud83c\udfaf Needle Movers\n*Big moves that could change the game \u2014 for this domain specifically*\n\n<!-- Format: - [ ] <what> -->\n\n\n---\n\n## \u2705 To Do's\n*Specific actions, tasks, follow-ups*\n\n<!-- Format: - [ ] <task> [priority:: A/B/C] [due:: YYYY-MM-DD] -->\n\n\n---\n\n## \ud83d\udcf0 Articles & Resources to Follow Up On\n*Links, articles, books, videos, tools to explore*\n\n<!-- Format: - [ ] [Title](URL) \u2014 <why it matters> -->\n\n\n---\n\n## \ud83d\uddc2\ufe0f Things to Organize & Follow Up On\n*Loose ends, conversations to close, things in limbo*\n\n<!-- Add items here -->\n\n\n---\n\n## \ud83d\udca1 Ideas & Possibilities\n*Half-baked ideas, what-ifs, experiments worth exploring*\n\n<!-- Add ideas here -->\n\n\n---\n\n## \ud83d\udd01 Recurring / Rhythms\n*Regular things in this domain that need attention or a new rhythm*\n\n<!-- Add here -->\n\n\n---\n\n${tagsLine}\n`;\n\n// \u2500\u2500 Run log \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nconst log = JSON.stringify({\n  workflow: 'brain-dump-processor', run_date: today,\n  finished_at: new Date().toISOString(), status: 'success',\n  files_with_content: 1, tasks_extracted: tasks.length,\n  articles_queued: articles.length, files_processed: [fileName],\n  reset_applied: true\n}, null, 2);\n\nconst taskBuf  = Buffer.from(taskFile,    'utf-8');\nconst resetBuf = Buffer.from(resetContent,'utf-8');\nconst logBuf   = Buffer.from(log,         'utf-8');\n\nreturn [{ json: {\n  taskFileKey, articleLines: articles.join('\\n'), resetFileKey, logKey,\n  taskCount: tasks.length, articleCount: articles.length, fileName, today\n}, binary: {\n  taskFile:  { data: taskBuf.toString('base64'),  mimeType: 'text/markdown; charset=utf-8', fileName: taskFileKey.split('/').pop(), fileExtension: 'md', fileSize: taskBuf.length  },\n  resetFile: { data: resetBuf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: resetFileKey.split('/').pop(), fileExtension: 'md', fileSize: resetBuf.length },\n  logFile:   { data: logBuf.toString('base64'),   mimeType: 'application/json',             fileName: logKey.split('/').pop(),       fileExtension: 'json', fileSize: logBuf.length   }\n}}];"
+        "jsCode": "const item = $input.first();\nconst { tasks, articles, fileName, area, today, content, extractedHeaders } = item.json;\n\nconst slug = fileName.replace('.md','').replace(/ /g,'-').replace(/[—–]/g,'').replace(/--+/g,'-').replace(/^-|-$/g,'');\nconst taskFileKey = `00_Inbox/processed/${today}-${slug}-tasks.md`;\nconst resetFileKey = item.json.fileKey;\nconst logKey = `99_System/logs/brain-dump-processor-${today}.json`;\n\n// ── Task output file ──────────────────────────────────────────────────────\nlet taskFile = `---\\nsource: ${fileName}\\narea: ${area}\\nprocessed: ${today}\\ntype: extracted-tasks\\n---\\n\\n# Extracted Tasks — ${fileName} (${today})\\n\\n${tasks.join('\\n')}\\n`;\n\n// ── Clean template reset ──────────────────────────────────────────────────\nconst h1Match = content.match(/^# .+$/m);\nconst titleLine = h1Match ? h1Match[0] : `# Brain Dump — ${fileName.replace('.md','')}`;\nconst tagsMatch = content.match(/^\\*Tags:.*\\*$/m);\nconst tagsLine = tagsMatch ? tagsMatch[0] : `*Tags: #brain-dump #${area}*`;\nconst domainName = content.match(/^domain:\\s*(.+)$/m)?.[1]?.trim() || area;\n\nconst resetContent = `---\ndomain: ${domainName}\narea: ${area}\nlast_processed: ${today}\nstatus: empty\n---\n\n${titleLine}\n\n> **How to use:** Drop anything here — raw thoughts, ideas, tasks, links, decisions. Claude processes this into your system and clears it out. If this file is empty, it gets skipped.\n> \n> **Last processed:** \\`=this.last_processed\\`\n\n---\n\n## ⚡ Quick Notes\n*Raw thoughts, observations, things on your mind right now*\n\n<!-- Add notes here -->\n\n\n---\n\n## 🎯 Needle Movers\n*Big moves that could change the game — for this domain specifically*\n\n<!-- Format: - [ ] <what> -->\n\n\n---\n\n## ✅ To Do's\n*Specific actions, tasks, follow-ups*\n\n<!-- Format: - [ ] <task> [priority:: A/B/C] [due:: YYYY-MM-DD] -->\n\n\n---\n\n## 📰 Articles & Resources to Follow Up On\n*Links, articles, books, videos, tools to explore*\n\n<!-- Format: - [ ] [Title](URL) — <why it matters> -->\n\n\n---\n\n## 🗂️ Things to Organize & Follow Up On\n*Loose ends, conversations to close, things in limbo*\n\n<!-- Add items here -->\n\n\n---\n\n## 💡 Ideas & Possibilities\n*Half-baked ideas, what-ifs, experiments worth exploring*\n\n<!-- Add ideas here -->\n\n\n---\n\n## 🔁 Recurring / Rhythms\n*Regular things in this domain that need attention or a new rhythm*\n\n<!-- Add here -->\n\n\n---\n\n${tagsLine}\n`;\n\n// ── Run log ──────────────────────────────────────────────────────────────\nconst log = JSON.stringify({\n  workflow: 'brain-dump-processor', run_date: today,\n  finished_at: new Date().toISOString(), status: 'success',\n  files_with_content: 1, tasks_extracted: tasks.length,\n  articles_queued: articles.length, files_processed: [fileName],\n  reset_applied: true\n}, null, 2);\n\nconst taskBuf  = Buffer.from(taskFile,    'utf-8');\nconst resetBuf = Buffer.from(resetContent,'utf-8');\nconst logBuf   = Buffer.from(log,         'utf-8');\n\nreturn [{ json: {\n  taskFileKey, articleLines: articles.join('\\n'), resetFileKey, logKey,\n  taskCount: tasks.length, articleCount: articles.length, fileName, today\n}, binary: {\n  taskFile:  { data: taskBuf.toString('base64'),  mimeType: 'text/markdown; charset=utf-8', fileName: taskFileKey.split('/').pop(), fileExtension: 'md', fileSize: taskBuf.length  },\n  resetFile: { data: resetBuf.toString('base64'), mimeType: 'text/markdown; charset=utf-8', fileName: resetFileKey.split('/').pop(), fileExtension: 'md', fileSize: resetBuf.length },\n  logFile:   { data: logBuf.toString('base64'),   mimeType: 'application/json',             fileName: logKey.split('/').pop(),       fileExtension: 'json', fileSize: logBuf.length   }\n}}];"
       },
       "id": "build-output",
       "name": "Build Output Files",
@@ -256,8 +277,10 @@
       "parameters": {
         "fromEmail": "__NOTIFICATION_EMAIL__",
         "toEmail": "__NOTIFICATION_EMAIL__",
-        "subject": "=\ud83e\udde0 Brain Dump Processed \u2014 {{ $json.taskCount }} tasks, {{ $json.articleCount }} articles",
-        "text": "=Brain Dump Processor completed at {{ $now.toISO() }}\n\nFile: {{ $json.fileName }}\nTasks extracted: {{ $json.taskCount }}\nArticles queued: {{ $json.articleCount }}\n\nOutput: 00_Inbox/processed/{{ $json.today }}-tasks.md"
+        "subject": "=🧠 Brain Dump Processed — {{ $json.taskCount }} tasks, {{ $json.articleCount }} articles",
+        "html": "=<h2>Brain Dump Processor</h2><p>Completed at {{ $now.toISO() }}</p><ul><li><b>File:</b> {{ $json.fileName }}</li><li><b>Tasks extracted:</b> {{ $json.taskCount }}</li><li><b>Articles queued:</b> {{ $json.articleCount }}</li></ul><p>Output: <code>00_Inbox/processed/{{ $json.today }}-{{ $json.fileName }}-tasks.md</code></p>",
+        "options": {},
+        "emailFormat": "html"
       },
       "id": "email-digest",
       "name": "Email: Digest",
@@ -277,7 +300,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Write a 'no work' run log when there are no brain dump files to process.\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst log = JSON.stringify({\n  workflow: 'brain-dump-processor', run_date: today,\n  finished_at: new Date().toISOString(), status: 'no_work',\n  files_with_content: 0, tasks_extracted: 0,\n  articles_queued: 0, files_processed: []\n}, null, 2);\nconst buf = Buffer.from(log, 'utf-8');\nconst logKey = `99_System/logs/brain-dump-processor-${today}.json`;\nreturn [{ json: { logKey }, binary: { logFile: { data: buf.toString('base64'), mimeType: 'application/json', fileName: logKey.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
+        "jsCode": "// Defense-in-depth: even a true zero-files run writes a run log AND emits\n// an alert payload so silent zeros never happen again.\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst log = JSON.stringify({\n  workflow: 'brain-dump-processor', run_date: today,\n  finished_at: new Date().toISOString(), status: 'skipped',\n  skip_reason: 'source_prefix_empty',\n  files_with_content: 0, tasks_extracted: 0,\n  articles_queued: 0, files_processed: []\n}, null, 2);\nconst buf = Buffer.from(log, 'utf-8');\nconst logKey = `99_System/logs/brain-dump-processor-${today}.json`;\nreturn [{ json: { logKey, today, status: 'skipped', skip_reason: 'source_prefix_empty' }, binary: { logFile: { data: buf.toString('base64'), mimeType: 'application/json', fileName: logKey.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
       },
       "id": "no-work-log",
       "name": "Build No-Work Log",
@@ -308,6 +331,31 @@
         "s3": {
           "id": "__MINIO_CRED_ID__",
           "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
+        "subject": "=🧠 Brain Dump Processor — zero files today",
+        "html": "=<h2>Brain Dump Processor — No Work</h2><p>Run completed at {{ $now.toISO() }} with zero brain-dump files in <code>00_Inbox/brain-dumps/</code> after filtering for non-empty <code>.md</code> files.</p><p>If you expected a brain dump to be processed today, drop a new file into the brain-dumps folder and re-trigger the workflow.</p>",
+        "options": {},
+        "emailFormat": "html"
+      },
+      "id": "email-no-work",
+      "name": "Email: No-Work Notice",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        500
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "__SMTP_CRED_ID__",
+          "name": "Gmail SMTP (Aaron)"
         }
       },
       "continueOnFail": true
@@ -388,6 +436,17 @@
       "main": [
         [
           {
+            "node": "Parse List XML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse List XML": {
+      "main": [
+        [
+          {
             "node": "Filter Real Files",
             "type": "main",
             "index": 0
@@ -429,6 +488,11 @@
         [
           {
             "node": "S3: Write No-Work Log",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email: No-Work Notice",
             "type": "main",
             "index": 0
           }
@@ -555,6 +619,7 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "jIOFmhr37mXEhlHz"
+    "errorWorkflow": "jIOFmhr37mXEhlHz",
+    "timezone": "America/Chicago"
   }
 }

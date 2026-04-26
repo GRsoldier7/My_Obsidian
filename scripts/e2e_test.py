@@ -14,6 +14,9 @@ import json
 import os
 import sys
 import subprocess
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -30,6 +33,13 @@ MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://192.168.1.240:9000")
 MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")  # Required: set in .env
 MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")  # Required: set in .env
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "obsidian-vault")
+
+N8N_HOST = os.environ.get("N8N_HOST", "http://192.168.1.121:5678")
+N8N_API_KEY = os.environ.get("N8N_API_KEY", "")
+# Floor required by Track A (2026-04-25). The blank-email regression on
+# emailSend@2 + emailFormat:"both" produced 364–678 B SMTP envelopes for
+# 13.6 kB upstream HTML. Anything below 1 kB means HTML is being dropped.
+SMTP_MESSAGE_SIZE_FLOOR = 1024
 
 REPO_ROOT = Path(__file__).parent.parent
 TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -163,6 +173,148 @@ def verify_outputs(client):
             check("run_log_valid_json", False)
 
 
+def _n8n_request(method: str, path: str, payload: dict | None = None, timeout: int = 30):
+    url = f"{N8N_HOST.rstrip('/')}/api/v1{path}"
+    data = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    req.add_header("X-N8N-API-KEY", N8N_API_KEY)
+    if data is not None:
+        req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        body = resp.read().decode("utf-8", errors="replace")
+        if not body:
+            return {}
+        return json.loads(body)
+
+
+def _find_smtp_message_size(execution_payload: dict) -> tuple[int | None, str | None]:
+    """
+    Walk an n8n execution result and return (messageSize, nodeName) for the
+    first emailSend node output found. Returns (None, None) if no email
+    node fired.
+    """
+    run_data = (
+        execution_payload.get("data", {})
+        .get("resultData", {})
+        .get("runData", {})
+    )
+    if not isinstance(run_data, dict):
+        return None, None
+    for node_name, runs in run_data.items():
+        if not isinstance(runs, list) or not runs:
+            continue
+        for run in runs:
+            outputs = (run or {}).get("data", {}).get("main", [])
+            if not isinstance(outputs, list):
+                continue
+            for branch in outputs:
+                if not isinstance(branch, list):
+                    continue
+                for item in branch:
+                    if not isinstance(item, dict):
+                        continue
+                    json_blob = item.get("json", {}) or {}
+                    if "messageSize" in json_blob:
+                        try:
+                            return int(json_blob["messageSize"]), node_name
+                        except (TypeError, ValueError):
+                            pass
+    return None, None
+
+
+def verify_email_message_size():
+    """
+    Track A regression guard: trigger morning-briefing via n8n REST,
+    pull the execution data, and assert SMTP messageSize > floor (1024).
+
+    Why: emailSend@2 + emailFormat:"both" silently drops the HTML body
+    on n8n 2.13.4, producing 364–678 B SMTP envelopes for 13 kB+ HTML.
+    A test that doesn't probe SMTP envelope size cannot detect the bug.
+    """
+    print("→ Verifying SMTP message size on a real email send...")
+
+    if not N8N_API_KEY:
+        check("smtp_message_size_floor", False,
+              "N8N_API_KEY not set — cannot trigger workflow")
+        return
+
+    target_name_substr = "Morning Briefing"
+    try:
+        wf_list = _n8n_request("GET", "/workflows")
+    except Exception as exc:
+        check("smtp_message_size_floor", False,
+              f"n8n API unreachable: {exc}")
+        return
+
+    workflow_id = None
+    workflow_name = None
+    for wf in wf_list.get("data", []):
+        if target_name_substr in wf.get("name", ""):
+            workflow_id = wf.get("id")
+            workflow_name = wf.get("name")
+            break
+    if not workflow_id:
+        check("smtp_message_size_floor", False,
+              f"workflow matching {target_name_substr!r} not found")
+        return
+
+    print(f"  Triggering workflow: {workflow_name} ({workflow_id})")
+    try:
+        run = _n8n_request("POST", f"/workflows/{workflow_id}/execute", payload={})
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:200]
+        check("smtp_message_size_floor", False,
+              f"trigger HTTP {exc.code}: {body}")
+        return
+    except Exception as exc:
+        check("smtp_message_size_floor", False, f"trigger failed: {exc}")
+        return
+
+    execution_id = (run.get("data") or run).get("executionId") or run.get("id")
+    if not execution_id:
+        # Some n8n builds return the new execution wrapped in {"data": {...}}
+        execution_id = run.get("data", {}).get("id")
+    if not execution_id:
+        check("smtp_message_size_floor", False,
+              f"trigger returned no executionId: {json.dumps(run)[:200]}")
+        return
+
+    # Poll for completion (most workflows under 10s; allow up to 60s).
+    deadline = time.time() + 60
+    exec_payload = None
+    while time.time() < deadline:
+        try:
+            exec_payload = _n8n_request(
+                "GET", f"/executions/{execution_id}?includeData=true"
+            )
+        except Exception as exc:
+            check("smtp_message_size_floor", False,
+                  f"execution fetch failed: {exc}")
+            return
+        if exec_payload.get("finished"):
+            break
+        time.sleep(1)
+
+    if not exec_payload or not exec_payload.get("finished"):
+        check("smtp_message_size_floor", False,
+              f"execution {execution_id} did not finish in 60s")
+        return
+
+    if exec_payload.get("status") not in (None, "success"):
+        check("smtp_message_size_floor", False,
+              f"execution {execution_id} status={exec_payload.get('status')}")
+        return
+
+    msg_size, node_name = _find_smtp_message_size(exec_payload)
+    if msg_size is None:
+        check("smtp_message_size_floor", False,
+              f"no emailSend output found in execution {execution_id}")
+        return
+
+    detail = f"node={node_name!r} messageSize={msg_size} (floor={SMTP_MESSAGE_SIZE_FLOOR})"
+    check("smtp_message_size_floor", msg_size > SMTP_MESSAGE_SIZE_FLOOR, detail)
+
+
 def cleanup(client):
     """Delete test artifacts from MinIO."""
     print("→ Cleanup...")
@@ -194,6 +346,7 @@ def main():
         setup(client)
         run_processor()
         verify_outputs(client)
+        verify_email_message_size()
     finally:
         cleanup(client)
 

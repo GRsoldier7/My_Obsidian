@@ -288,6 +288,10 @@ raw = raw.replace('__SMTP_CRED_ID__', '$SMTP_CRED_ID')
 raw = raw.replace('__OPENROUTER_CRED_ID__', '$OPENROUTER_CRED_ID')
 raw = raw.replace('__NOTIFICATION_EMAIL__', '$NOTIFICATION_EMAIL')
 raw = raw.replace('__GCAL_CRED_ID__', '${GCAL_CRED_ID:-__GCAL_CRED_ID__}')
+# MinIO host placeholder (used by HTTP Request nodes that hit MinIO directly
+# to bypass n8n's broken s3.list operation).
+raw = raw.replace('__MINIO_HOST__', '${MINIO_ENDPOINT#http://}')
+raw = raw.replace('__AWS_CRED_ID__', '${AWS_CRED_ID:-__AWS_CRED_ID__}')
 with open('$wf_hydrated', 'w') as f:
     f.write(raw)
 "

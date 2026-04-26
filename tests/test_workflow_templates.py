@@ -9,7 +9,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = REPO_ROOT / "workflows" / "n8n"
-SETUP_SCRIPT = (REPO_ROOT / "scripts" / "setup-n8n.sh").read_text()
+SETUP_SCRIPT = (REPO_ROOT / "scripts" / "setup-n8n.sh").read_text(encoding="utf-8")
 
 GLOBAL_ERROR_WF_ID = "jIOFmhr37mXEhlHz"
 
@@ -57,7 +57,7 @@ def test_email_nodes_do_not_feed_log_nodes():
     violations: list[str] = []
 
     for workflow_path in sorted(WORKFLOW_DIR.glob("*.json")):
-        workflow = json.loads(workflow_path.read_text())
+        workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
         for source_name, connection_block in workflow.get("connections", {}).items():
             if not str(source_name).startswith("Email:"):
                 continue
@@ -79,7 +79,7 @@ def test_setup_n8n_does_not_swallow_workflow_import_failures():
 
 
 def _load(name: str) -> dict:
-    return json.loads((WORKFLOW_DIR / name).read_text())
+    return json.loads((WORKFLOW_DIR / name).read_text(encoding="utf-8"))
 
 
 def _cron_minutes(workflow: dict) -> int | None:
@@ -108,24 +108,69 @@ def test_scheduled_workflows_wire_error_workflow(wf_name):
     )
 
 
-def test_email_nodes_have_text_fallback():
+def test_email_nodes_use_top_level_html_format():
+    """
+    Track A regression guard (verified live 2026-04-25):
+
+    On n8n 2.13.4, emailSend@2 has TWO related blank-email bugs:
+      1. options.emailFormat == "both" silently drops HTML.
+      2. options.emailFormat (any value) is IGNORED — the v2 schema reads
+         emailFormat ONLY from the parameters root, not from options.
+
+    Verified fix: parameters.emailFormat = "html" at the top level
+    (sibling of html, NOT under options). messageSize jumped from 355 to
+    15493 bytes after the move.
+
+    Rules:
+      - When an emailSend node has an html field, parameters.emailFormat
+        must be "html" at the TOP LEVEL.
+      - emailFormat must NOT live under parameters.options on
+        typeVersion < 2.1.
+      - emailFormat == "both" is forbidden on typeVersion < 2.1.
+    """
     violations: list[str] = []
     for path in sorted(WORKFLOW_DIR.glob("*.json")):
-        wf = json.loads(path.read_text())
+        wf = json.loads(path.read_text(encoding="utf-8"))
         for node in wf.get("nodes", []):
             if node.get("type") != "n8n-nodes-base.emailSend":
                 continue
             params = node.get("parameters", {}) or {}
             opts = params.get("options", {}) or {}
-            fmt = opts.get("emailFormat", "html")
-            has_text = bool(params.get("text"))
-            if fmt in ("html", "both") and not has_text:
+            top_fmt = params.get("emailFormat")
+            opt_fmt = opts.get("emailFormat")
+            html = params.get("html")
+            type_version = float(node.get("typeVersion", 0) or 0)
+            name = node.get("name", "<unnamed>")
+            label = f"{path.name}:{name}"
+
+            # Forbidden: emailFormat under options on v2.
+            if opt_fmt is not None and type_version < 2.1:
                 violations.append(
-                    f"{path.name}:{node.get('name', '<unnamed>')}"
-                    f" emailFormat={fmt!r} missing text fallback"
+                    f"{label} emailFormat is under options "
+                    f"(on typeVersion={type_version}); n8n ignores it there. "
+                    "Move to parameters.emailFormat (top level)."
+                )
+
+            if top_fmt == "both" and type_version < 2.1:
+                violations.append(
+                    f"{label} emailFormat='both' is forbidden on "
+                    f"typeVersion={type_version} (use 'html' until 2.1)"
+                )
+                continue
+
+            # If html present, top-level emailFormat must be 'html'.
+            if isinstance(html, str) and html.strip():
+                if top_fmt != "html":
+                    violations.append(
+                        f"{label} has html set but parameters.emailFormat="
+                        f"{top_fmt!r} at top level (must be 'html')."
+                    )
+            elif top_fmt == "html":
+                violations.append(
+                    f"{label} emailFormat='html' but html parameter is empty"
                 )
     assert not violations, (
-        "Email nodes using html/both must provide a text fallback:\n"
+        "Email-format violations (Track A regression guard):\n"
         + "\n".join(violations)
     )
 
@@ -133,7 +178,7 @@ def test_email_nodes_have_text_fallback():
 def test_minio_download_nodes_have_continue_on_fail():
     violations: list[str] = []
     for path in sorted(WORKFLOW_DIR.glob("*.json")):
-        wf = json.loads(path.read_text())
+        wf = json.loads(path.read_text(encoding="utf-8"))
         for node in wf.get("nodes", []):
             if node.get("type") != "n8n-nodes-base.s3":
                 continue
@@ -161,7 +206,7 @@ _SKIP_REASON_RE = re.compile(
 def test_skip_reasons_use_canonical_enum():
     bad: list[str] = []
     for path in sorted(WORKFLOW_DIR.glob("*.json")):
-        wf = json.loads(path.read_text())
+        wf = json.loads(path.read_text(encoding="utf-8"))
         for node in wf.get("nodes", []):
             code = node.get("parameters", {}).get("jsCode", "") or ""
             for match in _SKIP_REASON_RE.finditer(code):

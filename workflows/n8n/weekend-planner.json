@@ -239,10 +239,8 @@
         "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "={{ $('Build Weekend Plan').first().json.subject }}",
         "html": "={{ $('Build Weekend Plan').first().json.html }}",
-        "text": "Weekend Plan generated. Open in your email client to view the HTML version.",
-        "options": {
-          "emailFormat": "html"
-        }
+        "emailFormat": "html",
+        "options": {}
       },
       "id": "email-weekend-plan",
       "name": "Email: Weekend Plan",

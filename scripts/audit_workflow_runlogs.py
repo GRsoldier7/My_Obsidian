@@ -59,7 +59,7 @@ class Finding:
 def audit_file(path: Path) -> list[Finding]:
     findings: list[Finding] = []
     try:
-        workflow = json.loads(path.read_text())
+        workflow = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         return [Finding(path.name, "<file>", f"invalid JSON: {exc}")]
 

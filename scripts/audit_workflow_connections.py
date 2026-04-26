@@ -36,7 +36,7 @@ def iter_targets(connection_block: object) -> list[str]:
 
 
 def find_email_to_log_edges(workflow_path: Path) -> list[str]:
-    workflow = json.loads(workflow_path.read_text())
+    workflow = json.loads(workflow_path.read_text(encoding="utf-8"))
     connections = workflow.get("connections", {})
     issues: list[str] = []
     for source_name, connection_block in connections.items():

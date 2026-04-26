@@ -1,5 +1,5 @@
 {
-  "name": "\ud83d\udd17 Link Enricher \u2014 Hourly",
+  "name": "🔗 Link Enricher — Hourly",
   "nodes": [
     {
       "parameters": {
@@ -328,6 +328,7 @@
   },
   "settings": {
     "executionOrder": "v1",
-    "errorWorkflow": "jIOFmhr37mXEhlHz"
+    "errorWorkflow": "jIOFmhr37mXEhlHz",
+    "timezone": "America/Chicago"
   }
 }

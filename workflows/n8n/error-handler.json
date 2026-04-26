@@ -7,17 +7,23 @@
       "name": "Error Trigger",
       "type": "n8n-nodes-base.errorTrigger",
       "typeVersion": 1,
-      "position": [220, 300]
+      "position": [
+        220,
+        300
+      ]
     },
     {
       "parameters": {
-        "jsCode": "const error = $input.first().json;\nconst today = new Date().toISOString().split('T')[0];\nconst ts = new Date().toISOString();\n\nconst workflowName = error.workflow?.name || 'Unknown';\nconst nodeName = error.execution?.lastNodeExecuted || 'Unknown';\nconst errorMsg = error.execution?.error?.message || JSON.stringify(error).substring(0, 500);\n\nconst html = `<h2>n8n Workflow Error</h2>\n<table border=\"1\" cellpadding=\"5\">\n<tr><td><strong>Workflow</strong></td><td>${workflowName}</td></tr>\n<tr><td><strong>Node</strong></td><td>${nodeName}</td></tr>\n<tr><td><strong>Time</strong></td><td>${ts}</td></tr>\n<tr><td><strong>Error</strong></td><td><pre>${errorMsg}</pre></td></tr>\n</table>`;\n\nconst textBody = `n8n Workflow Error\\n\\nWorkflow: ${workflowName}\\nNode: ${nodeName}\\nTime: ${ts}\\n\\nError:\\n${errorMsg}\\n`;\n\nconst log = JSON.stringify({\n  workflow: 'error-handler',\n  source_workflow: workflowName,\n  source_node: nodeName,\n  error: errorMsg,\n  timestamp: ts\n}, null, 2);\n\nreturn [{ json: {\n  subject: `n8n Error: ${workflowName} — ${nodeName}`,\n  html, textBody, today, ts,\n  logKey: `99_System/logs/errors-${today}.json`,\n  logContent: log\n}}];"
+        "jsCode": "const error = $input.first().json;\nconst today = new Date().toISOString().split('T')[0];\nconst ts = new Date().toISOString();\n\nconst workflowName = error.workflow?.name || 'Unknown';\nconst workflowId = error.workflow?.id || '';\nconst executionId = error.execution?.id || '';\nconst nodeName = error.execution?.lastNodeExecuted || 'Unknown';\nconst errorMsg = error.execution?.error?.message || JSON.stringify(error).substring(0, 500);\nconst errorStack = error.execution?.error?.stack || '';\n\nconst n8nHost = 'http://192.168.1.121:5678';\nconst execLink = executionId ? `${n8nHost}/workflow/${workflowId}/executions/${executionId}` : `${n8nHost}/workflow/${workflowId}`;\n\nconst html = `<!DOCTYPE html><html><head><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"></head><body style=\"margin:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a;line-height:1.5\">\n<div style=\"max-width:600px;margin:0 auto;background:#ffffff\">\n<noscript style=\"display:block;padding:8px 16px;background:#fef2f2;color:#991b1b;font-size:12px;border-bottom:1px solid #fecaca\">n8n error: ${workflowName} — ${nodeName} @ ${ts}</noscript>\n<div style=\"background:#dc2626;color:white;padding:20px\">\n  <h1 style=\"margin:0;font-size:18px;font-weight:700\">🚨 Workflow Error</h1>\n  <p style=\"margin:6px 0 0;font-size:13px;opacity:0.9\">${workflowName} · ${ts}</p>\n</div>\n<div style=\"padding:18px 20px\">\n  <h2 style=\"margin:0 0 8px;font-size:15px;color:#1a1a1a\">⚠️ Failure summary</h2>\n  <table style=\"width:100%;border-collapse:collapse;font-size:13px\">\n    <tr><td style=\"padding:8px;background:#f9fafb;font-weight:600;width:140px\">Workflow</td><td style=\"padding:8px\">${workflowName}</td></tr>\n    <tr><td style=\"padding:8px;background:#f9fafb;font-weight:600\">Failed Node</td><td style=\"padding:8px\">${nodeName}</td></tr>\n    <tr><td style=\"padding:8px;background:#f9fafb;font-weight:600\">Execution ID</td><td style=\"padding:8px;font-family:monospace;font-size:12px\">${executionId || 'n/a'}</td></tr>\n    <tr><td style=\"padding:8px;background:#f9fafb;font-weight:600\">Time (UTC)</td><td style=\"padding:8px\">${ts}</td></tr>\n  </table>\n  <h2 style=\"margin:18px 0 8px;font-size:15px;color:#1a1a1a\">📋 Error message</h2>\n  <pre style=\"background:#1f2937;color:#fca5a5;padding:14px;border-radius:6px;font-size:12px;line-height:1.6;overflow-x:auto;white-space:pre-wrap;word-wrap:break-word\">${(errorMsg + (errorStack ? '\\n\\nStack:\\n' + errorStack : '')).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</pre>\n  <h2 style=\"margin:18px 0 8px;font-size:15px;color:#1a1a1a\">🔧 Quick actions</h2>\n  <p style=\"margin:0 0 10px\"><a href=\"${execLink}\" style=\"display:inline-block;background:#0066cc;color:white;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600;font-size:13px\">Open execution in n8n →</a></p>\n  <p style=\"margin:8px 0 0;font-size:12px;color:#6b7280\">Recovery checklist: 1) Open the execution above. 2) Inspect the failed node's input. 3) Re-run from that node once root cause is fixed. Run logs are in <code>99_System/logs/errors-${today}.json</code>.</p>\n</div>\n<div style=\"background:#1a1a1a;color:#9ca3af;padding:12px 20px;text-align:center;font-size:11px\">Life OS Error Handler · ${today}</div>\n</div></body></html>`;\n\nconst log = JSON.stringify({\n  workflow: 'error-handler',\n  source_workflow: workflowName,\n  source_workflow_id: workflowId,\n  source_node: nodeName,\n  source_execution_id: executionId,\n  execution_link: execLink,\n  error: errorMsg,\n  error_stack: errorStack,\n  timestamp: ts\n}, null, 2);\n\nreturn [{ json: {\n  subject: `🚨 n8n Error: ${workflowName} — ${nodeName}`,\n  html, today, ts,\n  logKey: `99_System/logs/errors-${today}.json`,\n  logContent: log\n}}];"
       },
       "id": "format-error",
       "name": "Format Error",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [440, 300]
+      "position": [
+        440,
+        300
+      ]
     },
     {
       "parameters": {
@@ -25,16 +31,17 @@
         "toEmail": "__NOTIFICATION_EMAIL__",
         "subject": "={{ $json.subject }}",
         "html": "={{ $json.html }}",
-        "text": "={{ $json.textBody }}",
-        "options": {
-          "emailFormat": "both"
-        }
+        "options": {},
+        "emailFormat": "html"
       },
       "id": "email",
       "name": "Email: Error Alert",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [660, 300],
+      "position": [
+        660,
+        300
+      ],
       "credentials": {
         "smtp": {
           "id": "__SMTP_CRED_ID__",
@@ -51,7 +58,10 @@
       "name": "Convert Log to Binary",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [880, 300]
+      "position": [
+        880,
+        300
+      ]
     },
     {
       "parameters": {
@@ -65,7 +75,10 @@
       "name": "S3: Write Error Log",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [1100, 300],
+      "position": [
+        1100,
+        300
+      ],
       "credentials": {
         "s3": {
           "id": "__MINIO_CRED_ID__",
@@ -77,16 +90,42 @@
   ],
   "connections": {
     "Error Trigger": {
-      "main": [[{ "node": "Format Error", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "Format Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Format Error": {
-      "main": [[
-        { "node": "Email: Error Alert", "type": "main", "index": 0 },
-        { "node": "Convert Log to Binary", "type": "main", "index": 0 }
-      ]]
+      "main": [
+        [
+          {
+            "node": "Email: Error Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Convert Log to Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     },
     "Convert Log to Binary": {
-      "main": [[{ "node": "S3: Write Error Log", "type": "main", "index": 0 }]]
+      "main": [
+        [
+          {
+            "node": "S3: Write Error Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
