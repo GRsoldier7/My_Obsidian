@@ -32,7 +32,10 @@
       "position": [
         440,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
@@ -69,7 +72,10 @@
       "position": [
         880,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
@@ -128,11 +134,14 @@
       "position": [
         1540,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
-        "jsCode": "const { today, weekStart, braindumpFiles, braindumpCount, processedThisWeek, processedCount } = $input.first().json;\nlet articlesContent = '';\ntry {\n  const articlesDecoded = $('Decode Articles').first().json._text;\n  articlesContent = articlesDecoded || '';\n} catch(e) {}\nconst allUrls = articlesContent.split('\\n').filter(l => /https?:\\/\\//.test(l));\nconst enriched = allUrls.filter(l => l.includes('[title::'));\nconst unenriched = allUrls.filter(l => !l.includes('[title::'));\n\nlet html = '<div style=\"font-family:Arial,sans-serif;max-width:700px;margin:0 auto;color:#2c3e50\">';\nhtml += `<h1 style=\"border-bottom:3px solid #9b59b6;padding-bottom:8px\">Vault Health Report &mdash; Week of ${weekStart}</h1>`;\n\n// Brain Dumps section\nhtml += '<div style=\"background:#f4ecf7;border-left:4px solid #9b59b6;padding:12px;margin:16px 0\">';\nhtml += `<h2 style=\"color:#9b59b6;margin-top:0\">Brain Dump Files (${braindumpCount} in inbox)</h2>`;\nif (braindumpCount === 0) {\n  html += '<p style=\"color:#27ae60\">Inbox clear — no brain dumps waiting</p>';\n} else {\n  html += '<ul>' + braindumpFiles.map(f => `<li><strong>${f.name}</strong> (${f.sizeKB}KB)</li>`).join('') + '</ul>';\n  html += `<p style=\"color:#e67e22\"><strong>Warning: ${braindumpCount} file(s) in brain-dumps/ — check processor logs.</strong></p>`;\n}\nhtml += '</div>';\n\n// Article queue section\nhtml += '<div style=\"background:#eaf3fb;border-left:4px solid #3498db;padding:12px;margin:16px 0\">';\nhtml += `<h2 style=\"color:#3498db;margin-top:0\">Article Queue (${allUrls.length} total)</h2>`;\nhtml += `<ul><li>Enriched with titles: <strong style=\"color:#27ae60\">${enriched.length}</strong></li>`;\nhtml += `<li>Needs enrichment: <strong style=\"color:${unenriched.length > 10 ? '#e74c3c' : '#e67e22'}\">${unenriched.length}</strong></li></ul>`;\nif (unenriched.length > 0) {\n  html += '<details><summary>Unenriched URLs</summary><ul>';\n  html += unenriched.slice(0, 12).map(l => `<li><code>${l.slice(0,90).replace(/</g,'&lt;')}</code></li>`).join('');\n  if (unenriched.length > 12) html += `<li>...and ${unenriched.length - 12} more</li>`;\n  html += '</ul></details>';\n}\nhtml += '</div>';\n\n// Processed this week\nhtml += '<div style=\"background:#eafaf1;border-left:4px solid #27ae60;padding:12px;margin:16px 0\">';\nhtml += `<h2 style=\"color:#27ae60;margin-top:0\">Processed This Week (${processedCount} files since ${weekStart})</h2>`;\nif (processedCount === 0) {\n  html += '<p style=\"color:#e74c3c\">No tasks processed this week. Brain dump processor may not be running.</p>';\n} else {\n  html += '<ul>' + processedThisWeek.slice(0,10).map(f => `<li>${f.name}</li>`).join('');\n  if (processedCount > 10) html += `<li>...and ${processedCount - 10} more</li>`;\n  html += '</ul>';\n}\nhtml += '</div>';\n\nconst healthy = braindumpCount === 0 && unenriched.length < 10 && processedCount > 0;\nconst critical = unenriched.length > 30 || processedCount === 0;\nconst badge = healthy ? 'HEALTHY' : critical ? 'NEEDS ATTENTION' : 'OK';\nhtml += `<p style=\"text-align:center;font-size:18px;font-weight:bold\">Status: ${badge}</p>`;\nhtml += '<p style=\"color:#95a5a6;font-size:11px;text-align:center\">Generated ' + new Date().toISOString() + '</p></div>';\n\nconst subject = `Vault Health: ${badge} | ${braindumpCount} dumps, ${unenriched.length} unenriched, ${processedCount} processed this week`;\nreturn [{ json: { html, subject, today, badge, braindumpCount, unenrichedCount: unenriched.length, processedCount } }];"
+        "jsCode": "const { today, weekStart, braindumpFiles, braindumpCount, processedThisWeek, processedCount } = $input.first().json;\n\nlet articlesContent = '';\ntry {\n  const articlesDecoded = $('Decode Articles').first().json._text;\n  articlesContent = articlesDecoded || '';\n} catch(e) {}\nconst allUrls = articlesContent.split('\\n').filter(l => /https?:\\/\\//.test(l));\nconst enriched = allUrls.filter(l => l.includes('[title::'));\nconst unenriched = allUrls.filter(l => !l.includes('[title::'));\n\n// === Build prescriptive actions list ===\nconst actions = [];\n\nif (braindumpCount > 0) {\n  const fileList = braindumpFiles.slice(0, 5).map(f => f.name).join(', ');\n  const more = braindumpCount > 5 ? ` (+${braindumpCount - 5} more)` : '';\n  actions.push({\n    severity: 'high',\n    icon: '🧠',\n    title: `Process ${braindumpCount} brain dump${braindumpCount > 1 ? 's' : ''} sitting in inbox`,\n    detail: `${fileList}${more}`,\n    command: 'set -a && source .env && set +a && python3 tools/process_brain_dump.py --verbose',\n    why: 'Brain dumps in 00_Inbox/brain-dumps/ should be cleared by the daily 7AM processor. Anything still here means the cron skipped or the file landed after run.',\n  });\n}\n\nif (unenriched.length > 20) {\n  actions.push({\n    severity: 'high',\n    icon: '🔗',\n    title: `Enrich ${unenriched.length} article URL${unenriched.length > 1 ? 's' : ''} — backlog growing`,\n    detail: 'link-enricher runs hourly at :13 and processes 8 per pass. Backlog of >20 means hourly cadence is not keeping up.',\n    command: '# Trigger link-enricher manually in n8n UI, OR raise batch size in workflows/n8n/link-enricher.json',\n    why: 'Articles without [title::] tags show up as raw URLs in your Reading Queue.',\n  });\n} else if (unenriched.length > 0 && unenriched.length <= 20) {\n  actions.push({\n    severity: 'low',\n    icon: '🔗',\n    title: `${unenriched.length} unenriched article URL${unenriched.length > 1 ? 's' : ''} (catching up next hour)`,\n    detail: 'Backlog within normal range — link-enricher will pick these up.',\n  });\n}\n\nif (processedCount === 0) {\n  actions.push({\n    severity: 'high',\n    icon: '⚠️',\n    title: 'No tasks processed all week — brain-dump-processor likely broken',\n    detail: 'Check n8n at http://192.168.1.121:5678 for failed brain-dump-processor-v2 executions.',\n    command: 'set -a && source .env && set +a && python3 scripts/health_check.py --json',\n    why: 'A healthy week should produce 1-3 processed files. Zero means the processor cron failed or was disabled.',\n  });\n}\n\nconst allClear = actions.length === 0;\n\n// === Compute \"spoiler\" subject ===\nconst highCount = actions.filter(a => a.severity === 'high').length;\nlet subject;\nif (allClear) {\n  subject = `✅ Vault Health: ALL CLEAR — ${processedCount} tasks added this week`;\n} else if (highCount > 0) {\n  const headlineAction = actions.find(a => a.severity === 'high');\n  subject = `⚠️ Vault Health: ${highCount} action${highCount > 1 ? 's' : ''} needed — ${headlineAction.title.substring(0, 60)}`;\n} else {\n  subject = `Vault Health: tidy — ${braindumpCount} dumps, ${unenriched.length} unenriched, ${processedCount} processed this week`;\n}\n\n// === HTML ===\nfunction severityStyle(sev) {\n  if (sev === 'high') return { bg: '#fef2f2', border: '#dc2626', text: '#991b1b', label: 'NOW' };\n  if (sev === 'med')  return { bg: '#fff7ed', border: '#ea580c', text: '#9a3412', label: 'SOON' };\n  return { bg: '#f0fdf4', border: '#16a34a', text: '#14532d', label: 'FYI' };\n}\n\nfunction actionCard(a) {\n  const s = severityStyle(a.severity);\n  let html = '<div style=\"background:' + s.bg + ';border-left:4px solid ' + s.border + ';padding:14px 16px;margin:8px 0;border-radius:0 4px 4px 0\">';\n  html += '<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:6px\">';\n  html += '<span style=\"font-weight:700;color:' + s.text + ';font-size:14px\">' + a.icon + ' ' + a.title + '</span>';\n  html += '<span style=\"background:' + s.border + ';color:white;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;letter-spacing:1px\">' + s.label + '</span>';\n  html += '</div>';\n  if (a.detail) {\n    html += '<p style=\"margin:4px 0;font-size:12px;color:#4b5563\">' + a.detail + '</p>';\n  }\n  if (a.command) {\n    html += '<pre style=\"background:#1f2937;color:#a7f3d0;padding:10px 12px;border-radius:4px;font-size:11px;overflow-x:auto;margin:8px 0;white-space:pre-wrap;word-break:break-word\">' + a.command.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>';\n  }\n  if (a.why) {\n    html += '<p style=\"margin:6px 0 0;font-size:11px;color:#6b7280;font-style:italic\">' + a.why + '</p>';\n  }\n  html += '</div>';\n  return html;\n}\n\nlet html = '<div style=\"font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',Arial,sans-serif;max-width:680px;margin:0 auto;background:#f5f5f5;padding:0;line-height:1.5;color:#1a1a1a\">';\n\n// Apple Watch / accessibility preview\nconst previewLine = allClear\n  ? `Vault healthy · ${processedCount} processed this week · ${enriched.length}/${allUrls.length} articles enriched`\n  : `${highCount} action${highCount > 1 ? 's' : ''} needed · ${braindumpCount} dumps · ${unenriched.length} unenriched · ${processedCount} processed`;\nhtml += '<noscript style=\"display:block;padding:8px 16px;background:#f3f4f6;color:#1f2937;font-size:12px\">' + previewLine + '</noscript>';\n\n// Header — color reflects status\nconst headerBg = allClear ? '#16a34a' : (highCount > 0 ? '#dc2626' : '#d97706');\nhtml += '<div style=\"background:' + headerBg + ';color:white;padding:22px 20px;border-radius:8px 8px 0 0\">';\nhtml += '<h1 style=\"margin:0;font-size:20px;font-weight:700\">' + (allClear ? '✅ Vault Health — All Clear' : '🛠️ Vault Health — Action Required') + '</h1>';\nhtml += '<p style=\"margin:6px 0 0;font-size:13px;opacity:0.9\">Week of ' + weekStart + ' · scanned ' + today + '</p>';\nhtml += '</div>';\n\n// DO THIS NOW (the headline section)\nhtml += '<div style=\"padding:18px 20px;background:white;margin-top:2px\">';\nif (allClear) {\n  html += '<div style=\"background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:18px;text-align:center\">';\n  html += '<p style=\"margin:0;font-size:15px;font-weight:600;color:#14532d\">🎉 No actions needed.</p>';\n  html += '<p style=\"margin:8px 0 0;font-size:12px;color:#15803d\">Inbox clear · ' + enriched.length + '/' + allUrls.length + ' articles enriched · ' + processedCount + ' tasks processed this week.</p>';\n  html += '</div>';\n} else {\n  html += '<h2 style=\"margin:0 0 10px;font-size:14px;color:#1a1a1a;text-transform:uppercase;letter-spacing:1.5px\">📋 Do This Now</h2>';\n  for (const a of actions) html += actionCard(a);\n}\nhtml += '</div>';\n\n// Compact diagnostics footer (collapsible details)\nhtml += '<div style=\"padding:14px 20px;background:#f9fafb;margin-top:2px\">';\nhtml += '<details><summary style=\"cursor:pointer;font-size:13px;font-weight:600;color:#374151;padding:6px 0\">📊 Vault Diagnostics (raw counts)</summary>';\nhtml += '<table style=\"width:100%;border-collapse:collapse;margin-top:10px;font-size:12px\">';\nhtml += '<tr><td style=\"padding:6px 0;color:#6b7280\">Brain dumps in inbox</td><td style=\"text-align:right;font-weight:600\">' + braindumpCount + '</td></tr>';\nhtml += '<tr><td style=\"padding:6px 0;color:#6b7280\">Article URLs queued</td><td style=\"text-align:right;font-weight:600\">' + allUrls.length + ' (' + enriched.length + ' enriched / ' + unenriched.length + ' raw)</td></tr>';\nhtml += '<tr><td style=\"padding:6px 0;color:#6b7280\">Tasks processed this week</td><td style=\"text-align:right;font-weight:600\">' + processedCount + '</td></tr>';\nhtml += '</table>';\n\nif (braindumpCount > 0) {\n  html += '<p style=\"margin:12px 0 4px;font-size:11px;color:#6b7280;font-weight:600\">Brain dumps waiting:</p>';\n  html += '<ul style=\"margin:0;padding-left:20px;font-size:11px;color:#6b7280\">';\n  for (const f of braindumpFiles.slice(0, 8)) {\n    html += '<li><code>' + f.name + '</code> (' + f.sizeKB + 'KB)</li>';\n  }\n  if (braindumpCount > 8) html += '<li>...and ' + (braindumpCount - 8) + ' more</li>';\n  html += '</ul>';\n}\nif (unenriched.length > 0) {\n  html += '<p style=\"margin:12px 0 4px;font-size:11px;color:#6b7280;font-weight:600\">Unenriched URLs (sample):</p>';\n  html += '<ul style=\"margin:0;padding-left:20px;font-size:11px;color:#6b7280\">';\n  for (const l of unenriched.slice(0, 6)) {\n    html += '<li><code>' + l.slice(0, 90).replace(/</g, '&lt;') + '</code></li>';\n  }\n  if (unenriched.length > 6) html += '<li>...and ' + (unenriched.length - 6) + ' more</li>';\n  html += '</ul>';\n}\n\nhtml += '</details></div>';\n\nhtml += '<div style=\"background:#1a1a2e;color:#9ca3af;padding:12px 20px;border-radius:0 0 8px 8px;text-align:center;font-size:11px\">';\nhtml += 'Life OS Vault Health · runbook: <code>docs/RUNBOOK.md</code> · ' + today;\nhtml += '</div>';\nhtml += '</div>';\n\nconst badge = allClear ? 'HEALTHY' : (highCount > 0 ? 'ACTION' : 'OK');\nreturn [{ json: {\n  html, subject, today, badge,\n  braindumpCount, unenrichedCount: unenriched.length, processedCount,\n  actionCount: actions.length, highCount,\n  bodyLength: html.length\n} }];\n"
       },
       "id": "build-report",
       "name": "Build Health Report",
@@ -141,7 +150,10 @@
       "position": [
         1760,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
@@ -179,7 +191,10 @@
       "position": [
         2200,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
@@ -216,7 +231,10 @@
       "position": [
         1210,
         300
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     }
   ],
   "connections": {
