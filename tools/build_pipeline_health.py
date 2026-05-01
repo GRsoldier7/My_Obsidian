@@ -142,6 +142,43 @@ def n8n_recent_executions(workflow_id: str, limit: int = 30) -> list[dict]:
         return []
 
 
+def n8n_recent_failed_executions(workflow_id: str, name: str,
+                                 limit: int = 50) -> list[dict]:
+    """
+    Return failed executions for a workflow with their error messages, suitable
+    for the runner_timeout anomaly rule.
+
+    Returns a list of {workflow, started_at, finished_at, error} dicts.
+    Each "error" includes the failed node name when available.
+    """
+    if not N8N_API_KEY:
+        return []
+    try:
+        r = requests.get(
+            f"{N8N_HOST}/api/v1/executions",
+            params={"workflowId": workflow_id, "status": "error", "limit": limit},
+            headers={"X-N8N-API-KEY": N8N_API_KEY},
+            timeout=15,
+        )
+        r.raise_for_status()
+        execs = r.json().get("data", [])
+    except Exception as exc:
+        print(f"[warn] n8n failed-executions for {workflow_id}: {exc}", file=sys.stderr)
+        return []
+
+    out: list[dict] = []
+    for ex in execs:
+        err = n8n_execution_error(ex["id"]) if ex.get("id") else ""
+        out.append({
+            "workflow": name,
+            "execution_id": ex.get("id"),
+            "started_at": ex.get("startedAt"),
+            "finished_at": ex.get("stoppedAt"),
+            "error": err,
+        })
+    return out
+
+
 def n8n_execution_error(execution_id: str) -> str:
     """Pull the error message for a failed execution. Best-effort."""
     if not N8N_API_KEY:
@@ -507,7 +544,17 @@ def main() -> int:
             })
 
     mtl_lm = fetch_mtl_last_modified(s3)
-    anomalies = detect_anomalies(stats, log_index, mtl_lm, now=now)
+
+    # Pull recent failed executions across all workflows so the runner_timeout
+    # rule has something to look at. Capped per workflow to keep the API gentle.
+    recent_errors: list[dict] = []
+    for wf in workflows:
+        recent_errors.extend(
+            n8n_recent_failed_executions(wf["id"], wf.get("name", ""), limit=10)
+        )
+
+    anomalies = detect_anomalies(stats, log_index, mtl_lm, now=now,
+                                 recent_execution_errors=recent_errors)
     summary = fetch_summary_counters(s3, log_index, now)
 
     if args.print_anomalies_json:

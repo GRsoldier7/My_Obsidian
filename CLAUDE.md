@@ -36,6 +36,7 @@ The automation and configuration layer for Aaron's Life OS — a comprehensive p
 - **Run logs** — every workflow writes JSON to `99_System/logs/{workflow}-{YYYY-MM-DD}.json`
 - **S3 uploads need binary** — n8n S3 nodes require binary data; Code nodes must output `binary: { fieldName: { data: buf.toString('base64'), mimeType, fileName, fileExtension, fileSize } }`
 - **scheduleTrigger timezone** — do NOT put `timezone` inside the `rule` object; this n8n version doesn't support it. Use UTC-adjusted cron expressions. Set timezone at workflow level via `settings.timezone` only.
+- **Code-node task-runner slots** — never schedule two Code-heavy workflows at the same cron minute (n8n task runner stalls at the 60s default; 2026-04-29 incident). Slots in use: `:03` live-dashboard, `:13` link-enricher, `:23` article-processor, `:30` morning-briefing, `:33` system-health-monitor. Open: `:43`, `:53`. Enforced by `tests/test_workflow_templates.py::test_code_heavy_workflows_do_not_share_cron_minutes`. All Code nodes must set `retryOnFail: true, maxTries: 3, waitBetweenTries: 5000`. Recovery playbook: `docs/RUNBOOK.md` § Task-Runner Recovery.
 - **Never paste secrets in chat** — use Bitwarden MCP or edit .env directly in the IDE
 
 ## Key Vault Paths (all relative to bucket root)

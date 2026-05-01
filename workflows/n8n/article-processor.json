@@ -22,10 +22,12 @@
         "rule": {
           "interval": [
             {
-              "triggerAtHour": 8
+              "field": "cronExpression",
+              "expression": "23 8 * * *"
             },
             {
-              "triggerAtHour": 19
+              "field": "cronExpression",
+              "expression": "23 19 * * *"
             }
           ]
         }
@@ -72,7 +74,10 @@
       "position": [
         720,
         340
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
@@ -250,7 +255,10 @@
       "position": [
         3360,
         160
-      ]
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {

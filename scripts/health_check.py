@@ -11,8 +11,10 @@ Usage:
 """
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta, timezone
 
 import boto3
 import requests
@@ -25,6 +27,14 @@ MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")  # Set in .env
 MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")  # Set in .env
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "obsidian-vault")
 N8N_HOST = os.environ.get("N8N_HOST", "http://192.168.1.121:5678")
+N8N_API_KEY = os.environ.get("N8N_API_KEY", "")
+
+_RUNNER_TIMEOUT_RE = re.compile(
+    r"task request timed out after \d+ seconds?"
+    r"|matched to a runner"
+    r"|requestExpired",
+    re.IGNORECASE,
+)
 
 REQUIRED_VAULT_FILES = [
     "000_Master Dashboard/North Star.md",
@@ -176,21 +186,120 @@ def check_brain_dumps() -> HealthResult:
         )
 
 
+def check_n8n_task_runner_recent_errors() -> HealthResult:
+    """
+    Inspect recent failed executions for n8n task-runner stalls.
+
+    Behavior:
+      - PASS  → no runner-timeout errors at all (or N8N_API_KEY not set: skipped-PASS)
+      - WARN  → runner timeout(s) found older than 24h (system has self-recovered)
+      - FAIL  → runner timeout(s) found within last 24h (capacity issue or
+                schedule collision is currently degrading the pipeline)
+    """
+    if not N8N_API_KEY:
+        return HealthResult(
+            component="n8n_task_runner_recent_errors",
+            status="pass",
+            message="Skipped (N8N_API_KEY not set)",
+            details={"reason": "no_api_key"},
+        )
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    timeouts: list[dict] = []
+    older_count = 0
+
+    try:
+        # Fetch last ~50 errored executions across the whole instance.
+        r = requests.get(
+            f"{N8N_HOST}/api/v1/executions",
+            params={"status": "error", "limit": 50},
+            headers={"X-N8N-API-KEY": N8N_API_KEY},
+            timeout=10,
+        )
+        r.raise_for_status()
+        execs = r.json().get("data", [])
+    except Exception as e:
+        return HealthResult(
+            component="n8n_task_runner_recent_errors",
+            status="warn",
+            message=f"Could not query n8n executions API: {e}",
+            details={"error": str(e)},
+        )
+
+    for ex in execs:
+        ex_id = ex.get("id")
+        if not ex_id:
+            continue
+        try:
+            d = requests.get(
+                f"{N8N_HOST}/api/v1/executions/{ex_id}",
+                params={"includeData": "true"},
+                headers={"X-N8N-API-KEY": N8N_API_KEY},
+                timeout=10,
+            ).json()
+        except Exception:
+            continue
+        err = d.get("data", {}).get("resultData", {}).get("error", {}) or {}
+        msg = err.get("message", "") or ""
+        if not _RUNNER_TIMEOUT_RE.search(msg):
+            continue
+        started = ex.get("startedAt") or d.get("startedAt") or ""
+        try:
+            dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            dt = None
+        record = {
+            "execution_id": ex_id,
+            "started_at": started,
+            "workflow_id": ex.get("workflowId"),
+            "error": msg[:200],
+        }
+        if dt and dt >= cutoff:
+            timeouts.append(record)
+        else:
+            older_count += 1
+
+    if timeouts:
+        return HealthResult(
+            component="n8n_task_runner_recent_errors",
+            status="fail",
+            message=(f"{len(timeouts)} task-runner timeout(s) in last 24h "
+                     f"({older_count} older, ignored)"),
+            details={"recent": timeouts, "older_count": older_count,
+                     "fix": "RUNBOOK § Task-runner recovery"},
+        )
+    if older_count:
+        return HealthResult(
+            component="n8n_task_runner_recent_errors",
+            status="warn",
+            message=f"{older_count} historical runner timeout(s) — none in last 24h",
+            details={"older_count": older_count},
+        )
+    return HealthResult(
+        component="n8n_task_runner_recent_errors",
+        status="pass",
+        message="No task-runner timeouts in recent executions",
+        details={"checked": len(execs)},
+    )
+
+
 def run_all_checks() -> list[HealthResult]:
     return [
         check_minio(),
         check_n8n(),
         check_vault_files(),
         check_brain_dumps(),
+        check_n8n_task_runner_recent_errors(),
     ]
 
 
 def main():
     results = run_all_checks()
-    all_pass = all(r.status == "pass" for r in results)
+    # Treat WARN as non-failing for overall status — only FAIL flips the exit code.
+    has_fail = any(r.status == "fail" for r in results)
 
     output = {
-        "status": "pass" if all_pass else "fail",
+        "status": "fail" if has_fail else "pass",
         "checks": [asdict(r) for r in results],
     }
 
@@ -201,9 +310,9 @@ def main():
             icon = "[PASS]" if r.status == "pass" else ("[WARN]" if r.status == "warn" else "[FAIL]")
             print(f"{icon} {r.component}: {r.message}")
         print()
-        print(f"Overall: {'PASS' if all_pass else 'FAIL'}")
+        print(f"Overall: {'PASS' if not has_fail else 'FAIL'}")
 
-    sys.exit(0 if all_pass else 1)
+    sys.exit(0 if not has_fail else 1)
 
 
 if __name__ == "__main__":

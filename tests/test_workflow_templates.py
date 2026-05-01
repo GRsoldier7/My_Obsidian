@@ -232,3 +232,84 @@ def test_morning_briefing_runs_after_brain_dump():
         f"brain-dump-processor-v2 ({bd_min} UTC minutes) so the briefing "
         f"reflects today's captures, not yesterday's"
     )
+
+
+# ── Task-runner contention guard ─────────────────────────────────────────────
+# Workflows allowed to share a cron minute (e.g. fully manual job-search).
+# Add explicit entries here only when contention has been verified safe.
+ALLOWED_CRON_MINUTE_COLLISIONS: set[frozenset[str]] = set()
+
+
+def _firing_slots(workflow: dict) -> set[tuple[str, int]]:
+    """
+    Return the set of distinct (hour_token, minute) firing slots for the workflow.
+
+    hour_token is "*" for hourly crons, else the literal hour (e.g. "8" for
+    "23 8 * * *"). Two daily workflows at minute 0 of different hours don't
+    contend; two hourly workflows at minute 0 of any hour DO contend.
+
+    triggerAtHour-style intervals fire at minute 0 of that hour.
+    """
+    slots: set[tuple[str, int]] = set()
+    for node in workflow.get("nodes", []):
+        if node.get("type") != "n8n-nodes-base.scheduleTrigger":
+            continue
+        for iv in node.get("parameters", {}).get("rule", {}).get("interval", []):
+            expr = iv.get("expression")
+            if expr:
+                parts = expr.split()
+                if len(parts) >= 2:
+                    minute = int(parts[0]) if parts[0].isdigit() else 0
+                    hour_tok = parts[1] if not parts[1].isdigit() else parts[1]
+                    slots.add((hour_tok, minute))
+                continue
+            if "triggerAtHour" in iv:
+                slots.add((str(iv["triggerAtHour"]), 0))
+    return slots
+
+
+def _has_code_node(workflow: dict) -> bool:
+    return any(
+        n.get("type") == "n8n-nodes-base.code"
+        for n in workflow.get("nodes", [])
+    )
+
+
+def test_code_heavy_workflows_do_not_share_cron_minutes():
+    """
+    Two scheduled workflows that both contain Code nodes must not share an
+    actual firing slot — that is the contention pattern that produced the
+    'Task request timed out after 60 seconds' incident on 2026-04-29.
+
+    A "slot" is the (hour_token, minute) tuple from the cron expression. Daily
+    workflows at the same minute but different hours are NOT a collision; two
+    hourly workflows at the same minute ARE.
+
+    See RUNBOOK § Task-Runner Scheduling Slots.
+    """
+    by_slot: dict[tuple[str, int], set[str]] = {}
+    for wf_name in SCHEDULED_WORKFLOWS:
+        wf = _load(wf_name)
+        if not _has_code_node(wf):
+            continue
+        for slot in _firing_slots(wf):
+            by_slot.setdefault(slot, set()).add(wf_name)
+
+    collisions: list[str] = []
+    for (hour_tok, minute), names in by_slot.items():
+        if len(names) <= 1:
+            continue
+        names_set = frozenset(names)
+        if names_set in ALLOWED_CRON_MINUTE_COLLISIONS:
+            continue
+        slot_label = f"hour={hour_tok} minute=:{minute:02d}"
+        collisions.append(
+            f"  {slot_label} → {', '.join(sorted(names))}"
+        )
+
+    assert not collisions, (
+        "Code-heavy workflows share cron firing slots — this triggers task-runner "
+        "timeouts. Stagger the cron expressions (suggested slots: "
+        ":03 :13 :23 :33 :43 :53) and rerun. Collisions:\n"
+        + "\n".join(collisions)
+    )

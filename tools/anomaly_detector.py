@@ -9,10 +9,14 @@ Each rule produces a dict:
 Severities: high (operator action required), medium (investigate), low (FYI).
 
 Public API:
-    detect_anomalies(workflow_stats, log_index, mtl_last_modified) -> list[dict]
-        workflow_stats:        list of dicts from build_pipeline_health.collect_workflow_stats
-        log_index:             dict[str, list[dict]] mapping workflow name -> recent run logs
-        mtl_last_modified:     datetime of MTL file (or None)
+    detect_anomalies(workflow_stats, log_index, mtl_last_modified,
+                     recent_execution_errors=None) -> list[dict]
+        workflow_stats:           list of dicts from build_pipeline_health.collect_workflow_stats
+        log_index:                dict[str, list[dict]] mapping workflow name -> recent run logs
+        mtl_last_modified:        datetime of MTL file (or None)
+        recent_execution_errors:  optional list of {workflow, started_at, error} dicts;
+                                  used by the runner_timeout rule. Default None for
+                                  backward compatibility.
 
 The rules are intentionally simple regex/threshold checks — anything more
 sophisticated belongs in a dedicated workflow. The point of this module is
@@ -20,9 +24,26 @@ to surface drift the operator cannot see by skimming n8n's UI.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Iterable
+
+# Substrings that identify an n8n task-runner stall in an execution error message.
+# Both the original "Task request timed out after 60 seconds" and the
+# alternative "could not be matched to a runner" variants are caught.
+RUNNER_TIMEOUT_PATTERNS = (
+    re.compile(r"task request timed out after \d+ seconds?", re.IGNORECASE),
+    re.compile(r"matched to a runner", re.IGNORECASE),
+    re.compile(r"requestExpired", re.IGNORECASE),
+    re.compile(r"task[-_ ]?runner.*?(timeout|timed out|unavailable)", re.IGNORECASE),
+)
+
+
+def is_runner_timeout(message: str | None) -> bool:
+    if not message:
+        return False
+    return any(p.search(message) for p in RUNNER_TIMEOUT_PATTERNS)
 
 
 # Workflows we expect to fire daily — used by stale_pipeline + silent_zero.
@@ -238,11 +259,119 @@ def rule_mtl_stagnation(mtl_last_modified: datetime | None, now: datetime) -> li
     return []
 
 
+# ── Rule 6: Runner timeout cluster ───────────────────────────────────────────
+def rule_runner_timeout(recent_execution_errors: Iterable[dict] | None,
+                        now: datetime) -> list[Anomaly]:
+    """
+    Surface n8n task-runner stalls. A single timeout in 24h is high severity;
+    two or more timeouts within a 10-minute window across different workflows
+    upgrades the evidence to "clustered" (a strong signal of capacity contention,
+    not a one-off Code-node bug).
+
+    Old timeouts (>24h) are intentionally NOT high severity — the runner has
+    typically self-recovered by then and we don't want to page on stale state.
+    """
+    if not recent_execution_errors:
+        return []
+
+    window_24h = now - timedelta(hours=24)
+    cluster_window = timedelta(minutes=10)
+
+    timeouts: list[dict] = []
+    for entry in recent_execution_errors:
+        msg = entry.get("error") or ""
+        if not is_runner_timeout(msg):
+            continue
+        ts = _parse_iso(entry.get("started_at") or entry.get("finished_at"))
+        timeouts.append({
+            "workflow": entry.get("workflow") or "(unknown)",
+            "started_at": ts,
+            "raw": ts.isoformat() if ts else (entry.get("started_at") or "(no timestamp)"),
+            "error": msg.strip()[:160],
+        })
+
+    if not timeouts:
+        return []
+
+    recent = [t for t in timeouts if t["started_at"] and t["started_at"] >= window_24h]
+    older = [t for t in timeouts if not (t["started_at"] and t["started_at"] >= window_24h)]
+
+    out: list[Anomaly] = []
+
+    # Cluster detection — 2+ timeouts within 10 min across different workflows.
+    clusters: list[list[dict]] = []
+    sorted_recent = sorted(recent, key=lambda t: t["started_at"])
+    for t in sorted_recent:
+        if clusters and (t["started_at"] - clusters[-1][0]["started_at"]) <= cluster_window:
+            clusters[-1].append(t)
+        else:
+            clusters.append([t])
+
+    for cluster in clusters:
+        if len(cluster) >= 2 and len({t["workflow"] for t in cluster}) >= 2:
+            wfs = ", ".join(sorted({t["workflow"] for t in cluster}))
+            first = cluster[0]["raw"]
+            out.append(Anomaly(
+                rule="runner_timeout",
+                severity="high",
+                workflow=wfs,
+                evidence=(f"{len(cluster)} task-runner timeouts within 10 minutes "
+                          f"starting {first} across workflows: {wfs}. "
+                          f"This is a runner-pool capacity stall, not a Code-node bug."),
+                suggested_fix=(
+                    "1) Verify schedules are staggered (no two Code-heavy workflows "
+                    "share a cron minute — see RUNBOOK 'Task-runner scheduling slots'). "
+                    "2) On the n8n host, restart the runner: "
+                    "`docker restart n8n` (or LXC equivalent). "
+                    "3) If it recurs, raise N8N_RUNNERS_TASK_TIMEOUT (default 60s) "
+                    "and N8N_RUNNERS_MAX_CONCURRENCY on the n8n container, then restart."
+                ),
+            ))
+
+    # Per-workflow individual timeouts in 24h (skip ones already in a cluster).
+    clustered_ids = {id(t) for c in clusters if len(c) >= 2 for t in c}
+    for t in recent:
+        if id(t) in clustered_ids:
+            continue
+        out.append(Anomaly(
+            rule="runner_timeout",
+            severity="high",
+            workflow=t["workflow"],
+            evidence=(f"n8n task-runner timeout at {t['raw']}: "
+                      f"{t['error'] or 'task request timed out'}"),
+            suggested_fix=(
+                "Code node could not reach a task runner within the timeout. "
+                "Check the n8n container is healthy (`/healthz`), confirm the "
+                "workflow's cron does not collide with another Code-heavy workflow, "
+                "and re-run the failing execution. Persistent timeouts mean the "
+                "runner pool needs more capacity (RUNBOOK has the env-var tuning)."
+            ),
+        ))
+
+    # Older timeouts → low severity FYI, only one rolled-up anomaly.
+    if older and not out:
+        out.append(Anomaly(
+            rule="runner_timeout",
+            severity="low",
+            workflow="(historical)",
+            evidence=(f"{len(older)} runner timeout(s) >24h ago — system has "
+                      f"since recovered. Most recent: "
+                      f"{max(t['raw'] for t in older)}"),
+            suggested_fix=(
+                "No action required. Ensure schedule staggering is still in place "
+                "(RUNBOOK 'Task-runner scheduling slots') so this stays historical."
+            ),
+        ))
+
+    return out
+
+
 # ── Public entrypoint ────────────────────────────────────────────────────────
 def detect_anomalies(workflow_stats: list[dict],
                      log_index: dict[str, list[dict]],
                      mtl_last_modified: datetime | None,
-                     now: datetime | None = None) -> list[dict]:
+                     now: datetime | None = None,
+                     recent_execution_errors: Iterable[dict] | None = None) -> list[dict]:
     now = now or datetime.now(timezone.utc)
     anomalies: list[Anomaly] = []
     anomalies.extend(rule_silent_zero(log_index))
@@ -250,6 +379,7 @@ def detect_anomalies(workflow_stats: list[dict],
     anomalies.extend(rule_quiet_error(log_index))
     anomalies.extend(rule_runlog_gap(workflow_stats, log_index, now))
     anomalies.extend(rule_mtl_stagnation(mtl_last_modified, now))
+    anomalies.extend(rule_runner_timeout(recent_execution_errors, now))
     return [a.to_dict() for a in anomalies]
 
 

@@ -12,11 +12,13 @@
 4. [Manual Trigger Commands](#manual-trigger-commands)
 5. [Credential Rotation Playbook](#credential-rotation-playbook)
 6. [Common Failures & Decision Tree](#common-failures--decision-tree)
-7. [Re-deploy from Scratch](#re-deploy-from-scratch)
-8. [Bitwarden MCP Session Refresh](#bitwarden-mcp-session-refresh)
-9. [MCP Server Capabilities](#mcp-server-capabilities)
-10. [Telegram Bot Setup](#telegram-bot-setup)
-11. [Oncall Checklist](#oncall-checklist)
+7. [Task-Runner Recovery](#task-runner-recovery)
+8. [Task-Runner Scheduling Slots](#task-runner-scheduling-slots)
+9. [Re-deploy from Scratch](#re-deploy-from-scratch)
+10. [Bitwarden MCP Session Refresh](#bitwarden-mcp-session-refresh)
+11. [MCP Server Capabilities](#mcp-server-capabilities)
+12. [Telegram Bot Setup](#telegram-bot-setup)
+13. [Oncall Checklist](#oncall-checklist)
 
 ---
 
@@ -267,6 +269,36 @@ If you see `Credential with ID "..." does not exist for type "s3"`, do not just 
    set -a && source .env && set +a && bash scripts/setup-n8n.sh
 ```
 
+### Symptom: "Task request timed out after 60 seconds" in n8n workflow error email
+
+```
+This is the task-runner stall pattern. Always work top-down:
+
+1. python3 scripts/health_check.py
+   → look at [n8n_task_runner_recent_errors]
+   PASS or WARN → the runner has self-recovered; proceed to step 4
+   FAIL         → there is a live timeout in the last 24h; go to step 2
+
+2. Open n8n → Executions → filter Status=error → look at the timestamps
+   • If 2+ workflows failed within ~10 minutes of each other → schedule contention.
+     Run pytest tests/test_workflow_templates.py::test_code_heavy_workflows_do_not_share_cron_minutes
+     If it fails, stagger the offending crons (see "Task-Runner Scheduling Slots" below).
+   • If the same workflow keeps failing in isolation → that single workflow is too
+     heavy for the runner pool (rare); split it or move logic into a Python tool.
+
+3. Restart n8n on the host (LXC CT-202):
+   pct enter 202    # then:
+   docker restart n8n
+   curl -fsS http://192.168.1.121:5678/healthz   # expect {"status":"ok"}
+
+4. If timeouts keep recurring after staggering + restart, raise the runner timeout
+   on the n8n container env (then restart):
+   N8N_RUNNERS_TASK_TIMEOUT=120          # default 60 — bump to 120 only if needed
+   N8N_RUNNERS_MAX_CONCURRENCY=8         # default 5 — only if 5+ Code nodes overlap
+
+5. Re-trigger the failed execution from n8n UI → "Executions" → "Retry"
+```
+
 ### Symptom: MinIO unreachable
 
 ```
@@ -281,6 +313,84 @@ If you see `Credential with ID "..." does not exist for type "s3"`, do not just 
 3. SSH to MiniPC → docker ps | grep minio
    If not running: docker start minio (or docker compose up -d)
 ```
+
+---
+
+## Task-Runner Recovery
+
+n8n runs Code nodes inside a separate "task runner" process. When the runner
+queue is congested (many Code nodes firing at the same minute) or the runner
+crashes, the broker waits up to `N8N_RUNNERS_TASK_TIMEOUT` (default 60s) and
+then surfaces:
+
+```
+Task request timed out after 60 seconds
+  at LocalTaskRequester.requestExpired (...task-requester.ts:304)
+```
+
+This is **not** a bug in your Code — it's the runner pool failing to claim the
+job. Recovery order:
+
+1. **Verify it self-recovered.**
+   ```bash
+   set -a && source .env && set +a
+   python3 scripts/health_check.py
+   # look at [n8n_task_runner_recent_errors]:
+   #   PASS = no timeouts in last 24h
+   #   WARN = old timeouts only, system has recovered
+   #   FAIL = recent timeout in last 24h, action needed
+   ```
+
+2. **Restart n8n** (clears the runner queue).
+   ```bash
+   ssh proxmox 'pct exec 202 -- docker restart n8n'
+   curl -fsS http://192.168.1.121:5678/healthz
+   ```
+
+3. **Re-run the failed execution** from the n8n UI → Executions → Retry.
+
+4. **If the failure recurs**, the schedule must be over-bunched. Run the
+   collision guard:
+   ```bash
+   pytest tests/test_workflow_templates.py::test_code_heavy_workflows_do_not_share_cron_minutes -q
+   ```
+   If it fails, the failing message tells you exactly which workflows share a
+   minute. Move them to free slots from the table below.
+
+5. **Last resort — raise runner capacity.** Edit the n8n compose / env file on
+   the host:
+   ```env
+   N8N_RUNNERS_ENABLED=true
+   N8N_RUNNERS_TASK_TIMEOUT=120          # default 60s; only raise after staggering
+   N8N_RUNNERS_MAX_CONCURRENCY=8         # default 5; only raise if 5+ Code nodes overlap
+   ```
+   Then `docker restart n8n` and re-verify with `health_check.py`.
+
+---
+
+## Task-Runner Scheduling Slots
+
+To prevent runner contention (the cause of the 2026-04-29 incident), every
+Code-heavy scheduled workflow gets a unique minute-of-hour slot. **Never
+schedule two Code-heavy workflows at the same cron minute.**
+
+| Slot | Workflow | Cron |
+|------|----------|------|
+| `:03` | Live Dashboard Updater | `3 * * * *` |
+| `:13` | Link Enricher | `13 * * * *` |
+| `:23` | Article Processor | `23 8 * * *` and `23 19 * * *` |
+| `:30` | Morning Briefing (UTC = 12:30) | `30 12 * * *` |
+| `:33` | System Health Monitor | `33 */6 * * *` |
+| `:43` | _open_ | _next Code-heavy hourly workflow_ |
+| `:53` | _open_ | _next Code-heavy hourly workflow_ |
+
+`tests/test_workflow_templates.py::test_code_heavy_workflows_do_not_share_cron_minutes`
+enforces this; if you add a new Code-heavy scheduled workflow, pick an open
+slot from the table or the test will fail.
+
+Brain-Dump Processor / Daily Note Creator / Weekly Digest / Vault Health Report
+intentionally fire at minute `:00` because they run at distinct hours from each
+other and from the slots above.
 
 ---
 
