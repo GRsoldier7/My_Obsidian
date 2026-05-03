@@ -313,6 +313,11 @@ def main() -> int:
         "--verbose", action="store_true",
         help="Print per-target details even when nothing fails.",
     )
+    parser.add_argument(
+        "--json-output", action="store_true",
+        help="Emit a structured JSON summary on stdout (for n8n / programmatic consumers). "
+             "Human-readable lines still go to stderr.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -341,6 +346,30 @@ def main() -> int:
     log.info(f"Receipts scanned: {rcpt_count}")
     log.info(f"Run-log window: {args.window_days} days")
     log.info("")
+
+    # Build the structured summary first so --json-output and the human
+    # path emit consistent data.
+    findings_by_rule: dict[str, int] = {}
+    for f in all_findings:
+        findings_by_rule[f.rule] = findings_by_rule.get(f.rule, 0) + 1
+
+    summary = {
+        "status": "clean" if not all_findings else "findings",
+        "sources_scanned": src_count,
+        "receipts_scanned": rcpt_count,
+        "window_days": args.window_days,
+        "findings_count": len(all_findings),
+        "findings_by_rule": findings_by_rule,
+        "findings": [
+            {"rule": f.rule, "target": f.target, "message": f.message}
+            for f in all_findings
+        ],
+    }
+
+    if args.json_output:
+        # stdout = JSON summary (for n8n Execute Command consumer)
+        # stderr already received the human-readable lines above.
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
 
     if not all_findings:
         log.info("OK — extraction-receipt audit passed. Integrity layer is clean.")

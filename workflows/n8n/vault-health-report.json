@@ -235,6 +235,88 @@
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "command": "cd ${OHO_REPO_PATH:-/opt/oho} && set -a && [ -f .env ] && source .env; set +a && python3 -u scripts/audit_extraction_receipts.py --json-output 2>/dev/null || true"
+      },
+      "id": "run-receipt-audit",
+      "name": "Run: Receipt Audit",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        660,
+        600
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the audit script's stdout JSON. The shell runs the audit\n// with `|| true` so a non-zero exit (= findings exist) doesn't fail\n// the n8n node — we WANT to surface findings, not abort.\nconst item = $input.first();\nconst stdout = (item.json.stdout || '').trim();\nconst stderr = (item.json.stderr || '').toString();\nconst exitCode = item.json.exitCode != null ? item.json.exitCode : -1;\nlet summary = null;\ntry { summary = JSON.parse(stdout); } catch (e) {}\nif (!summary) {\n  return [{ json: {\n    audit_status: 'parse_error',\n    parse_error: 'audit_stdout_unparseable',\n    exitCode,\n    raw_stderr_tail: stderr.split('\\n').slice(-15).join('\\n'),\n    findings_count: 0,\n    findings: [],\n    findings_by_rule: {},\n  }}];\n}\nreturn [{ json: {\n  audit_status: summary.status,\n  sources_scanned: summary.sources_scanned,\n  receipts_scanned: summary.receipts_scanned,\n  window_days: summary.window_days,\n  findings_count: summary.findings_count,\n  findings: summary.findings || [],\n  findings_by_rule: summary.findings_by_rule || {},\n  exitCode,\n}}];"
+      },
+      "id": "parse-audit-output",
+      "name": "Parse Audit Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.findings_count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        }
+      },
+      "id": "if-has-findings",
+      "name": "Has Audit Findings?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
+        "subject": "=🔍 Integrity Audit — {{ $json.findings_count }} finding{{ $json.findings_count === 1 ? '' : 's' }}",
+        "html": "=<h2>🔍 Brain-Dump Integrity Audit — {{ $now.toFormat('LLL d, yyyy') }}</h2><p>The weekly receipt audit (<code>scripts/audit_extraction_receipts.py</code>) found <b>{{ $json.findings_count }}</b> issue{{ $json.findings_count === 1 ? '' : 's' }} in the integrity layer.</p><p><b>Status:</b> <code>{{ $json.audit_status }}</code> · <b>Sources scanned:</b> {{ $json.sources_scanned }} · <b>Receipts scanned:</b> {{ $json.receipts_scanned }} · <b>Window:</b> {{ $json.window_days }} days</p><h3>📊 Findings by rule</h3><pre>{{ JSON.stringify($json.findings_by_rule, null, 2) }}</pre><h3>🧾 Findings</h3><pre>{{ ($json.findings || []).map(f => `[${f.rule}] ${f.target} — ${f.message}`).join('\\n') }}</pre><p style='color:#888;font-size:0.85em'>Rule reference: R1 receipt missing for run-log claim · R2 orphan receipt · R4 partial &gt;7 days · R5 extracted but body has content · R6 missing canonical frontmatter fields · R7 status=empty hash drift. See <code>docs/adr/0005-brain-dump-state-machine-and-receipts.md</code>.</p>",
+        "options": {},
+        "emailFormat": "html"
+      },
+      "id": "email-audit-findings",
+      "name": "Email: Integrity Audit Findings",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        600
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "__SMTP_CRED_ID__",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
     }
   ],
   "connections": {
@@ -254,6 +336,11 @@
         [
           {
             "node": "S3: List Brain Dumps",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Run: Receipt Audit",
             "type": "main",
             "index": 0
           }
@@ -351,6 +438,40 @@
             "index": 0
           }
         ]
+      ]
+    },
+    "Run: Receipt Audit": {
+      "main": [
+        [
+          {
+            "node": "Parse Audit Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Audit Output": {
+      "main": [
+        [
+          {
+            "node": "Has Audit Findings?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Audit Findings?": {
+      "main": [
+        [
+          {
+            "node": "Email: Integrity Audit Findings",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
       ]
     }
   },
