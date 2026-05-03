@@ -821,31 +821,35 @@ type: extracted-tasks
 
 
 def append_tasks_to_mtl(s3, tasks: list[str], source_file: str, today: str,
-                        dry_run: bool) -> int:
+                        dry_run: bool) -> dict:
     """Append extracted tasks to the Master Task List.
 
-    Reads MTL, deduplicates against existing tasks, appends new ones
-    under the appropriate priority section, writes back with verification.
-    Returns count of tasks actually appended (after dedup).
+    Reads MTL, deduplicates against existing tasks, appends new ones,
+    writes back with verification. Returns a dict:
+        {"appended": int, "verified": bool, "error": str|None}
+
+    Verified semantics:
+      - True if the MTL write was head_object-verified (or dry-run).
+      - True if all candidate tasks deduped (no-op write — nothing to verify).
+      - True if no candidate tasks at all (no-op).
+      - False if MTL read or write failed; the receipt gate uses this to
+        retain the source section instead of clearing it (ADR-0005 §4).
     """
     if not tasks:
-        return 0
+        return {"appended": 0, "verified": True, "error": None}
 
-    # Read current MTL
     try:
         mtl = s3_get(s3, MTL_KEY)
     except Exception as e:
         logging.error(f"Failed to read MTL for append: {e}")
-        return 0
+        return {"appended": 0, "verified": False, "error": f"mtl_read: {str(e)[:200]}"}
 
-    # Extract existing task descriptions for dedup
     existing = set()
     for line in mtl.splitlines():
         m = re.match(r'^- \[[ x]\] (.+?)(?:\s*\[area::|\s*$)', line)
         if m:
             existing.add(m.group(1).strip().lower())
 
-    # Filter out duplicates
     new_tasks = []
     for task in tasks:
         m = re.match(r'^- \[ \] (.+?)(?:\s*\[area::|\s*$)', task)
@@ -859,9 +863,8 @@ def append_tasks_to_mtl(s3, tasks: list[str], source_file: str, today: str,
 
     if not new_tasks:
         logging.info(f"      all {len(tasks)} tasks already in MTL (deduped)")
-        return 0
+        return {"appended": 0, "verified": True, "error": None}
 
-    # Append to end of MTL with a source marker
     append_block = (
         f"\n\n## Brain Dump Capture — {today} ({source_file})\n"
         + "\n".join(new_tasks)
@@ -871,14 +874,14 @@ def append_tasks_to_mtl(s3, tasks: list[str], source_file: str, today: str,
 
     if dry_run:
         logging.info(f"      [dry-run] would append {len(new_tasks)} tasks to MTL")
-        return len(new_tasks)
+        return {"appended": len(new_tasks), "verified": True, "error": None}
 
     ok = s3_put_verified(s3, MTL_KEY, updated_mtl, dry_run=False)
     if ok:
         logging.info(f"      appended {len(new_tasks)} tasks to MTL")
-    else:
-        logging.error(f"      FAILED to append tasks to MTL")
-    return len(new_tasks) if ok else 0
+        return {"appended": len(new_tasks), "verified": True, "error": None}
+    logging.error(f"      FAILED to append tasks to MTL")
+    return {"appended": 0, "verified": False, "error": "mtl_put_or_head_failed"}
 
 
 def write_note_file(s3, note: dict, source_file: str, today: str, dry_run: bool) -> bool:
@@ -904,17 +907,28 @@ type: note
     return s3_put_verified(s3, key, content, dry_run)
 
 
-def append_articles(s3, article_lines: list[str], today: str, dry_run: bool):
-    """Append article URLs to the articles-to-process.md queue file."""
+def append_articles(s3, article_lines: list[str], today: str, dry_run: bool) -> dict:
+    """Append article URLs to the articles queue.
+
+    Returns {"appended": int, "verified": bool, "error": str|None}.
+    Verified is True only when the put + head_object both succeeded
+    (or in dry-run mode). The receipt gate (ADR-0005 §4) uses verified
+    to decide whether the brain-dump's articles section can be cleared.
+    """
     if not article_lines:
-        return
+        return {"appended": 0, "verified": True, "error": None}
     try:
         existing = s3_get(s3, ARTICLES_FILE)
     except ClientError:
         existing = f"# Articles to Process\n\n"
 
     new_content = existing.rstrip() + f"\n\n## Added {today}\n\n" + "\n".join(article_lines) + "\n"
-    s3_put_verified(s3, ARTICLES_FILE, new_content, dry_run)
+    if dry_run:
+        return {"appended": len(article_lines), "verified": True, "error": None}
+    ok = s3_put_verified(s3, ARTICLES_FILE, new_content, dry_run=False)
+    if ok:
+        return {"appended": len(article_lines), "verified": True, "error": None}
+    return {"appended": 0, "verified": False, "error": "articles_put_or_head_failed"}
 
 
 SECTION_TEMPLATES = {
@@ -1639,30 +1653,35 @@ def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
         else:
             log.write_verifications_fail += 1
 
-        mtl_count = append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
-        # append_tasks_to_mtl uses s3_put_verified internally; a return of 0 means
-        # all tasks deduped (no-op write that succeeded). Treat both as verified.
+        mtl_outcome = append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
         mtl_result = {
             "target": "mtl", "key": MTL_KEY,
-            "items": mtl_count, "verified": True,
+            "items": mtl_outcome["appended"],
+            "verified": mtl_outcome["verified"],
         }
-        if mtl_count > 0:
-            log.write_verifications_pass += 1
+        if mtl_outcome.get("error"):
+            mtl_result["error"] = mtl_outcome["error"]
+        if mtl_outcome["verified"]:
+            if mtl_outcome["appended"] > 0:
+                log.write_verifications_pass += 1
+        else:
+            log.write_verifications_fail += 1
 
     if all_articles:
-        articles_verified = True
-        try:
-            append_articles(s3, all_articles, today, dry_run)
-            log.articles_queued += len(all_articles)
-            log.write_verifications_pass += 1
-        except Exception as e:
-            articles_verified = False
-            log.write_verifications_fail += 1
-            logging.error(f"articles append failed: {e}")
+        art_outcome = append_articles(s3, all_articles, today, dry_run)
         articles_result = {
             "target": "articles_queue", "key": ARTICLES_FILE,
-            "items": len(all_articles), "verified": articles_verified,
+            "items": art_outcome["appended"],
+            "verified": art_outcome["verified"],
         }
+        if art_outcome.get("error"):
+            articles_result["error"] = art_outcome["error"]
+        if art_outcome["verified"]:
+            log.articles_queued += art_outcome["appended"]
+            log.write_verifications_pass += 1
+        else:
+            log.write_verifications_fail += 1
+            logging.error(f"articles append failed: {art_outcome.get('error')}")
 
     # Routed intent items — written inline; not part of receipt sections
     # (they cross-cut the source sections). Tracked in log.items_routed.
@@ -1867,10 +1886,13 @@ def _extract_no_reset(s3, client, name, key, content, body, fm,
     tasks_written = write_task_file(s3, all_tasks, name, file_area, today, dry_run)
     log.tasks_written += tasks_written
     if all_tasks:
-        append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
+        # --no-reset path: we don't gate on the result (sources stay untouched
+        # regardless), but the function now returns dict — capture for stats.
+        _ = append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
     if all_articles:
-        append_articles(s3, all_articles, today, dry_run)
-        log.articles_queued += len(all_articles)
+        art_outcome = append_articles(s3, all_articles, today, dry_run)
+        if art_outcome.get("verified"):
+            log.articles_queued += art_outcome["appended"]
     if review_items and not dry_run:
         append_to_review_queue(s3, review_items, today, name, dry_run)
     if routed_questions and not dry_run:
