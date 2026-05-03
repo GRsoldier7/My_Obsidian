@@ -516,3 +516,50 @@ def test_is_body_effectively_empty_with_content_returns_false():
         "I want to start a Bible study group.\n"
     )
     assert bdi.is_body_effectively_empty(body) is False
+
+
+# ── Drift-prevention guardrails (added 2026-05-03 AMBER pass) ────────────────
+
+def test_migration_round_trip_only_heartbeat_advances():
+    """Running the migration twice on the same fm + body must produce
+    identical output EXCEPT for `last_checked` (heartbeat semantic — allowed
+    to advance on every run). Every other field must be byte-stable.
+
+    This locks down the contract that migration is "idempotent in shape" so
+    a future change that accidentally non-determinizes another field
+    (e.g. UUID-based receipt paths, mutable defaults) fails CI.
+    """
+    fm = {
+        "domain": "personal", "area": "personal", "status": "empty",
+        "last_processed": "2026-04-20",  # legacy stale value
+    }
+    out1 = bdi.migrate_frontmatter(fm, SIMPLE_BODY, "2026-05-04T07:00:00Z")
+    out2 = bdi.migrate_frontmatter(out1, SIMPLE_BODY, "2026-05-04T07:00:30Z")
+
+    diffs = {k: (out1.get(k), out2.get(k))
+             for k in (set(out1) | set(out2))
+             if out1.get(k) != out2.get(k)}
+    assert set(diffs.keys()) <= {"last_checked"}, (
+        f"migration not idempotent — fields besides last_checked changed "
+        f"between runs: {diffs}"
+    )
+
+
+def test_receipt_schema_version_pinned():
+    """Pinning the receipt schema_version to 1 ensures any change requires
+    a deliberate version bump + audit script update. Catches the case
+    where someone bumps RECEIPT_SCHEMA_VERSION without updating the audit
+    script's compatibility check.
+    """
+    assert bdi.RECEIPT_SCHEMA_VERSION == 1, (
+        "RECEIPT_SCHEMA_VERSION changed — update audit_extraction_receipts.py "
+        "schema-compatibility check before bumping."
+    )
+    sample = bdi.build_receipt(
+        source={"key": "x", "filename": "x.md", "content_hash": "sha256:abcd", "size_bytes": 1},
+        run={"workflow": "x", "run_id": "1", "started_at": "2026-05-04T07:00:00Z",
+             "finished_at": "2026-05-04T07:00:30Z", "executor": "python", "no_reset": False},
+        archive={"key": "x", "etag": '"a"', "size_bytes": 1, "verified": True},
+        sections=[],
+    )
+    assert sample["schema_version"] == 1

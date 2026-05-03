@@ -315,3 +315,32 @@ def test_code_heavy_workflows_do_not_share_cron_minutes():
         ":03 :13 :23 :33 :43 :53) and rerun. Collisions:\n"
         + "\n".join(collisions)
     )
+
+
+def test_execute_command_nodes_do_not_use_n8n_expression_with_shell_vars():
+    """An executeCommand whose `command` starts with `=` is treated as an n8n
+    expression. Bash parameter expansion `${VAR:-default}` is shell syntax,
+    not n8n syntax — mixing them silently breaks at activation time.
+
+    Regression: caught in 2026-05-03 AMBER pass on brain-dump-processor-v2.
+    Drop the `=` so the command string is handed to bash verbatim and bash
+    expands `${VAR:-default}` per POSIX.
+    """
+    violations: list[str] = []
+    for wf_path in sorted(WORKFLOW_DIR.glob("*.json")):
+        wf = json.loads(wf_path.read_text(encoding="utf-8"))
+        for node in wf.get("nodes", []):
+            if node.get("type") != "n8n-nodes-base.executeCommand":
+                continue
+            cmd = node.get("parameters", {}).get("command", "") or ""
+            if cmd.startswith("=") and re.search(r"\$\{[A-Za-z_][A-Za-z0-9_]*:?[-?+=]", cmd):
+                violations.append(
+                    f"  {wf_path.name} :: {node.get('name','?')} — "
+                    f"command starts with `=` AND contains bash parameter expansion"
+                )
+
+    assert not violations, (
+        "executeCommand nodes mix n8n expression mode (leading `=`) with bash "
+        "parameter expansion `${VAR:-default}`. Drop the `=` so the command "
+        "is passed verbatim to bash:\n" + "\n".join(violations)
+    )
