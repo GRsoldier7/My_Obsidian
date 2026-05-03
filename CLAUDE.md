@@ -183,17 +183,44 @@ Enforced by [scripts/audit_workflow_credentials.py](scripts/audit_workflow_crede
 Push project session logs to the **active** notebook via `notebooklm source add <path>` after `notebooklm use a428969b-c3f1-480b-b54c-876974650674`. Both IDs are mirrored in [.claude/nlm-notebook-ids.env](.claude/nlm-notebook-ids.env) (`NLM_PROJECT_NOTEBOOK_ID`, `NLM_WORKING_MEMORY_NOTEBOOK_ID`) and [.claude/notebooklm.json](.claude/notebooklm.json).
 
 ## Current Status
-v2 pipeline LIVE. Production-readiness recovery landed 2026-04-19. Value-first triage landed 2026-04-25 (branch `polish/prod-ready`):
-- **Emails**: HTML across 6 workflows, `parameters.emailFormat` at top level (n8n emailSend@2 ignores `options.emailFormat`). Live SMTP messageSize 13,710–15,493 B post-fix (was 355–678). `scripts/audit_workflow_email_format.py` + `scripts/render_emails_dryrun.py` ship.
-- **Brain-dump pipeline (Python path)**: `tools/process_brain_dump.py` rewritten — section-aware, prose-imperative regex, OpenRouter on every dump, intent classification, auto `[explore::]` tag, source-link wikilinks, fuzzy dedup, confidence-gated review queue. Proven E2E on operator's 2026-04-25 brain dump (5 tasks → MTL with `[source:: [[...]]]`). Brain-dump n8n S3 List node rewired to HTTP-Request + presigned URL; needs `setup-n8n.sh` placeholder hydration before cron path works again — manual Python invocation is the working path TODAY.
-- **Home.md**: `000_Master Dashboard/Home.md` (4258 B) — Morning Setup, Today, Active Projects, This Week, Reading Queue, To Look Into, Inbox Health, Quick Actions. Built by `tools/build_home_view.py`.
-- **Pipeline Health observability**: `99_System/Pipeline Health.md` (3658 B) auto-updated by `tools/build_pipeline_health.py`; anomaly rules in `tools/anomaly_detector.py`.
-- **Windows encoding fix**: 3 audit scripts + 1 test file were silently crashing on `cp1252` → all four audits now green on Windows. Always pass `encoding="utf-8"` to `Path.read_text()` and prefix interactive Python with `PYTHONIOENCODING=utf-8`.
-- **Validation bug recovery**: `TASK_FORMAT_PATTERN` rejected tasks with trailing `[explore::]` and `[source:: [[...]]]` extensions, causing data loss before the fix landed. MinIO bucket versioning is **enabled** — recover via `s3.list_object_versions(Prefix=key)`. 3 regression tests guard this.
-- Test suite: 189 pass, 1 skip.
 
-Weekend Planner deployed but INACTIVE (needs Google Calendar OAuth2 credential — see docs/google-calendar-setup.md).
+**Reframe 2026-05-03:** OHO is a personal **Life Operating System** across 8 domains, not a brain-dump pipeline. v1.0 roadmap below; task-level threading explicitly wanted.
 
-Pending: GCAL OAuth2 → GCAL_CRED_ID in .env → re-deploy Weekend Planner. Telegram bot. OpenRouter key rotation. Brain-dump n8n cron placeholder hydration. `reset_to_template` should be conditional on successful MTL append (currently fires regardless). MTL backfill of `[due::]` (only 11% populated) and `[completion::]` (0%).
+**P0 landed 2026-05-03 (commit `2b518b1`, branch `polish/prod-ready`)** — recovered the brain-dump pipeline from 11 days of silent skipped runs caused by:
+- Crons fired 5–6 hours late (UTC-adjusted while `settings.timezone: America/Chicago` was applied → double offset). Fixed local-time crons across 5 workflows.
+- MinIO list step in brain-dump-processor-v2 used HTTP+SigV4 with an unhydrated `__AWS_CRED_ID__` placeholder; auth failed daily and was mislabeled `source_prefix_empty`. Replaced with native `n8n-nodes-base.s3` `list` (canonical `s3` family) and added `minio_auth_error` / `minio_list_failed` to the canonical skip_reason enum.
+- Backlog drained via `python3 tools/process_brain_dump.py --no-reset` (new safe-mode flag) — 5 new tasks landed in MTL with `[source:: [[…]]]` backrefs; source brain-dump files left intact pending P1's gates.
+- NotebookLM ID drift reconciled — `a428969b-…` is authoritative (9 historical sources); `844aa6a1-…` is sidecar; `d056e9d5-…` was a phantom.
+- Test suite: **202 pass, 1 skip.** All 4 workflow audits green.
 
-Next phase: Phase 3 (Telegram bot, completed task archiver cron, article enricher v2, brain-dump cron restoration).
+**Earlier work (still relevant):**
+- Emails: HTML across 6 workflows, `parameters.emailFormat` at top level. Live SMTP messageSize 13,710–15,493 B. Audited by `scripts/audit_workflow_email_format.py`.
+- Brain-dump Python path proven E2E (`tools/process_brain_dump.py`) — section-aware, prose-imperative regex, OpenRouter cascade, intent classification, source-link wikilinks, fuzzy dedup, confidence-gated review queue.
+- Home.md, Pipeline Health.md, anomaly detector all live.
+- Windows encoding hardening complete (UTF-8 everywhere).
+- MinIO bucket versioning **enabled** — recover deletes via `s3.list_object_versions(Prefix=key)`.
+
+## Life Orchestrator v1.0 Roadmap
+
+| Phase | Theme | Status |
+|---|---|---|
+| **P0** | Stop the bleed | ✅ shipped commit `2b518b1` |
+| **P1** | Safe reset — state machine + extraction receipts + raw-source archive + `last_checked` / `last_processed` semantics + truthful run logs | NEXT — non-negotiable, boring, hard to break |
+| **P2** | Threaded tasks (stable `task_id` not slugs; backing files in `30_Tasks/<area>/`) | Design-first AFTER P1; spec must cover IDs, migration, dedup, backlinks, completion sync, manual-edit resilience, audit |
+| **P3** | Capture-from-anywhere (Telegram, email-forward, voice→text) | Waits until P1 + likely P2 |
+| **P4** | Decision-ready briefings (today's ONE thing + 3 unblock decisions + accountability) | After P3 |
+| **P5** | Review rituals — auto-prepped weekly + quarterly + monthly templates | After P4 |
+| **P6** | Domain-aware UX (faith/health/business/family-specific) | After P5 |
+| **P7** | Insight loop / AI coach email | Last (compounds with data history) |
+
+**Hard rules:**
+- P1 closes the integrity layer before any expansion. While P1 is open: no new capture surfaces, no insights/coach scripts, no domain UX scope.
+- P2 is design-first. Spec lands as `docs/adr/<date>-threaded-tasks.md` before code.
+- "Insight v0" if it ships is read-only + non-blocking, and only AFTER P1 (and probably P2).
+
+## Pending (carry-forward, not in P1 scope)
+
+- GCAL OAuth2 → `GCAL_CRED_ID` in `.env` → re-deploy Weekend Planner.
+- OpenRouter key rotation.
+- MTL backfill of `[due::]` (only 11% populated) and `[completion::]` (0%).
+- `reset_to_template` conditional on MTL append success (P1 will close this properly via the receipt model).
