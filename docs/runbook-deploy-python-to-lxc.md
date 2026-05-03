@@ -7,6 +7,53 @@ layer in JavaScript. The n8n process needs Python + the repo + `.env`.
 
 ---
 
+## TL;DR — Do I need a new LXC?
+
+**No.** Reuse the existing n8n LXC (CT-202). Justification:
+
+| Resource | brain-dump-processor.py needs | CT-202 has |
+|---|---|---|
+| Python 3.12+ | yes (verify once) | almost certainly yes |
+| pip packages | `boto3`, `openai`, `python-dotenv` (~80MB) | install via `pip3 install --user` |
+| RAM (peak) | ~50–80MB during a run | n8n already uses ≥150MB; LXC presumably has ≥512MB |
+| CPU | 5–10s once per day at 7AM CDT | trivially available |
+| Disk | ~150MB total (Python deps + repo) | trivially available |
+| Network | MinIO (192.168.1.240) + OpenRouter HTTPS | already reachable from CT-202 (n8n hits both) |
+| Isolation concern | none — runs the same kind of code n8n itself runs | n/a |
+
+A dedicated LXC would be over-engineering for a once-daily, 10-second
+job. If you ever scale the Python workload (e.g. real-time webhook
+ingestion) we revisit.
+
+---
+
+## Inspection — run this first on CT-202
+
+SSH to the LXC and run the block below. It's read-only (no changes)
+and tells you exactly what's missing.
+
+```bash
+echo "=== OS ===" && uname -a
+echo "=== Python ===" && python3 --version 2>&1
+echo "=== pip3 ===" && pip3 --version 2>&1 || echo "pip3 missing"
+echo "=== Required packages ===" && python3 -c "import boto3,openai,dotenv; print('boto3',boto3.__version__,'openai',openai.__version__,'dotenv ok')" 2>&1 || echo "missing one of: boto3 / openai / python-dotenv"
+echo "=== Repo location candidates ===" && for p in /opt/oho /mnt/home/!!\ AI_Scripts_Automations_Projects/Projects_Repos/ObsidianHomeOrchestrator /home/oho/repo; do [ -d "$p" ] && echo "FOUND $p" || echo "absent $p"; done
+echo "=== MinIO reachable? ===" && curl -sS -m 3 -o /dev/null -w "minio: HTTP %{http_code}\n" http://192.168.1.240:9000/minio/health/live
+echo "=== OpenRouter reachable? ===" && curl -sS -m 3 -o /dev/null -w "openrouter: HTTP %{http_code}\n" https://openrouter.ai/
+echo "=== n8n process ===" && pgrep -af n8n | head -3
+```
+
+Expected GOOD output:
+- Python 3.12 or higher
+- boto3 / openai / dotenv all import successfully (or "missing one of …" if not yet installed)
+- One of the repo paths is `FOUND`
+- MinIO returns HTTP 200, OpenRouter returns HTTP 2xx or 3xx
+- n8n is running
+
+Anything else → see the relevant section below.
+
+---
+
 ## What the LXC needs
 
 ### 1. Python 3.12+
