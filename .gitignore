@@ -39,3 +39,6 @@ node_modules/
 # Logs
 *.log
 .gstack/
+
+# Foundation AddOn skills are symlinked from outside the repo (see scripts/sync_foundation_skills.sh)
+.claude/skills/

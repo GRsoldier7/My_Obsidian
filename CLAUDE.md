@@ -59,10 +59,19 @@ Area values: faith, family, business, consulting, work, health, home, personal
 
 ## Skill Library
 
-**Primary source:** `! Foundation_AddOn_Project/CLAUDE.md` — 60+ skills across 6 tiers (always-on meta-layer, core, engineering, superpowers, strategy, gstack, tech). That file is authoritative. Reference it for the full routing table and skill catalog.
+**Superpowers default (project-scoped, 2026-05-03):** the 9 always-on Foundation AddOn skills are symlinked into [.claude/skills/](.claude/skills/) by [scripts/sync_foundation_skills.sh](scripts/sync_foundation_skills.sh). They activate automatically without explicit invocation; re-run the sync script after pulling Foundation AddOn updates.
 
-**Always-on meta-layer (Foundation AddOn — no trigger needed):**
-`anti-hallucination` · `prompt-amplifier` · `cognitive-excellence` · `context-guardian` · `efficiency-engine` · `secure-by-design` · `solution-architect-engine` · `verification-before-completion` · `session-optimizer`
+**Always-on meta-layer:**
+`anti-hallucination` (proportional verification + 60% escalation) · `context-guardian` (60-79% AMBER, 80%+ RED) · `cognitive-excellence` · `efficiency-engine` · `prompt-amplifier` · `secure-by-design` · `session-optimizer` · `solution-architect-engine` · `verification-before-completion`
+
+**Primary source (upstream):** https://github.com/GRsoldier7/-Foundational-Add-on-Project — local clone at `! Foundation_AddOn_Project/`. CLAUDE.md there has the full 60+ skill routing table across 6 tiers (core, engineering, superpowers, strategy, gstack, tech).
+
+**Anti-hallucination — practical rules in this repo:**
+- File-grounded claims: re-read with the Read tool before citing specific content; in any session past the AMBER threshold, never paraphrase from memory.
+- External APIs: anything not seen in current session = LIKELY at best; flag for verification.
+- Versions/dates/numbers: VERIFIED only with a current-context source; otherwise use ranges or "verify current".
+- Pushback signal: stop, re-read, acknowledge, correct, identify the cause. Never defend a hallucination.
+- Confidence labels: VERIFIED · LIKELY · UNCERTAIN · SPECULATIVE · UNKNOWN. Never present LIKELY+ as VERIFIED.
 
 **OHO-specific skills (Life OS domain — not in Foundation AddOn):**
 
