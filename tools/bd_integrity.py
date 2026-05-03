@@ -330,9 +330,13 @@ def migrate_frontmatter(
         new_fm.setdefault("last_processed_hash", new_fm["content_hash"])
         new_fm.setdefault("last_processed", now_iso)
     else:
+        # has_content explicitly means "not yet processed under the new gates."
+        # Force-clear any stale last_processed/_hash from the legacy schema —
+        # otherwise the audit + downstream readers see contradictory state
+        # (last_processed set but last_processed_hash null).
         new_fm["status"] = "has_content"
-        new_fm.setdefault("last_processed_hash", None)
-        new_fm.setdefault("last_processed", None)
+        new_fm["last_processed_hash"] = None
+        new_fm["last_processed"] = None
 
     new_fm.setdefault("domain", "personal")
     new_fm.setdefault("area", "personal")

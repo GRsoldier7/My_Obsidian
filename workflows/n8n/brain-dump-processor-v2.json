@@ -39,7 +39,7 @@
     },
     {
       "parameters": {
-        "command": "=cd ${OHO_REPO_PATH:-/opt/oho} && set -a && [ -f .env ] && source .env; set +a && python3 -u tools/process_brain_dump.py"
+        "command": "cd ${OHO_REPO_PATH:-/opt/oho} && set -a && [ -f .env ] && source .env; set +a && python3 -u tools/process_brain_dump.py"
       },
       "id": "run-python",
       "name": "Run: process_brain_dump.py",

@@ -154,6 +154,22 @@ def test_migrate_frontmatter_preserves_unknown_legacy_fields():
     assert once["legacy_field_xyz"] == "preserved"
 
 
+def test_migrate_frontmatter_clears_stale_last_processed_on_has_content():
+    """When status flips to has_content, legacy last_processed must be wiped —
+    otherwise the audit sees `last_processed` set but `last_processed_hash` null.
+    Regression: caught in 2026-05-03 verification pass."""
+    fm = {
+        "domain": "personal",
+        "area": "personal",
+        "status": "empty",
+        "last_processed": "2026-04-20",  # stale legacy value
+    }
+    out = bdi.migrate_frontmatter(fm, SIMPLE_BODY, "2026-05-04T07:00:00Z")
+    assert out["status"] == "has_content"
+    assert out["last_processed"] is None
+    assert out["last_processed_hash"] is None
+
+
 # ── Test 3: partial success writes retention block with reasons ──────────────
 
 def test_make_retention_block_format():
