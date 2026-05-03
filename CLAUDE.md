@@ -176,10 +176,11 @@ Enforced by [scripts/audit_workflow_credentials.py](scripts/audit_workflow_crede
 
 | Notebook | ID | Status |
 |----------|-----|--------|
-| ObsidianHomeOrchestrator — Life OS Project Memory | `d056e9d5-64d9-4f64-aa94-faff603de835` | ACTIVE (authoritative, 2026-04-19) |
-| (legacy) OHO project memory | `a428969b-c3f1-480b-b54c-876974650674` | SUPERSEDED 2026-04-19 |
+| ObsidianHomeOrchestrator — Life OS Project Memory | `a428969b-c3f1-480b-b54c-876974650674` | ACTIVE (authoritative, 2026-05-03 reconciled — 9 historical sources from 2026-04-11→04-19) |
+| ObsidianHomeOrchestrator — Working Memory | `844aa6a1-e3fc-4d75-af9e-d4653a755ae3` | SIDECAR (auto-created 2026-05-03; reserved for in-flight session memory pushes) |
+| (phantom) `d056e9d5-64d9-4f64-aa94-faff603de835` | — | DOES NOT EXIST in the user's NotebookLM account. Old docs reference it; treat as a typo. |
 
-The 2026-04-12 memory snapshot still references the legacy ID. Treat `d056e9d5-...` as the only authoritative notebook for this project. Push new session logs as sources via `notebooklm source add <path>`.
+Push project session logs to the **active** notebook via `notebooklm source add <path>` after `notebooklm use a428969b-c3f1-480b-b54c-876974650674`. Both IDs are mirrored in [.claude/nlm-notebook-ids.env](.claude/nlm-notebook-ids.env) (`NLM_PROJECT_NOTEBOOK_ID`, `NLM_WORKING_MEMORY_NOTEBOOK_ID`) and [.claude/notebooklm.json](.claude/notebooklm.json).
 
 ## Current Status
 v2 pipeline LIVE. Production-readiness recovery landed 2026-04-19. Value-first triage landed 2026-04-25 (branch `polish/prod-ready`):

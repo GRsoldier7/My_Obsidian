@@ -39,6 +39,8 @@ WORKFLOW_DIR = REPO_ROOT / "workflows" / "n8n"
 ALLOWED_SKIP_REASONS = {
     "source_prefix_empty",
     "minio_offline",
+    "minio_auth_error",
+    "minio_list_failed",
     "queue_missing",
     "queue_empty",
     "no_new_items",

@@ -1328,7 +1328,7 @@ def append_to_captured_references(s3, today: str, lines: list[str],
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
 def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
-                 today: str, dry_run: bool) -> bool:
+                 today: str, dry_run: bool, no_reset: bool = False) -> bool:
     """Process a single brain dump file through the pipeline. Returns True if content found."""
     key = file_info["key"]
     name = file_info["name"]
@@ -1467,12 +1467,19 @@ def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
         log.articles_queued += len(all_articles)
         log.write_verifications_pass += 1
 
-    # Reset extracted sections to empty template (ready for user to fill again)
+    # Reset extracted sections to empty template (ready for user to fill again).
+    # `--no-reset` is the safety mode used during P0 backlog drain BEFORE the P1
+    # state-machine + receipts land. It writes captured tasks/articles/notes to
+    # the vault but leaves source brain-dump files untouched, eliminating the
+    # data-loss risk while still delivering value to the user today.
     extracted_headers = list(real_sections.keys())
-    updated_content = reset_to_template(content, extracted_headers, today)
-    if not dry_run:
-        s3_put_verified(s3, key, updated_content, dry_run)
-        logging.info(f"  → Reset {len(extracted_headers)} section(s) to empty template")
+    if no_reset:
+        logging.info(f"  → [no-reset] Source file untouched ({len(extracted_headers)} section(s) would have been cleared)")
+    else:
+        updated_content = reset_to_template(content, extracted_headers, today)
+        if not dry_run:
+            s3_put_verified(s3, key, updated_content, dry_run)
+            logging.info(f"  → Reset {len(extracted_headers)} section(s) to empty template")
 
     log.files_processed.append(name)
     logging.info(f"  → Done: {tasks_written} tasks, {notes_written} notes, {len(all_articles)} articles")
@@ -1483,6 +1490,8 @@ def main():
     parser = argparse.ArgumentParser(description="Process brain dump files from MinIO")
     parser.add_argument("--dry-run", action="store_true", help="Parse and log without writing")
     parser.add_argument("--file", help="Process only this specific filename")
+    parser.add_argument("--no-reset", action="store_true",
+                        help="Extract tasks/articles/notes to vault but leave source brain-dump files untouched (safe drain mode)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -1520,7 +1529,8 @@ def main():
     logging.info(f"Discovered {len(all_files)} brain dump file(s)")
 
     for file_info in all_files:
-        had_content = process_file(s3, client, file_info, log, today, args.dry_run)
+        had_content = process_file(s3, client, file_info, log, today, args.dry_run,
+                                    no_reset=args.no_reset)
         if had_content:
             log.files_with_content += 1
 

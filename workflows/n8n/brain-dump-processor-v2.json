@@ -7,7 +7,7 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 12 * * *"
+              "expression": "0 7 * * *"
             }
           ]
         }
@@ -23,52 +23,34 @@
     },
     {
       "parameters": {
-        "method": "GET",
-        "url": "=http://__MINIO_HOST__/obsidian-vault/?list-type=2&prefix=00_Inbox/brain-dumps/",
-        "authentication": "predefinedCredentialType",
-        "nodeCredentialType": "aws",
-        "options": {
-          "response": {
-            "response": {
-              "responseFormat": "text",
-              "fullResponse": false
-            }
-          },
-          "timeout": 30000
-        }
+        "operation": "list",
+        "bucketName": "obsidian-vault",
+        "returnAll": true,
+        "prefix": "00_Inbox/brain-dumps/",
+        "additionalFields": {}
       },
-      "id": "s3-list-http",
+      "id": "s3-list",
       "name": "S3: List Brain Dumps",
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
       "position": [
         440,
         300
       ],
       "credentials": {
-        "aws": {
-          "id": "__AWS_CRED_ID__",
-          "name": "MinIO S3 v2"
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
         }
       },
-      "continueOnFail": true
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
-        "jsCode": "// Parse the ListObjectsV2 XML response from MinIO into structured items.\n// We avoid xml2js (not in the n8n sandbox) and use regex extraction.\nconst raw = $input.first().json;\nconst body = typeof raw === 'string' ? raw : (raw.data || raw.body || '');\nif (!body || typeof body !== 'string') {\n  return [{ json: { _noFiles: true, total: 0, debug: 'empty response body' } }];\n}\nconst items = [];\nconst contentRe = /<Contents>([\\s\\S]*?)<\\/Contents>/g;\nlet m;\nwhile ((m = contentRe.exec(body)) !== null) {\n  const block = m[1];\n  const key = (block.match(/<Key>([^<]+)<\\/Key>/) || [])[1];\n  const size = parseInt((block.match(/<Size>([^<]+)<\\/Size>/) || [])[1] || '0', 10);\n  const lastModified = (block.match(/<LastModified>([^<]+)<\\/LastModified>/) || [])[1];\n  if (!key) continue;\n  items.push({ Key: key, Size: size, LastModified: lastModified });\n}\nif (items.length === 0) {\n  return [{ json: { _noFiles: true, total: 0 } }];\n}\nreturn items.map(it => ({ json: it }));"
-      },
-      "id": "s3-list-parse",
-      "name": "Parse List XML",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        540,
-        300
-      ]
-    },
-    {
-      "parameters": {
-        "jsCode": "// Filter to only real .md files (exclude zero-byte and folder placeholders).\nconst items = $input.all();\nconst files = items.filter(item => {\n  if (item.json._noFiles) return false;\n  const key = item.json.Key || '';\n  const size = item.json.Size || 0;\n  return key.endsWith('.md') && size > 0;\n});\nreturn files.length > 0 ? files : [{ json: { _noFiles: true } }];"
+        "jsCode": "// Filter native S3 list output to only real .md files.\n// Distinguishes three terminal states for the no-work path:\n//   1. list errored (auth/network) → _listFailed: true + skip_reason will be 'minio_auth_error'\n//   2. list succeeded but prefix is empty → _noFiles: true + 'source_prefix_empty'\n//   3. list succeeded with files → return file items downstream\nconst items = $input.all();\n\n// Detect upstream failure: with continueOnFail, errored runs surface as items\n// whose json carries an `error` field (or empty json with no Key).\nconst errored = items.find(it => it && it.json && it.json.error);\nif (errored) {\n  const msg = (errored.json.error && errored.json.error.message) || JSON.stringify(errored.json.error);\n  return [{ json: { _noFiles: true, _listFailed: true, _listError: String(msg).slice(0, 240) } }];\n}\n\nconst files = items.filter(item => {\n  if (!item || !item.json) return false;\n  const key = item.json.Key || '';\n  const size = item.json.Size || 0;\n  return key.endsWith('.md') && size > 0;\n});\nreturn files.length > 0 ? files : [{ json: { _noFiles: true } }];"
       },
       "id": "filter-files",
       "name": "Filter Real Files",
@@ -300,7 +282,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// Defense-in-depth: even a true zero-files run writes a run log AND emits\n// an alert payload so silent zeros never happen again.\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst log = JSON.stringify({\n  workflow: 'brain-dump-processor', run_date: today,\n  finished_at: new Date().toISOString(), status: 'skipped',\n  skip_reason: 'source_prefix_empty',\n  files_with_content: 0, tasks_extracted: 0,\n  articles_queued: 0, files_processed: []\n}, null, 2);\nconst buf = Buffer.from(log, 'utf-8');\nconst logKey = `99_System/logs/brain-dump-processor-${today}.json`;\nreturn [{ json: { logKey, today, status: 'skipped', skip_reason: 'source_prefix_empty' }, binary: { logFile: { data: buf.toString('base64'), mimeType: 'application/json', fileName: logKey.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
+        "jsCode": "// Defense-in-depth: even a zero-files run writes a run log AND emits\n// an alert payload so silent zeros never happen again. Distinguishes\n// authenticated-empty from auth-failure so we never again label 11 days\n// of silent failure as `source_prefix_empty`.\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst input = $input.first().json || {};\nconst listFailed = input._listFailed === true;\nconst listError  = input._listError || null;\nconst baseLog = {\n  workflow: 'brain-dump-processor', run_date: today,\n  finished_at: new Date().toISOString(), status: 'skipped',\n  list_error: listError,\n  files_discovered: 0, files_with_content: 0,\n  tasks_extracted: 0, articles_queued: 0, files_processed: [],\n  reset_applied: false\n};\nconst logBody = listFailed\n  ? { skip_reason: 'minio_auth_error', ...baseLog }\n  : { skip_reason: 'source_prefix_empty', ...baseLog };\n// Keep `skip_reason` field key first so it lands at the top of the JSON file\n// — easier eyeball-scanning of stale logs.\nconst log = JSON.stringify(logBody, null, 2);\nconst buf = Buffer.from(log, 'utf-8');\nconst logKey = `99_System/logs/brain-dump-processor-${today}.json`;\nreturn [{ json: { logKey, today, status: 'skipped', skip_reason: logBody.skip_reason, listFailed, listError }, binary: { logFile: { data: buf.toString('base64'), mimeType: 'application/json', fileName: logKey.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
       },
       "id": "no-work-log",
       "name": "Build No-Work Log",
@@ -433,17 +415,6 @@
       ]
     },
     "S3: List Brain Dumps": {
-      "main": [
-        [
-          {
-            "node": "Parse List XML",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Parse List XML": {
       "main": [
         [
           {
