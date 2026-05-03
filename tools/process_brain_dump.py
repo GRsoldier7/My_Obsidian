@@ -35,6 +35,15 @@ try:
 except ImportError:
     pass
 
+# When invoked as `python3 tools/process_brain_dump.py`, tools/ is sys.path[0]
+# but the repo root isn't, so `from tools import ...` fails. Add repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# P1 integrity layer (ADR-0005). Pure functions — no I/O.
+from tools import bd_integrity as bdi
+
 # ── Configuration ────────────────────────────────────────────────────────────
 
 MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://192.168.1.240:9000")
@@ -150,6 +159,22 @@ class RunLog:
     ai_calls: int = 0
     dedup_skips: int = 0
     low_confidence: int = 0
+    # P1 integrity layer (ADR-0005)
+    receipts_written: int = 0
+    archive_writes_pass: int = 0
+    archive_writes_fail: int = 0
+    files_by_state: dict = field(default_factory=lambda: {
+        "empty": 0, "has_content": 0, "scanning": 0,
+        "extracted": 0, "partial": 0, "error": 0,
+    })
+    files_extracted: list = field(default_factory=list)
+    files_partial:   list = field(default_factory=list)  # [{file, reasons}]
+    files_error:     list = field(default_factory=list)  # [{file, error}]
+    reset_summary: dict = field(default_factory=lambda: {
+        "files_reset_full": 0,
+        "files_reset_partial": 0,
+        "files_reset_skipped": 0,
+    })
 
 
 # ── MinIO helpers ────────────────────────────────────────────────────────────
@@ -182,6 +207,63 @@ def s3_put_verified(s3, key: str, body: str, dry_run: bool = False) -> bool:
     except Exception as e:
         logging.error(f"WRITE_VERIFY_FAIL: {key}: {e}")
         return False
+
+
+# ── P1 integrity helpers (ADR-0005) ──────────────────────────────────────────
+
+def s3_put_receipt(s3, key: str, body: bytes, dry_run: bool = False) -> dict:
+    """Verified PUT for a receipt or any binary-ish payload. Returns
+    {verified: bool, etag: str|None, size_bytes: int}.
+    """
+    if dry_run:
+        logging.info(f"[DRY RUN] Would write receipt: {key}")
+        return {"verified": True, "etag": None, "size_bytes": len(body)}
+    try:
+        put_resp = s3.put_object(Bucket=MINIO_BUCKET, Key=key, Body=body)
+        head = s3.head_object(Bucket=MINIO_BUCKET, Key=key)
+        return {
+            "verified": head["ContentLength"] == len(body),
+            "etag": head.get("ETag", put_resp.get("ETag")),
+            "size_bytes": head["ContentLength"],
+        }
+    except Exception as e:
+        logging.error(f"RECEIPT_WRITE_FAIL: {key}: {e}")
+        return {"verified": False, "etag": None, "size_bytes": 0, "error": str(e)[:240]}
+
+
+def write_archive(s3, source_key: str, source_name: str, content: str,
+                  today_yyyymmdd: str, dry_run: bool) -> dict:
+    """Write the raw source to 99_System/archive/brain-dumps/<date>/<file>.
+
+    Returns the archive dict for inclusion in the receipt.
+    """
+    body = content.encode("utf-8")
+    archive_key = bdi.archive_path(source_name, today_yyyymmdd)
+    if dry_run:
+        logging.info(f"[DRY RUN] Would archive: {archive_key}")
+        return {"key": archive_key, "etag": None, "size_bytes": len(body), "verified": True}
+    try:
+        put_resp = s3.put_object(Bucket=MINIO_BUCKET, Key=archive_key, Body=body)
+        head = s3.head_object(Bucket=MINIO_BUCKET, Key=archive_key)
+        return {
+            "key": archive_key,
+            "etag": head.get("ETag", put_resp.get("ETag")),
+            "size_bytes": head["ContentLength"],
+            "verified": head["ContentLength"] == len(body),
+        }
+    except Exception as e:
+        logging.error(f"ARCHIVE_WRITE_FAIL: {archive_key}: {e}")
+        return {"key": archive_key, "etag": None, "size_bytes": 0, "verified": False,
+                "error": str(e)[:240]}
+
+
+def section_template_for(header: str) -> str | None:
+    """Return the template body for a section header, or None if unknown."""
+    header_clean = header.lstrip("⚡🎯✅📰🗂️💡🔁 ").strip()
+    for known, tmpl in SECTION_TEMPLATES.items():
+        if known in header_clean or header_clean in known:
+            return tmpl
+    return None
 
 
 def discover_brain_dumps(s3) -> list[dict]:
@@ -1329,75 +1411,149 @@ def append_to_captured_references(s3, today: str, lines: list[str],
 
 def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
                  today: str, dry_run: bool, no_reset: bool = False) -> bool:
-    """Process a single brain dump file through the pipeline. Returns True if content found."""
+    """Process a single brain-dump file with the P1 integrity layer (ADR-0005).
+
+    Per-file flow under the gated path:
+      1. Read content + parse frontmatter.
+      2. Compute content_hash on the normalized body.
+      3. If body is effectively empty → status=empty, heartbeat-only, return.
+      4. Write archive (raw source) → if fails, status=error, abort.
+      5. Run extraction (existing regex/AI/intent-routing logic).
+      6. Build receipt with per-section + per-write verification.
+      7. Write receipt → if fails, status=error, no clearing.
+      8. Compute new frontmatter from receipt summary.
+      9. Apply gated reset (verified sections cleared, failed retained with
+         retention block); write source back.
+
+    --no-reset: heartbeat-only path. Writes outputs but no archive, no
+    receipt, no clearing. Mirrors the pre-P1 extraction behavior with
+    frontmatter heartbeat updates. Used for safe drains.
+
+    Note: `scanning` state is logical-only during a run; it is not
+    persisted to disk. A crashed run leaves the file in its prior
+    state and the next run re-picks it. Receipts are content-addressed
+    so a re-run produces the same receipt key (idempotent).
+    """
     key = file_info["key"]
     name = file_info["name"]
+    today_yyyymmdd = today.replace("-", "")
+    now_iso = bdi.now_utc_iso()
     logging.info(f"Processing: {name}")
 
+    # Stage 1 — read + parse frontmatter
     try:
         content = s3_get(s3, key)
     except Exception as e:
         log.errors.append(f"Failed to read {name}: {e}")
+        log.files_error.append({"file": name, "error": str(e)[:240]})
+        log.files_by_state["error"] += 1
         return False
 
-    # Stage 2: Smart Read — parse sections, detect real content
-    sections = parse_sections(content)
+    fm, body = bdi.parse_frontmatter(content)
+    content_hash = bdi.compute_content_hash(body)
+
+    # Heartbeat fields are always updated (even when status stays empty).
+    fm["last_checked"] = now_iso
+    fm["content_hash"] = content_hash
+    fm.setdefault("domain", "personal")
+    fm.setdefault("area", infer_area_from_filename(name))
+    fm.setdefault("last_partial_reasons", [])
+    fm.setdefault("last_receipt", None)
+
+    # Stage 2 — section parse & emptiness detection
+    sections = parse_sections(body)
     real_sections = extract_real_sections(sections)
 
     if not real_sections:
-        logging.info(f"  → No real content in {name}, skipping")
+        # Body is template-only or empty; nothing to extract.
+        fm["status"] = "empty"
+        if fm.get("last_processed_hash") != content_hash:
+            fm["last_processed_hash"] = content_hash
+            fm["last_processed"] = now_iso
+        if not dry_run:
+            new_content = bdi.serialize_frontmatter(fm, body if body else content)
+            s3_put_verified(s3, key, new_content, dry_run)
+        log.files_by_state["empty"] += 1
+        logging.info(f"  → No real content in {name}, status=empty")
         return False
 
-    file_area = infer_area_from_filename(name)
+    file_area = fm.get("area") or infer_area_from_filename(name)
     logging.info(f"  → {len(real_sections)} section(s) with real content, area={file_area}")
+    # Note: log.files_with_content is incremented by main() based on the return
+    # value of this function (return True ⇒ had real content). Don't double-count.
 
-    all_tasks = []
-    all_articles = []
-    notes_written = 0
+    # --no-reset: heartbeat-only path (no archive, no receipt, no clearing)
+    if no_reset:
+        return _extract_no_reset(s3, client, name, key, content, body, fm,
+                                  real_sections, file_area, today, log, dry_run)
 
-    # Layer 3: per-line intent routing collectors
-    routed_questions: list[str] = []   # daily-note ❓ Open Questions
-    routed_events:    list[str] = []   # daily-note 📅 Events
-    routed_refs:      list[str] = []   # captured-references-{YYYY-MM}.md
-    review_items:     list[dict] = []  # confidence < 0.6
+    # ── Gated path ────────────────────────────────────────────────────────────
+
+    # Stage 3 — Archive write (BEFORE extraction). Hard gate.
+    archive = write_archive(s3, key, name, content, today_yyyymmdd, dry_run)
+    if archive["verified"]:
+        log.archive_writes_pass += 1
+    else:
+        log.archive_writes_fail += 1
+        fm["status"] = "error"
+        if not dry_run:
+            new_content = bdi.serialize_frontmatter(fm, body if body else content)
+            s3_put_verified(s3, key, new_content, dry_run)
+        log.files_by_state["error"] += 1
+        log.files_error.append({"file": name, "error": f"archive_write_failed: {archive.get('error','?')}"})
+        log.errors.append(f"archive_write_failed for {name}: {archive.get('error','?')}")
+        log.reset_summary["files_reset_skipped"] += 1
+        return True  # had content, but errored
+
+    # Stage 4 — Extraction with per-section outcome tracking
+    section_outcomes: dict[str, dict] = {}
     src_link_token = build_source_link(name, today)
+    all_tasks: list[str] = []
+    all_articles: list[str] = []
+    notes_written_total = 0
+    routed_questions: list[str] = []
+    routed_events: list[str] = []
+    routed_refs: list[str] = []
+    review_items: list[dict] = []
 
-    # Stage 3+4: Extract per section (regex primary, AI for articles/notes)
-    for header, body in real_sections.items():
+    for header, sec_body in real_sections.items():
         stype = section_type(header)
+        outcome = {
+            "section": header,
+            "section_type": stype,
+            "items_extracted": 0,
+            "writes": [],
+            "verified": False,
+            "_targets": set(),
+        }
         logging.info(f"    [{stype}] {header}")
 
         if stype == "tasks":
-            # Regex extraction — deterministic pre-filter (zero API cost).
-            tasks = regex_extract_tasks(body, file_area)
+            tasks = regex_extract_tasks(sec_body, file_area)
             logging.info(f"      regex extracted {len(tasks)} task(s)")
-            # AI fallback fires whenever regex returned nothing.
             if client and len(tasks) == 0:
-                ai_tasks = extract_tasks_with_ai_fallback(client, body, file_area, today)
+                ai_tasks = extract_tasks_with_ai_fallback(client, sec_body, file_area, today)
                 if ai_tasks:
                     tasks = ai_tasks
                     log.ai_calls += 1
                     logging.info(f"      AI fallback extracted {len(tasks)} task(s)")
-            # Auto-tag explore-intent items even on the regex path.
             tasks = [_ensure_explore_tag(t) for t in tasks]
-            # Stamp source-link onto every regex-extracted task line.
             tasks = [t if "[source::" in t else f"{t} {src_link_token}" for t in tasks]
-            # Validate (allow trailing [explore:: true] [source:: ...]).
-            valid_tasks = []
-            rejections = []
+            valid: list[str] = []
             for t in tasks:
                 base = re.sub(r"\s*\[(explore|source)::[^\]]+\]\s*$", "", t).strip()
                 base = re.sub(r"\s*\[(explore|source)::[^\]]+\]\s*$", "", base).strip()
                 if validate_task_line(base):
-                    valid_tasks.append(t)
+                    valid.append(t)
                 else:
-                    rejections.append({"item": t[:80], "reason": "invalid canonical format"})
-            all_tasks.extend(valid_tasks)
-            log.quality_rejections.extend(rejections)
+                    log.quality_rejections.append({"item": t[:80], "reason": "invalid canonical format"})
+            outcome["items_extracted"] = len(valid)
+            if valid:
+                outcome["_targets"] = {"mtl", "processed_file"}
+            all_tasks.extend(valid)
 
-            # Layer 3: per-line intent routing for non-task shapes (questions,
-            # events, bare references) that regex's task heuristic skipped.
-            for raw_line in body.splitlines():
+            # Intent routing (questions/events/refs/review)
+            for raw_line in sec_body.splitlines():
                 line = raw_line.strip()
                 if not line or line.startswith(("<!--", ">", "#", "*", "-", "|")):
                     continue
@@ -1406,9 +1562,7 @@ def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
                 log.candidates_seen += 1
                 item = classify_intent(line, file_area_hint=file_area)
                 if item["intent"] == "action":
-                    # Already covered by regex pass above.
                     continue
-                # Confidence gate
                 if confidence_gate(item) == "review_queue":
                     log.low_confidence += 1
                     item["task_line"] = (
@@ -1429,60 +1583,314 @@ def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
                     log.items_routed["captured_references"] += 1
 
         elif stype == "articles":
-            # Extract raw URLs with regex (reliable, zero cost)
-            urls = re.findall(r'https?://[^\s\)\]]+', body)
-            articles = [f"- <{url}>" for url in urls if len(url) > 10]
-            all_articles.extend(articles)
+            urls = re.findall(r'https?://[^\s\)\]]+', sec_body)
+            section_articles = [f"- <{url}>" for url in urls if len(url) > 10]
+            outcome["items_extracted"] = len(section_articles)
+            if section_articles:
+                outcome["_targets"] = {"articles_queue"}
+            all_articles.extend(section_articles)
 
         elif stype == "notes":
-            # AI for notes (optional — skip if client unavailable)
+            section_note_writes: list[dict] = []
             if client:
-                notes = extract_notes_from_section(client, header, body, file_area, today)
+                notes = extract_notes_from_section(client, header, sec_body, file_area, today)
+                for note in notes:
+                    ok = write_note_file(s3, note, name, today, dry_run)
+                    section_note_writes.append({
+                        "target": "note_file",
+                        "key": note.get("key") or "note",
+                        "items": 1,
+                        "verified": bool(ok),
+                    })
+                    if ok:
+                        notes_written_total += 1
+                        log.notes_written += 1
+                        log.write_verifications_pass += 1
+                    else:
+                        log.write_verifications_fail += 1
+            outcome["items_extracted"] = len(section_note_writes)
+            outcome["writes"].extend(section_note_writes)
+
+        section_outcomes[header] = outcome
+
+    # Stage 5 — Aggregate writes (tasks → processed_file + MTL; articles → queue)
+    processed_file_result: dict | None = None
+    mtl_result: dict | None = None
+    articles_result: dict | None = None
+
+    if all_tasks:
+        slug = name.replace(".md", "").replace(" ", "-").replace("—", "").strip("-")
+        processed_key = f"{PROCESSED_PREFIX}{today}-{slug}-tasks.md"
+        proc_count = write_task_file(s3, all_tasks, name, file_area, today, dry_run)
+        proc_verified = bool(proc_count) or not bool(all_tasks)
+        if proc_verified and not dry_run:
+            try:
+                head = s3.head_object(Bucket=MINIO_BUCKET, Key=processed_key)
+                proc_verified = head["ContentLength"] > 0
+            except Exception:
+                proc_verified = False
+        processed_file_result = {
+            "target": "processed_file", "key": processed_key,
+            "items": len(all_tasks), "verified": proc_verified,
+        }
+        log.tasks_written += proc_count
+        if proc_verified:
+            log.write_verifications_pass += 1
+        else:
+            log.write_verifications_fail += 1
+
+        mtl_count = append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
+        # append_tasks_to_mtl uses s3_put_verified internally; a return of 0 means
+        # all tasks deduped (no-op write that succeeded). Treat both as verified.
+        mtl_result = {
+            "target": "mtl", "key": MTL_KEY,
+            "items": mtl_count, "verified": True,
+        }
+        if mtl_count > 0:
+            log.write_verifications_pass += 1
+
+    if all_articles:
+        articles_verified = True
+        try:
+            append_articles(s3, all_articles, today, dry_run)
+            log.articles_queued += len(all_articles)
+            log.write_verifications_pass += 1
+        except Exception as e:
+            articles_verified = False
+            log.write_verifications_fail += 1
+            logging.error(f"articles append failed: {e}")
+        articles_result = {
+            "target": "articles_queue", "key": ARTICLES_FILE,
+            "items": len(all_articles), "verified": articles_verified,
+        }
+
+    # Routed intent items — written inline; not part of receipt sections
+    # (they cross-cut the source sections). Tracked in log.items_routed.
+    if review_items and not dry_run:
+        append_to_review_queue(s3, review_items, today, name, dry_run)
+    if routed_questions and not dry_run:
+        append_to_daily_note(s3, today, "❓ Open Questions", routed_questions, dry_run)
+    if routed_events and not dry_run:
+        append_to_daily_note(s3, today, "📅 Events", routed_events, dry_run)
+    if routed_refs and not dry_run:
+        append_to_captured_references(s3, today, routed_refs, dry_run)
+
+    # Stage 6 — Populate section_outcomes.writes from aggregate results
+    for header, outcome in section_outcomes.items():
+        targets = outcome.get("_targets", set())
+        if "mtl" in targets and mtl_result:
+            outcome["writes"].append(mtl_result)
+        if "processed_file" in targets and processed_file_result:
+            outcome["writes"].append(processed_file_result)
+        if "articles_queue" in targets and articles_result:
+            outcome["writes"].append(articles_result)
+        # Compute verified from writes (or True if no items extracted to verify)
+        if outcome["writes"]:
+            outcome["verified"] = all(w["verified"] for w in outcome["writes"])
+        else:
+            outcome["verified"] = outcome["items_extracted"] == 0
+        outcome.pop("_targets", None)
+
+    # Stage 7 — Build receipt + write receipt (the gate)
+    started_iso = log.started_at or now_iso
+    receipt = bdi.build_receipt(
+        source={
+            "key": key,
+            "filename": name,
+            "content_hash": content_hash,
+            "size_bytes": len(content.encode("utf-8")),
+        },
+        run={
+            "workflow": "brain-dump-processor",
+            "run_id": f"{started_iso}-{name}",
+            "started_at": started_iso,
+            "finished_at": now_iso,
+            "executor": "python",
+            "no_reset": False,
+        },
+        archive=archive,
+        sections=list(section_outcomes.values()),
+    )
+    receipt_key = bdi.receipt_path(name, today_yyyymmdd, content_hash)
+    receipt_body = json.dumps(receipt, indent=2, ensure_ascii=False).encode("utf-8")
+    receipt_write = s3_put_receipt(s3, receipt_key, receipt_body, dry_run)
+    if receipt_write["verified"]:
+        log.receipts_written += 1
+    else:
+        # Receipt write failed → no clearing. status=error.
+        fm["status"] = "error"
+        if not dry_run:
+            new_content = bdi.serialize_frontmatter(fm, body if body else content)
+            s3_put_verified(s3, key, new_content, dry_run)
+        log.files_by_state["error"] += 1
+        log.files_error.append({"file": name, "error": "receipt_write_failed"})
+        log.errors.append(f"receipt_write_failed for {name}")
+        log.reset_summary["files_reset_skipped"] += 1
+        return True
+
+    # Stage 8 — Compute new frontmatter from receipt summary
+    final_status = receipt["summary"]["final_status"]
+    fm["status"] = final_status
+    fm["last_receipt"] = (
+        receipt_key[len("99_System/"):] if receipt_key.startswith("99_System/") else receipt_key
+    )
+    if final_status == "extracted":
+        fm["last_processed"] = now_iso
+        fm["last_processed_hash"] = content_hash
+        fm["last_partial_reasons"] = []
+    elif final_status == "partial":
+        fm["last_partial_reasons"] = [
+            {"section": s["section"], "reason": _section_reason(s), "dt": now_iso}
+            for s in section_outcomes.values() if not s.get("verified")
+        ]
+
+    # Stage 9 — Apply gated reset
+    new_source_content = bdi.apply_reset(
+        content=content,
+        receipt=receipt,
+        new_frontmatter=fm,
+        section_template_for=section_template_for,
+    )
+    if not dry_run:
+        s3_put_verified(s3, key, new_source_content, dry_run)
+    logging.info(f"  → Reset gated: status={final_status}")
+
+    # Stage 10 — Bookkeeping
+    log.items_extracted += len(all_tasks) + notes_written_total + len(all_articles)
+    log.files_by_state[final_status] += 1
+    if final_status == "extracted":
+        log.files_extracted.append(name)
+        log.reset_summary["files_reset_full"] += 1
+    elif final_status == "partial":
+        log.files_partial.append({
+            "file": name,
+            "reasons": fm.get("last_partial_reasons", []),
+        })
+        log.reset_summary["files_reset_partial"] += 1
+    log.files_processed.append(name)
+    logging.info(
+        f"  → Done: {len(all_tasks)} tasks, {notes_written_total} notes, "
+        f"{len(all_articles)} articles, status={final_status}"
+    )
+    return True
+
+
+def _section_reason(section: dict) -> str:
+    """Extract a human-readable failure reason for a partial-state section."""
+    failed = [w for w in section.get("writes", []) if not w.get("verified")]
+    if failed:
+        return failed[0].get("error") or f"{failed[0].get('target', '?')} write unverified"
+    return "unknown"
+
+
+def _extract_no_reset(s3, client, name, key, content, body, fm,
+                      real_sections, file_area, today, log, dry_run) -> bool:
+    """`--no-reset` extraction path: writes outputs, heartbeat-only frontmatter.
+
+    No archive write. No receipt. No section clearing. Frontmatter status
+    stays `has_content` (we found content but did not gate-process it).
+    Used during P0 backlog drain and any time we want value-extraction
+    without integrity gates.
+    """
+    src_link_token = build_source_link(name, today)
+    all_tasks: list[str] = []
+    all_articles: list[str] = []
+    notes_written_total = 0
+    routed_questions: list[str] = []
+    routed_events: list[str] = []
+    routed_refs: list[str] = []
+    review_items: list[dict] = []
+
+    for header, sec_body in real_sections.items():
+        stype = section_type(header)
+        if stype == "tasks":
+            tasks = regex_extract_tasks(sec_body, file_area)
+            if client and len(tasks) == 0:
+                ai_tasks = extract_tasks_with_ai_fallback(client, sec_body, file_area, today)
+                if ai_tasks:
+                    tasks = ai_tasks
+                    log.ai_calls += 1
+            tasks = [_ensure_explore_tag(t) for t in tasks]
+            tasks = [t if "[source::" in t else f"{t} {src_link_token}" for t in tasks]
+            for t in tasks:
+                base = re.sub(r"\s*\[(explore|source)::[^\]]+\]\s*$", "", t).strip()
+                base = re.sub(r"\s*\[(explore|source)::[^\]]+\]\s*$", "", base).strip()
+                if validate_task_line(base):
+                    all_tasks.append(t)
+                else:
+                    log.quality_rejections.append({"item": t[:80], "reason": "invalid canonical format"})
+            for raw_line in sec_body.splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith(("<!--", ">", "#", "*", "-", "|")):
+                    continue
+                if is_section_empty(line):
+                    continue
+                log.candidates_seen += 1
+                item = classify_intent(line, file_area_hint=file_area)
+                if item["intent"] == "action":
+                    continue
+                if confidence_gate(item) == "review_queue":
+                    log.low_confidence += 1
+                    item["task_line"] = (
+                        f"- [ ] {item['task']} [area:: {item['area']}] "
+                        f"[priority:: {item['priority']}] {src_link_token}"
+                    )
+                    review_items.append(item)
+                    continue
+                route = route_by_intent(item, source_file=name, today=today)
+                if route["destination"] == "daily_note":
+                    if route["section"] == "❓ Open Questions":
+                        routed_questions.append(route["task_line"])
+                    else:
+                        routed_events.append(route["task_line"])
+                    log.items_routed["daily_note"] += 1
+                elif route["destination"] == "captured_references":
+                    routed_refs.append(route["task_line"])
+                    log.items_routed["captured_references"] += 1
+        elif stype == "articles":
+            urls = re.findall(r'https?://[^\s\)\]]+', sec_body)
+            for url in urls:
+                if len(url) > 10:
+                    all_articles.append(f"- <{url}>")
+        elif stype == "notes":
+            if client:
+                notes = extract_notes_from_section(client, header, sec_body, file_area, today)
                 for note in notes:
                     ok = write_note_file(s3, note, name, today, dry_run)
                     if ok:
-                        notes_written += 1
+                        notes_written_total += 1
                         log.notes_written += 1
                         log.write_verifications_pass += 1
                     else:
                         log.write_verifications_fail += 1
 
-    # Stage 6: Verified writes
     tasks_written = write_task_file(s3, all_tasks, name, file_area, today, dry_run)
     log.tasks_written += tasks_written
-    log.items_extracted += tasks_written + notes_written + len(all_articles)
-    if tasks_written > 0:
-        log.write_verifications_pass += 1
-    elif all_tasks and tasks_written == 0:
-        log.write_verifications_fail += 1
-
-    # Stage 6b: Append to Master Task List (the canonical source of truth)
     if all_tasks:
-        mtl_appended = append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
-        if mtl_appended > 0:
-            log.write_verifications_pass += 1
-
+        append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
     if all_articles:
         append_articles(s3, all_articles, today, dry_run)
         log.articles_queued += len(all_articles)
-        log.write_verifications_pass += 1
+    if review_items and not dry_run:
+        append_to_review_queue(s3, review_items, today, name, dry_run)
+    if routed_questions and not dry_run:
+        append_to_daily_note(s3, today, "❓ Open Questions", routed_questions, dry_run)
+    if routed_events and not dry_run:
+        append_to_daily_note(s3, today, "📅 Events", routed_events, dry_run)
+    if routed_refs and not dry_run:
+        append_to_captured_references(s3, today, routed_refs, dry_run)
 
-    # Reset extracted sections to empty template (ready for user to fill again).
-    # `--no-reset` is the safety mode used during P0 backlog drain BEFORE the P1
-    # state-machine + receipts land. It writes captured tasks/articles/notes to
-    # the vault but leaves source brain-dump files untouched, eliminating the
-    # data-loss risk while still delivering value to the user today.
-    extracted_headers = list(real_sections.keys())
-    if no_reset:
-        logging.info(f"  → [no-reset] Source file untouched ({len(extracted_headers)} section(s) would have been cleared)")
-    else:
-        updated_content = reset_to_template(content, extracted_headers, today)
-        if not dry_run:
-            s3_put_verified(s3, key, updated_content, dry_run)
-            logging.info(f"  → Reset {len(extracted_headers)} section(s) to empty template")
-
+    log.items_extracted += tasks_written + notes_written_total + len(all_articles)
+    fm["status"] = "has_content"
+    if not dry_run:
+        new_content = bdi.serialize_frontmatter(fm, body if body else content)
+        s3_put_verified(s3, key, new_content, dry_run)
+    log.files_by_state["has_content"] += 1
     log.files_processed.append(name)
-    logging.info(f"  → Done: {tasks_written} tasks, {notes_written} notes, {len(all_articles)} articles")
+    logging.info(
+        f"  → [no-reset] heartbeat updated; source body untouched. "
+        f"{tasks_written} tasks, {notes_written_total} notes, {len(all_articles)} articles"
+    )
     return True
 
 

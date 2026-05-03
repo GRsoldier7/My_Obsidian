@@ -153,18 +153,30 @@ def serialize_frontmatter(fm: dict[str, Any], body: str) -> str:
 # ── Body emptiness detection ─────────────────────────────────────────────────
 
 def is_body_effectively_empty(body: str) -> bool:
-    """True if body has no real user content (only template + retention block)."""
+    """True if body has no real user content (only template scaffolding).
+
+    Mirrors `is_section_empty` from process_brain_dump.py exactly so the
+    migration script and the live processor agree on what's "empty."
+    Strips:
+      - retention blocks (added by partial-state runs)
+      - HTML comments
+      - blockquote lines (instruction callouts like "> How to use:")
+      - italic-only lines (template placeholders like `*Raw thoughts...*`)
+      - horizontal rules
+      - headings (H1-H6)
+      - Obsidian inline-field placeholders (`=this.field`)
+      - tag-reference lines (`*Tags: ...*`)
+      - format-example lines (anything containing `Format:`)
+    """
     stripped = strip_retention_block(body)
-    # Drop HTML comments
     stripped = re.sub(r"<!--.*?-->", "", stripped, flags=re.DOTALL)
-    # Drop blockquote lines
     stripped = re.sub(r"^>.*$", "", stripped, flags=re.MULTILINE)
-    # Drop italic-only lines (template placeholders like *Raw thoughts...*)
     stripped = re.sub(r"^\s*\*[^*\n]+\*\s*$", "", stripped, flags=re.MULTILINE)
-    # Drop horizontal rules
     stripped = re.sub(r"^[-*_]{3,}$", "", stripped, flags=re.MULTILINE)
-    # Drop headings (H1-H6)
     stripped = re.sub(r"^#+\s.*$", "", stripped, flags=re.MULTILINE)
+    stripped = re.sub(r"^\s*=this\.\w+\s*$", "", stripped, flags=re.MULTILINE)
+    stripped = re.sub(r"^\s*\*Tags:.*\*\s*$", "", stripped, flags=re.MULTILINE)
+    stripped = re.sub(r"^.*\bFormat:.*$", "", stripped, flags=re.MULTILINE)
     return not stripped.strip()
 
 
