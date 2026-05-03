@@ -1950,6 +1950,9 @@ def main():
 
     write_run_log(s3, log, args.dry_run)
 
+    # Summary shape designed for the n8n Execute Command consumer (step 6).
+    # Includes the P1 integrity-layer counters so the digest email can show
+    # per-state breakdown instead of just totals.
     result = {
         "status": log.status,
         "files_discovered": log.files_discovered,
@@ -1957,11 +1960,25 @@ def main():
         "tasks_written": log.tasks_written,
         "notes_written": log.notes_written,
         "articles_queued": log.articles_queued,
+        "receipts_written": log.receipts_written,
+        "archive_writes_pass": log.archive_writes_pass,
+        "archive_writes_fail": log.archive_writes_fail,
+        "files_by_state": log.files_by_state,
+        "files_extracted": log.files_extracted,
+        "files_partial": log.files_partial,
+        "files_error": log.files_error,
+        "reset_summary": log.reset_summary,
         "duration_ms": log.duration_ms,
         "errors": log.errors,
     }
     print(json.dumps(result, indent=2))
-    sys.exit(0 if log.status == "success" else 1)
+    # Exit 0 unless something prevented the run end-to-end.
+    # Per-file failures (partial, error) are reported in the JSON, not via
+    # the exit code — the n8n Execute Command treats non-zero as workflow
+    # failure, and we only want that on environment-level problems (MinIO
+    # unreachable, creds missing, etc.) which already exit 1 above before
+    # we get here.
+    sys.exit(0)
 
 
 if __name__ == "__main__":
