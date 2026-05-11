@@ -6,6 +6,32 @@ HTTP sidecar; the sidecar runs `/opt/oho/tools/process_brain_dump.py`.
 
 ---
 
+## Use the orchestrator
+
+The 9 manual steps below are automated end-to-end by
+[scripts/deploy_oho_runner.py](../scripts/deploy_oho_runner.py). The script
+is idempotent, dry-runs by default, and writes a JSON log to
+`99_System/logs/deploy-oho-runner-<timestamp>.json`.
+
+```bash
+# 1. Generate the bearer token (if you don't have one yet):
+echo "OHO_RUNNER_TOKEN=$(openssl rand -hex 32)" >> .env
+
+# 2. Preview every step without changing anything:
+make deploy-runner-dry
+
+# 3. Apply when the preview looks clean:
+make deploy-runner
+
+# Resume after a partial failure:
+python3 scripts/deploy_oho_runner.py --apply --from-step <step-name>
+```
+
+The manual procedure below is the fallback when SSH or docker is not
+available from the dev box, or when a step needs explicit human review.
+
+---
+
 ## TL;DR
 
 Do **not** use n8n `executeCommand` for the P1 brain-dump processor.

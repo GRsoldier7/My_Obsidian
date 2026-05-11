@@ -216,17 +216,25 @@ Push project session logs to the **active** notebook via `notebooklm source add 
 
 ### Operator actions remaining (P1+P1.5 deployment)
 
-The path changed when P1.5 landed — Python no longer installs onto the LXC host; it runs inside a sidecar container on the n8n Docker network:
+The 9-step runbook is automated by [scripts/deploy_oho_runner.py](scripts/deploy_oho_runner.py). Run it from a dev box that can reach both the LXC's SSH port and the n8n REST API:
 
-1. SSH to n8n LXC CT-202 (`192.168.1.121`). Run [scripts/lxc_inspect.sh](scripts/lxc_inspect.sh) for read-only readiness check.
-2. `cd /opt/oho && git pull` (or rsync the repo into `/opt/oho`).
-3. Add `OHO_RUNNER_TOKEN=<secret>` to `/opt/oho/.env`.
-4. `cd /opt/oho/services/oho_runner && docker compose up -d --build`.
-5. Smoke test from the n8n container: `curl -fsS http://oho-runner:8080/health`.
-6. In n8n UI: create credential `OHO Runner Auth` (Header Auth, `Authorization: Bearer <OHO_RUNNER_TOKEN>`), copy its ID into `.env` as `OHO_RUNNER_CRED_ID`.
-7. Re-deploy workflows: `python3 scripts/deploy_n8n_workflow.py` (hydrates `__OHO_RUNNER_CRED_ID__` + the rest).
-8. Reactivate `brain-dump-processor-v2`; manual run; verify receipt + archive + digest email.
-9. `make build-home` once to seed the command center; subsequent rebuilds run hourly via `live-dashboard-updater`.
+```bash
+# 1. Generate the bearer token, add it to .env:
+echo "OHO_RUNNER_TOKEN=$(openssl rand -hex 32)" >> .env
+
+# 2. Preview the deploy plan (dry-run by default — no changes):
+make deploy-runner-dry
+
+# 3. When the dry-run looks clean, apply it:
+make deploy-runner
+
+# 4. One-time: seed the command center
+set -a && source .env && set +a && make build-home
+```
+
+The orchestrator handles all 10 steps (preflight → inspect → sync → runner-env → compose → smoke-runner → n8n-cred → hydrate-deploy → activate → smoke-pipeline → report), is idempotent, and writes a JSON log to `99_System/logs/deploy-oho-runner-<timestamp>.json`. Resume after a partial failure with `python3 scripts/deploy_oho_runner.py --apply --from-step <name>`.
+
+If you prefer to do it by hand: see [docs/runbook-deploy-python-to-lxc.md](docs/runbook-deploy-python-to-lxc.md) for the manual procedure.
 
 ## Life Orchestrator v1.0 Roadmap
 

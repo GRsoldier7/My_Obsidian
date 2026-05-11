@@ -13,7 +13,7 @@
 #   make deploy         — full deploy: validate + setup + health check
 #   make audit-ai-tooling — validate AI tooling docs and MCP examples
 
-.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme
+.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry
 
 PYTHON := python3
 PYTEST := pytest
@@ -119,6 +119,14 @@ build-home:
 processed-readme:
 	$(ENV_PREFIX) $(PYTHON) tools/write_processed_readme.py
 
+## End-to-end LXC sidecar deploy (DRY-RUN — no changes; preview the plan).
+deploy-runner-dry:
+	$(ENV_PREFIX) $(PYTHON) scripts/deploy_oho_runner.py
+
+## End-to-end LXC sidecar deploy (APPLY — performs SSH + docker compose + n8n API calls).
+deploy-runner:
+	$(ENV_PREFIX) $(PYTHON) scripts/deploy_oho_runner.py --apply
+
 # ── Help ──────────────────────────────────────────────────────────────────────
 
 help:
@@ -140,6 +148,8 @@ help:
 	@echo "  make run            Run processor manually (verbose)"
 	@echo "  make dry-run        Processor dry-run (no S3 writes)"
 	@echo "  make build-home     Rebuild !!! DAILY COMMAND CENTER.md (ADR-0006)"
+	@echo "  make deploy-runner-dry   Preview LXC sidecar deploy plan (no changes)"
+	@echo "  make deploy-runner       Run the LXC sidecar deploy end-to-end"
 	@echo "  make processed-readme  Drop audit-only README in 00_Inbox/processed/"
 	@echo ""
 	@echo "  Tip: prefix with ENV=1 to auto-source .env:"
