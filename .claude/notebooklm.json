@@ -1,5 +1,16 @@
 {
-  "account": "personal",
-  "notebook_id": "a428969b-c3f1-480b-b54c-876974650674",
-  "title": "ObsidianHomeOrchestrator — Life OS Project Memory"
+  "account": "personal (authuser=1)",
+  "notebook_id": "d056e9d5-64d9-4f64-aa94-faff603de835",
+  "title": "ObsidianHomeOrchestrator — Life OS Project Memory",
+  "url": "https://notebooklm.google.com/notebook/d056e9d5-64d9-4f64-aa94-faff603de835?authuser=1",
+  "cli_reachable_fallback": {
+    "notebook_id": "fee28c3f-9fba-4567-9457-88dea5cec838",
+    "account": "authuser=0",
+    "reason": "Created 2026-05-11 during wrapup when the notebooklm CLI was auth'd to authuser=0 and could not reach the canonical authuser=1 notebook. Use as fallback until CLI is re-authenticated to authuser=1 via `notebooklm login`."
+  },
+  "stale_do_not_use": [
+    "a428969b-c3f1-480b-b54c-876974650674",
+    "844aa6a1-e3fc-4d75-af9e-d4653a755ae3"
+  ],
+  "updated": "2026-05-11"
 }

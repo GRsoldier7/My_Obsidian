@@ -186,13 +186,30 @@ Enforced by [scripts/audit_workflow_credentials.py](scripts/audit_workflow_crede
 
 ## NotebookLM (project memory)
 
-| Notebook | ID | Status |
-|----------|-----|--------|
-| ObsidianHomeOrchestrator — Life OS Project Memory | `a428969b-c3f1-480b-b54c-876974650674` | ACTIVE (authoritative, 2026-05-03 reconciled — 9 historical sources from 2026-04-11→04-19) |
-| ObsidianHomeOrchestrator — Working Memory | `844aa6a1-e3fc-4d75-af9e-d4653a755ae3` | SIDECAR (auto-created 2026-05-03; reserved for in-flight session memory pushes) |
-| (phantom) `d056e9d5-64d9-4f64-aa94-faff603de835` | — | DOES NOT EXIST in the user's NotebookLM account. Old docs reference it; treat as a typo. |
+| Notebook | ID | Account | Status |
+|----------|-----|---------|--------|
+| ObsidianHomeOrchestrator — Life OS Project Memory (canonical) | `d056e9d5-64d9-4f64-aa94-faff603de835` | `authuser=1` | ACTIVE — Aaron's canonical target. CLI must be auth'd to authuser=1 to reach it. |
+| ObsidianHomeOrchestrator — Life OS Project Memory (fallback) | `fee28c3f-9fba-4567-9457-88dea5cec838` | `authuser=0` | Created 2026-05-11 as CLI-reachable fallback when the canonical was unreachable. |
+| (stale) `a428969b-c3f1-480b-b54c-876974650674` | — | — | RETURNS RPC NULL as of 2026-05-11. Do not use. |
+| (stale) `844aa6a1-e3fc-4d75-af9e-d4653a755ae3` | — | — | RETURNS RPC NULL as of 2026-05-11. Do not use. |
 
-Push project session logs to the **active** notebook via `notebooklm source add <path>` after `notebooklm use a428969b-c3f1-480b-b54c-876974650674`. Both IDs are mirrored in [.claude/nlm-notebook-ids.env](.claude/nlm-notebook-ids.env) (`NLM_PROJECT_NOTEBOOK_ID`, `NLM_WORKING_MEMORY_NOTEBOOK_ID`) and [.claude/notebooklm.json](.claude/notebooklm.json).
+**Two-account caveat (load-bearing — confirmed 2026-05-11):** Aaron's canonical NotebookLM workspace lives on his `authuser=1` Google account; the `notebooklm` CLI on pve is currently auth'd to `authuser=0`. The CLI has no `--authuser` flag — to push to the canonical notebook, run `notebooklm login` from pve and pick the second account during the browser flow. Until that's done, push to the fallback ID instead.
+
+**Push workflow (after re-auth to authuser=1):**
+
+```bash
+notebooklm use d056e9d5-64d9-4f64-aa94-faff603de835
+notebooklm source add <path>
+```
+
+**Push workflow (current authuser=0):**
+
+```bash
+notebooklm use fee28c3f-9fba-4567-9457-88dea5cec838
+notebooklm source add <path>
+```
+
+Both IDs are mirrored in [.claude/nlm-notebook-ids.env](.claude/nlm-notebook-ids.env) (`NLM_PROJECT_NOTEBOOK_ID`, `NLM_PROJECT_NOTEBOOK_ID_FALLBACK`) and [.claude/notebooklm.json](.claude/notebooklm.json).
 
 ## Current Status
 
