@@ -23,9 +23,9 @@
     },
     {
       "parameters": {
-        "content": "## 🧠 Brain Dump Processor — P1 Architecture (ADR-0005)\n\n**Thin scheduler:** n8n triggers Python; Python is the single logic kernel.\n\n**Why:** the JS-in-n8n duplicate of Python's regex extraction caused the 2026-05-03 hardcoded `reset_applied: true` bug. A single source of truth (Python with tests) eliminates the divergence class entirely.\n\n**LXC requirements (CT-202):**\n- Python 3.12+, packages: `boto3`, `openai`, `python-dotenv`\n- Repo at `${OHO_REPO_PATH}` (default `/opt/oho`)\n- `.env` with `MINIO_*`, `OPENROUTER_API_KEY`, `MINIO_BUCKET`\n- See `docs/runbook-deploy-python-to-lxc.md`\n\n**Run output contract:**\n- stdout: single JSON object with `status`, `files_*`, `reset_summary`, etc.\n- stderr: human-readable log lines (discarded for parsing, captured by n8n)\n- exit 0: ran end-to-end (per-file failures reported in JSON)\n- exit 1: environment failure (MinIO unreachable, etc.) — triggers errorWorkflow",
-        "height": 460,
-        "width": 460,
+        "content": "## 🧠 Brain Dump Processor — P1 Architecture (ADR-0005, revised 2026-05-04)\n\n**Thin scheduler:** n8n calls a dedicated HTTP runner; the runner is the single shell-out point to `tools/process_brain_dump.py`.\n\n**Why the runner (not executeCommand):** n8n is now on `2.x`, which dropped `n8n-nodes-base.executeCommand` from the active-workflow registry. The runner sidecar gives us the same effect (Python is the single logic kernel) without depending on n8n's restricted node surface.\n\n**Runner contract:**\n- URL: `http://oho-runner:8080/process-brain-dump` (Docker-compose DNS on `n8n_default`)\n- Auth: `Authorization: Bearer <OHO_RUNNER_TOKEN>` via the `OHO Runner Auth` credential\n- Method: `POST` (no body)\n- Response JSON: `exit_code`, `duration_ms`, `timed_out`, `stdout_json`, `stdout_raw`, `stderr_tail`\n\n**Email branch policy (revised 2026-05-04):**\n- `top_status == 'success'`  → Email: Digest\n- `top_status == 'no_work'`  → SILENT (Is Error? false branch is intentionally unwired)\n- `top_status == 'parse_error'` or `'partial_or_error'` → Email: Error Notice\n\nEmpty-day heartbeat is suppressed by design — the audit + run log already record the no-op. If a clean run yields no work, no email fires.\n\n**Concurrency / timeout:** runner asyncio lock → 409 on collision; 180s timeout (n8n requests 200s for headroom).\n\n**LXC requirements (CT-202):**\n- Repo at `${OHO_REPO_PATH}` (default `/opt/oho`), bind-mounted into the runner container as `/opt/oho:ro`\n- `.env` with `MINIO_*`, `OPENROUTER_API_KEY`, `MINIO_BUCKET`, etc.\n- Sidecar: `/opt/oho/services/oho_runner/` (compose file, image `oho-runner:local`)",
+        "height": 540,
+        "width": 540,
         "color": 4
       },
       "id": "sticky-overview",
@@ -34,28 +34,47 @@
       "typeVersion": 1,
       "position": [
         220,
-        -160
+        -240
       ]
     },
     {
       "parameters": {
-        "command": "cd ${OHO_REPO_PATH:-/opt/oho} && set -a && [ -f .env ] && source .env; set +a && python3 -u tools/process_brain_dump.py"
+        "method": "POST",
+        "url": "http://oho-runner:8080/process-brain-dump",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": false,
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": false
+            }
+          },
+          "timeout": 200000
+        }
       },
       "id": "run-python",
-      "name": "Run: process_brain_dump.py",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
+      "name": "Run: process_brain_dump.py (via OHO runner)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         440,
         300
       ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__OHO_RUNNER_CRED_ID__",
+          "name": "OHO Runner Auth"
+        }
+      },
       "retryOnFail": true,
       "maxTries": 3,
       "waitBetweenTries": 5000
     },
     {
       "parameters": {
-        "jsCode": "// Parse the Python script's stdout (single JSON object) into structured\n// summary fields the digest email + branching can consume. Everything\n// stderr-side is preserved on item.json.raw_stderr for diagnostics.\nconst item = $input.first();\nconst stdout = (item.json.stdout || '').trim();\nconst stderr = (item.json.stderr || '').toString();\nconst exitCode = item.json.exitCode != null ? item.json.exitCode : -1;\n\nlet summary = null;\nlet parseError = null;\ntry {\n  // The script may emit verbose stderr; stdout is the JSON payload.\n  summary = JSON.parse(stdout);\n} catch (e) {\n  parseError = String(e).slice(0, 240);\n}\n\nif (!summary) {\n  // Could not parse — treat as fatal. Email no-work / error notice.\n  // We deliberately do NOT use the run-log `skip_reason` enum here — this\n  // is n8n-internal state for the email branch, not a persisted run log.\n  return [{ json: {\n    top_status: 'parse_error',\n    parse_failure: 'python_stdout_unparseable',\n    parse_error: parseError,\n    exitCode,\n    raw_stderr: stderr.slice(0, 1000),\n    raw_stdout: stdout.slice(0, 500),\n    files_discovered: 0, files_with_content: 0,\n    tasks_written: 0, notes_written: 0, articles_queued: 0,\n    files_extracted: [], files_partial: [], files_error: [],\n    files_by_state: { empty: 0, has_content: 0, scanning: 0, extracted: 0, partial: 0, error: 0 },\n    reset_summary: { files_reset_full: 0, files_reset_partial: 0, files_reset_skipped: 0 },\n  }}];\n}\n\n// Compute a coarse top-level status for the email branch.\nconst byState = summary.files_by_state || {};\nconst hasError = (byState.error || 0) > 0 || (summary.errors || []).length > 0;\nconst hasWork = (summary.files_with_content || 0) > 0;\nlet topStatus;\nif (hasError) {\n  topStatus = 'partial_or_error';\n} else if (!hasWork) {\n  topStatus = 'no_work';\n} else {\n  topStatus = 'success';\n}\n\nreturn [{ json: {\n  ...summary,\n  exitCode,\n  raw_stderr_tail: stderr.split('\\n').slice(-20).join('\\n'),\n  top_status: topStatus,\n}}];"
+        "jsCode": "// Parse the runner's response (already-parsed JSON) into the structured\n// summary fields the digest email + branching can consume. The runner shape:\n//   { exit_code, duration_ms, timed_out, stdout_json, stdout_raw, stderr_tail }\n// On a clean run, stdout_json IS the Python summary. On a parse / timeout /\n// runner error, stdout_json is null and we fall into a parse-error branch.\nconst item = $input.first();\nconst r = item.json || {};\nconst exitCode = r.exit_code != null ? r.exit_code : -1;\nconst stderrTail = (r.stderr_tail || '').toString();\nconst summary = r.stdout_json;\n\nif (!summary) {\n  let parseError;\n  if (r.timed_out) {\n    parseError = `runner_timeout_after_${r.duration_ms || 0}ms`;\n  } else if (exitCode !== 0) {\n    parseError = `runner_exit_code_${exitCode}_with_no_parsed_stdout`;\n  } else {\n    parseError = 'runner_returned_null_stdout_json';\n  }\n  return [{ json: {\n    top_status: 'parse_error',\n    parse_failure: 'python_stdout_unparseable',\n    parse_error: parseError,\n    exitCode,\n    raw_stderr: stderrTail.slice(0, 1000),\n    raw_stdout: ((r.stdout_raw || '').toString()).slice(0, 500),\n    files_discovered: 0, files_with_content: 0,\n    tasks_written: 0, notes_written: 0, articles_queued: 0,\n    files_extracted: [], files_partial: [], files_error: [],\n    files_by_state: { empty: 0, has_content: 0, scanning: 0, extracted: 0, partial: 0, error: 0 },\n    reset_summary: { files_reset_full: 0, files_reset_partial: 0, files_reset_skipped: 0 },\n  }}];\n}\n\n// Compute a coarse top-level status for the email branch.\nconst byState = summary.files_by_state || {};\nconst hasError = (byState.error || 0) > 0 || (summary.errors || []).length > 0;\nconst hasWork = (summary.files_with_content || 0) > 0;\nlet topStatus;\nif (hasError) {\n  topStatus = 'partial_or_error';\n} else if (!hasWork) {\n  topStatus = 'no_work';\n} else {\n  topStatus = 'success';\n}\n\nreturn [{ json: {\n  ...summary,\n  exitCode,\n  raw_stderr_tail: stderrTail.split('\\n').slice(-20).join('\\n'),\n  top_status: topStatus,\n}}];"
       },
       "id": "parse-output",
       "name": "Parse Python Output",
@@ -121,19 +140,48 @@
     },
     {
       "parameters": {
-        "fromEmail": "__NOTIFICATION_EMAIL__",
-        "toEmail": "__NOTIFICATION_EMAIL__",
-        "subject": "=🧠 Brain Dump — {{ $json.top_status === 'no_work' ? 'no work today' : 'attention needed' }}",
-        "html": "=<h2>🧠 Brain Dump Processor — {{ $now.toFormat('LLL d, yyyy') }}</h2><p><b>Status:</b> <code>{{ $json.top_status }}</code></p><p><b>Files discovered:</b> {{ $json.files_discovered }} · <b>Files with content:</b> {{ $json.files_with_content }}</p>{{ $json.parse_error ? '<h3>Parse error</h3><pre>' + $json.parse_error + '</pre><h3>Last stderr lines</h3><pre>' + $json.raw_stderr_tail + '</pre>' : '' }}{{ ($json.errors || []).length ? '<h3>Errors</h3><pre>' + JSON.stringify($json.errors, null, 2) + '</pre>' : '' }}{{ ($json.files_error || []).length ? '<h3>Files in error state</h3><pre>' + JSON.stringify($json.files_error, null, 2) + '</pre>' : '' }}<p style='color:#888;font-size:0.85em'>If <code>top_status</code> is <code>no_work</code>, this is normal: the inbox was empty (or all files have <code>status: empty</code>). Drop a file in <code>00_Inbox/brain-dumps/</code> to add work.</p>",
-        "options": {},
-        "emailFormat": "html"
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.top_status }}",
+              "rightValue": "no_work",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        }
       },
-      "id": "email-no-work",
-      "name": "Email: No-Work / Error Notice",
-      "type": "n8n-nodes-base.emailSend",
+      "id": "branch-error",
+      "name": "Is Error?",
+      "type": "n8n-nodes-base.if",
       "typeVersion": 2,
       "position": [
         1100,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
+        "subject": "=🧠 Brain Dump — attention needed ({{ $json.top_status }})",
+        "html": "=<h2>🧠 Brain Dump Processor — {{ $now.toFormat('LLL d, yyyy') }}</h2><p><b>Status:</b> <code>{{ $json.top_status }}</code></p><p><b>Files discovered:</b> {{ $json.files_discovered }} · <b>Files with content:</b> {{ $json.files_with_content }}</p>{{ $json.parse_error ? '<h3>Parse error</h3><pre>' + $json.parse_error + '</pre><h3>Last stderr lines</h3><pre>' + $json.raw_stderr_tail + '</pre>' : '' }}{{ ($json.errors || []).length ? '<h3>Errors</h3><pre>' + JSON.stringify($json.errors, null, 2) + '</pre>' : '' }}{{ ($json.files_error || []).length ? '<h3>Files in error state</h3><pre>' + JSON.stringify($json.files_error, null, 2) + '</pre>' : '' }}<p style='color:#888;font-size:0.85em'>This email only fires for <code>parse_error</code> or <code>partial_or_error</code>. <code>no_work</code> days are silent — see workflow comment for the rationale.</p>",
+        "options": {},
+        "emailFormat": "html"
+      },
+      "id": "email-error",
+      "name": "Email: Error Notice",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1320,
         420
       ],
       "credentials": {
@@ -149,14 +197,14 @@
       "main": [
         [
           {
-            "node": "Run: process_brain_dump.py",
+            "node": "Run: process_brain_dump.py (via OHO runner)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Run: process_brain_dump.py": {
+    "Run: process_brain_dump.py (via OHO runner)": {
       "main": [
         [
           {
@@ -189,11 +237,23 @@
         ],
         [
           {
-            "node": "Email: No-Work / Error Notice",
+            "node": "Is Error?",
             "type": "main",
             "index": 0
           }
         ]
+      ]
+    },
+    "Is Error?": {
+      "main": [
+        [
+          {
+            "node": "Email: Error Notice",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
       ]
     }
   },

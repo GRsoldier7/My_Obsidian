@@ -1,7 +1,8 @@
 # ADR-0005: Brain-Dump Pipeline Integrity Layer — State Machine, Receipts, Gated Reset
 
 **Date:** 2026-05-03
-**Status:** Proposed
+**Status:** Accepted — live cutover completed 2026-05-04; 7-day stability
+window open before marking Implemented
 **Deciders:** Aaron DeYoung
 **Supersedes:** the implicit "always-reset" behavior of [tools/process_brain_dump.py](../../tools/process_brain_dump.py) and [workflows/n8n/brain-dump-processor-v2.json](../../workflows/n8n/brain-dump-processor-v2.json) (both pre-2026-05-03)
 
@@ -34,7 +35,12 @@ Introduce four coordinated mechanisms, all centred on a single principle: **the 
 3. **Extraction receipt** — a per-file-per-run JSON in `99_System/extraction-receipts/`, content-addressed by sha256. Records the archive write, every per-section write target, and a verified bool on each. The receipt is written *before* any source clearing and read back from MinIO to drive the gate.
 4. **Per-section gated reset** — a section clears only if its receipt entry is `verified: true`. Failed sections stay; a retention block at the top of the file documents what was held back and why.
 
-The Python processor (`tools/process_brain_dump.py`) and the n8n workflow share one logic kernel: a new module `tools/bd_integrity.py`. The n8n workflow shells out to Python for the integrity-critical work (state transition, receipt build, frontmatter update, gate decision) instead of re-implementing it in JavaScript. This eliminates the JS/Python divergence that caused the P0 hardcoded `reset_applied: true` bug.
+The Python processor (`tools/process_brain_dump.py`) and the n8n workflow share
+one logic kernel: `tools/bd_integrity.py`. n8n calls a dedicated OHO HTTP runner
+sidecar, and that runner shells out to Python for the integrity-critical work
+(state transition, receipt build, frontmatter update, gate decision) instead of
+re-implementing it in JavaScript. This eliminates the JS/Python divergence that
+caused the P0 hardcoded `reset_applied: true` bug.
 
 ---
 
@@ -126,6 +132,13 @@ last_partial_reasons: []          # array of {section, reason, dt}; populated on
 One JSON per run-per-source, at `99_System/extraction-receipts/<source-stem>-<YYYYMMDD>-<sha8>.json`.
 
 `<sha8>` is the first 8 hex of `content_hash`. This makes the receipt path content-addressed: same content → same receipt path; idempotent re-runs overwrite in place; orphans don't accumulate.
+
+The filename stem is normalized only through
+`tools.bd_integrity.slug_for_filename()`. Audits and future receipt-aware tools
+must use that same helper rather than carrying their own slug logic. The
+2026-05-04 audit false positive on `BrainDump — Home.md` came from a duplicate
+normalizer that produced `BrainDump--Home` while the writer produced
+`BrainDump-Home`.
 
 ```json
 {
@@ -318,7 +331,7 @@ All tests added to `tests/test_brain_dump_integrity.py` (new file). Each MUST be
 | 4 | `test_receipt_write_failure_refuses_all_clears` | Receipt PUT or head_object fails ⇒ no section clears. status=error. |
 | 5 | `test_archive_write_failure_aborts_run_before_extraction` | Archive head_object fails ⇒ run aborts. No downstream writes attempted. |
 | 6 | `test_canary_full_roundtrip_python` | Synthetic dump with known content → all writes verify → reset full → frontmatter shows status=empty, last_processed set, last_processed_hash matches. |
-| 7 | `test_n8n_python_parity_via_jsonfixture` | Same canary fixture through both Python and n8n's shell-out path produces the same receipt JSON shape. |
+| 7 | `test_n8n_python_parity_via_jsonfixture` | Same canary fixture through Python and the n8n runner boundary produces the same receipt JSON shape. |
 | 8 | `test_reset_applied_literal_absent_from_jscode` | Static-analysis: greps every n8n Code node for `reset_applied: true` and `reset_applied: false` literals. Both must be absent. |
 | 9 | `test_skip_reason_enum_in_sync` | Existing pattern + 4 new skip_reasons present in both audit script and test enum. |
 | 10 | `test_stale_scanning_lock_recovers` | File with status=scanning and last_checked > 1h: audit reverts to prior status from last receipt. |
@@ -346,25 +359,45 @@ The n8n workflow does NOT re-implement the gate in JavaScript.
 
 `tools/process_brain_dump.py` imports from `bd_integrity.py`.
 
-**n8n call site:** the existing big "Build Output Files" Code node thins to a payload-assembler. After the regex+AI extraction stage, n8n writes a staging payload to `/tmp/n8n-bd-stage-<run_id>.json` and invokes:
+**n8n call site:** the workflow uses an HTTP Request node:
 
-```bash
-python3 /opt/oho/tools/bd_integrity.py step \
-  --input  /tmp/n8n-bd-stage-<run_id>.json \
-  --output /tmp/n8n-bd-stage-<run_id>-out.json
+```text
+POST http://oho-runner:8080/process-brain-dump
+Authorization: Bearer <OHO_RUNNER_TOKEN>
 ```
 
-via an `Execute Command` node. The output JSON contains: receipt body, frontmatter delta, retention block, run-log fragment. n8n reads this and drives the S3 writes (archive, receipt, source reset, run log).
+The runner is a FastAPI sidecar on the same Docker network as n8n. It exposes
+only `/health` and `/process-brain-dump`; it accepts no arbitrary command
+parameter. The fixed subprocess is:
 
-**Why shell-out instead of pure-JS reimplementation:**
+```bash
+python3 -u tools/process_brain_dump.py
+```
+
+with `cwd=/opt/oho`, environment loaded from `/opt/oho/.env`, a 180-second
+timeout, a single-run lock, and bearer-token auth. n8n parses the runner's
+`stdout_json` field and branches to success / no-work / error email paths.
+
+Email policy after the 2026-05-04 cutover:
+
+- `top_status == "success"` sends the digest email.
+- `top_status == "no_work"` ends silently. The MinIO run log and receipt audit
+  are the heartbeat; empty-day email is noise.
+- `top_status in {"parse_error", "partial_or_error"}` sends the error notice.
+
+**Why HTTP runner instead of pure-JS reimplementation:**
 1. The integrity layer's correctness is load-bearing. Two implementations means two places to fix bugs and two places to drift. The 2026-05-03 hardcoded `reset_applied: true` bug came from exactly this pattern.
-2. Python is already on the n8n LXC (CT-202). Adding a single subprocess call is a smaller surface than re-encoding sha256, JSON canonicalization, and frontmatter parsing in JS.
-3. The `Execute Command` node inherits `retryOnFail: true, maxTries: 3, waitBetweenTries: 5000` exactly like other Code nodes. Failure modes are well-understood.
-4. Per-call payload is small (single source file), so process startup overhead is bounded and acceptable.
+2. n8n 2.x does not activate workflows containing `n8n-nodes-base.executeCommand`, and n8n runs in Docker, isolated from the LXC host filesystem.
+3. A sidecar preserves the single Python logic kernel without putting Python or `/opt/oho` inside the n8n container.
+4. The runner contract is narrow: one endpoint, one fixed command, bearer auth, timeout, and a concurrency lock.
+5. The HTTP boundary composes with future P2/P3 runner endpoints without depending on n8n's restricted node surface.
 
-**Fallback if shell-out is blocked by environment:** strict JSON-fixture parity tests (Test 7 above) over the receipt + frontmatter delta. Less elegant; same correctness guarantee. Re-evaluate if `Execute Command` is operationally inconvenient.
+**Rejected 2026-05-04:** direct `executeCommand`. It failed activation on n8n
+2.18.5 with `Unrecognized node type: n8n-nodes-base.executeCommand`, and the
+n8n container also could not see `/opt/oho`.
 
-**Recommendation:** ship shell-out. The decision to keep TWO implementations is what got us into this mess.
+**Recommendation:** ship the HTTP runner. The decision to keep TWO
+implementations is what got us into this mess.
 
 ---
 
@@ -401,7 +434,10 @@ Strictly ordered. Each step is a separate commit; each is independently revertib
 3. **`scripts/migrate_brain_dump_frontmatter.py` lands** — dry-run only by default. Tested via fixtures.
 4. **Wire `process_brain_dump.py` to use `bd_integrity.py`.** The Python path goes live with gates. Tests 1–5, 6, 12 cover the live behavior. The `--no-reset` flag is preserved as the safety net.
 5. **Run the migration on the 11 stranded files** during a manual window with cron paused.
-6. **Wire n8n to shell out to Python** via `Execute Command`. Test 7 (parity) and Test 8 (no `reset_applied` literal) cover this. Re-deploy via `bash scripts/setup-n8n.sh`.
+6. **Wire n8n to the OHO runner** via HTTP Request. Test 7 (parity) and Test 8
+   (no `reset_applied` literal) cover this. Re-deploy only this workflow via
+   `scripts/deploy_n8n_workflow.py`; `scripts/setup-n8n.sh` is broader than this
+   cutover.
 7. **`scripts/audit_extraction_receipts.py` lands** + integrates into `vault-health-report`. Tests 9, 10, 14 cover audit logic.
 8. **Deprecate the `--no-reset` safety net.** Once gates are proven (≥ 7 days of clean runs, no audit findings), remove the flag — or keep it as a documented escape hatch. Decide at that checkpoint, not now.
 
@@ -444,12 +480,12 @@ P1 should not paint us into a corner with task identity. It does not.
 
 | Risk                                                                  | Mitigation                                                                                                            |
 | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Shell-out from n8n adds latency / failure surface.                    | `Execute Command` with retry rule. Per-call payload is small. Test 7 fixture-asserts shapes; Test 5 covers crash mid. |
+| Runner call from n8n adds latency / failure surface.                  | Dedicated sidecar with fixed command, auth, timeout, concurrency lock, and n8n retry rule. Test 7 fixture-asserts shapes; Test 5 covers crash mid. |
 | Migration corrupts existing source frontmatter.                       | `--dry-run` default; per-file before/after report; MinIO versioning is on; idempotent re-run.                         |
 | Receipt accumulates over time (one per file per processed-day).       | At v2.0, add a compaction step: zip receipts older than 90 days under `_archive/`. Out of scope for P1.               |
 | Hash normalization edge case (frontmatter quote styles, line endings) | `bd_integrity.py` enforces canonical normalization (UTF-8 NFC, LF endings, frontmatter stripped, retention stripped). Tested.  |
 | Stale `scanning` lock blocks a file indefinitely.                     | Audit rule 3 (1-hour staleness) recovers automatically. Tested by Test 10.                                            |
-| n8n re-implements the gate in JS again "to avoid the shell-out."      | Test 8 (static-analysis) makes that physically impossible to ship — `reset_applied: true|false` literals fail CI.     |
+| n8n re-implements the gate in JS again "to avoid the runner."         | Test 8 (static-analysis) makes that physically impossible to ship — `reset_applied: true|false` literals fail CI.     |
 
 ---
 
@@ -464,19 +500,25 @@ Per `feedback_cadence.md`: routine decisions inside an approved plan are mine to
 - Retention block is an Obsidian callout, not a comment block.
 - `--no-reset` flag stays in P1 as safety net; deprecation decision happens at step 8 of rollout, not now.
 
-## Decisions That Need Aaron's Sign-off Before Step 6 (n8n wiring)
+## Step 6 Deployment Decision
 
-These change deployment surface area:
+The original Step 6 deployment-surface decision was direct n8n
+`Execute Command` versus keeping a JS-only reimplementation. The accepted
+2026-05-04 decision is now:
 
-- **n8n shells out to Python via `Execute Command`** vs. **strict JSON-fixture parity tests with a JS-only reimplementation.** I recommend shell-out and the rollout assumes it. If you reject, we keep the JS path and lean entirely on Test 7 + Test 8 to enforce parity. Latency/failure surface tradeoff.
+- **n8n calls the dedicated OHO runner over HTTP.**
+- The runner shells out to Python as the single logic kernel.
+- n8n never re-implements the integrity gate in JavaScript.
+- Direct `Execute Command` is rejected for brain-dump processing on n8n 2.x.
 
-That is the only architectural decision I'm flagging up. Everything else is mechanical.
+That preserves the core ADR decision — one Python implementation — while
+matching the live n8n 2.x Docker runtime.
 
 ---
 
 ## Status Transitions for This ADR
 
-- **Proposed** — current. Aaron reviews this document. No code lands until status is `Accepted`.
-- **Accepted** — Aaron approves. Implementation begins at step 2 of the rollout sequence.
+- **Proposed** — Aaron reviews this document. No code lands until status is `Accepted`.
+- **Accepted** — current. P1 code and live cutover are complete; the 7-day stability window is open.
 - **Implemented** — when steps 2–7 of the rollout have landed and CI is green for ≥ 7 days. ADR status updated to reflect.
 - **Superseded** — if a future ADR changes the integrity model. Receipts migrate via a `schema_version` bump.

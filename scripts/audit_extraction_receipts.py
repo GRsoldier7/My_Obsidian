@@ -104,6 +104,19 @@ def get_text(s3, key: str) -> str | None:
         return None
 
 
+def _stem_for_runlog_entry(entry: str) -> str:
+    """Return the receipt-stem the audit will substring-match against MinIO keys.
+
+    Delegates to ``bd_integrity.slug_for_filename`` — the single source of
+    truth used by ``bd_integrity.receipt_path()`` when writing receipts. The
+    audit MUST share that derivation, otherwise R1's substring search misses
+    live receipts (regression: 2026-05-04, em-dash filenames produced
+    ``BrainDump--Home`` here vs ``BrainDump-Home`` in the canonical key).
+    See ``tests/test_audit_extraction_receipts.py``.
+    """
+    return bdi.slug_for_filename(entry)
+
+
 def head_exists(s3, key: str) -> bool:
     try:
         s3.head_object(Bucket=MINIO_BUCKET, Key=key)
@@ -223,8 +236,7 @@ def audit_run_logs(s3, window_days: int, verbose: bool) -> list[Finding]:
                 continue
             # Best-effort: we don't know the exact receipt key without the hash,
             # but we can confirm at least one matching receipt exists for that source.
-            stem = entry.replace(".md", "").replace(" ", "-").replace("—", "")
-            stem = "".join(c for c in stem if c.isalnum() or c in "-_")
+            stem = _stem_for_runlog_entry(entry)
             # Look under receipts prefix for any file matching the stem
             matching = list_keys(s3, RECEIPTS_PREFIX)
             hits = [m for m in matching if stem in m["key"]]
@@ -238,8 +250,7 @@ def audit_run_logs(s3, window_days: int, verbose: bool) -> list[Finding]:
             entry = partial.get("file") if isinstance(partial, dict) else partial
             if not isinstance(entry, str):
                 continue
-            stem = entry.replace(".md", "").replace(" ", "-").replace("—", "")
-            stem = "".join(c for c in stem if c.isalnum() or c in "-_")
+            stem = _stem_for_runlog_entry(entry)
             matching = list_keys(s3, RECEIPTS_PREFIX)
             hits = [m for m in matching if stem in m["key"]]
             if not hits:
@@ -367,7 +378,7 @@ def main() -> int:
     }
 
     if args.json_output:
-        # stdout = JSON summary (for n8n Execute Command consumer)
+        # stdout = JSON summary (for the OHO runner / n8n HTTP consumer)
         # stderr already received the human-readable lines above.
         print(json.dumps(summary, indent=2, ensure_ascii=False))
 

@@ -3,8 +3,8 @@
 # scripts/lxc_inspect.sh — Read-only LXC readiness inspection
 # =============================================================================
 #
-# Run this FROM INSIDE n8n LXC CT-202. It tells you exactly what's missing
-# for the brain-dump-processor.py shell-out (ADR-0005) to work.
+# Run this FROM INSIDE n8n LXC CT-202. It tells you what host-side pieces are
+# available for the brain-dump processor and OHO runner (ADR-0005).
 #
 # To get inside the container (from the Proxmox host `pve`):
 #   pct enter 202

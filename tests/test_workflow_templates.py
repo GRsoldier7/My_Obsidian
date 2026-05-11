@@ -344,3 +344,149 @@ def test_execute_command_nodes_do_not_use_n8n_expression_with_shell_vars():
         "parameter expansion `${VAR:-default}`. Drop the `=` so the command "
         "is passed verbatim to bash:\n" + "\n".join(violations)
     )
+
+
+def test_brain_dump_processor_uses_oho_runner_http_boundary():
+    """P1 brain-dump processing must stay on the n8n 2.x-safe runner path.
+
+    Regression: n8n 2.18.5 refused to activate the `executeCommand` node, and
+    the n8n Docker container could not see host `/opt/oho`. The workflow must
+    call the dedicated `oho-runner` sidecar instead.
+    """
+    workflow = json.loads((WORKFLOW_DIR / "brain-dump-processor-v2.json").read_text(encoding="utf-8"))
+    nodes = workflow.get("nodes", [])
+
+    execute_nodes = [
+        node.get("name")
+        for node in nodes
+        if node.get("type") == "n8n-nodes-base.executeCommand"
+    ]
+    assert execute_nodes == []
+
+    runner_nodes = [
+        node
+        for node in nodes
+        if node.get("type") == "n8n-nodes-base.httpRequest"
+        and "/process-brain-dump" in node.get("parameters", {}).get("url", "")
+    ]
+    assert len(runner_nodes) == 1
+
+    runner_node = runner_nodes[0]
+    assert runner_node["parameters"]["url"] == "http://oho-runner:8080/process-brain-dump"
+    assert runner_node["parameters"]["method"] == "POST"
+    assert runner_node["credentials"]["httpHeaderAuth"]["id"] == "__OHO_RUNNER_CRED_ID__"
+    assert runner_node["credentials"]["httpHeaderAuth"]["name"] == "OHO Runner Auth"
+
+
+# ── Brain-dump processor: silent-on-no_work email policy ─────────────────────
+
+
+def _load_brain_dump_processor() -> dict:
+    return json.loads(
+        (WORKFLOW_DIR / "brain-dump-processor-v2.json").read_text(encoding="utf-8")
+    )
+
+
+def _node(wf: dict, name: str) -> dict | None:
+    for n in wf.get("nodes", []):
+        if n.get("name") == name:
+            return n
+    return None
+
+
+def _conditions(if_node: dict) -> list[dict]:
+    return (
+        if_node.get("parameters", {})
+        .get("conditions", {})
+        .get("conditions", [])
+    )
+
+
+def test_brain_dump_processor_no_work_path_is_silent():
+    """When the runner reports `top_status == 'no_work'`, no email should fire.
+
+    Empty-day heartbeat is suppressed by design — the run log + audit already
+    record the no-op. We enforce this with a chained IF: ``Has Work?`` false
+    branch flows into ``Is Error?``, whose false branch (``top_status ==
+    'no_work'``) is intentionally unwired.
+
+    Regression: prior to 2026-05-04 the false branch of ``Has Work?`` went
+    directly to ``Email: No-Work / Error Notice``, which fired every empty
+    day.
+    """
+    wf = _load_brain_dump_processor()
+
+    # Old node must be gone; new node must exist.
+    assert _node(wf, "Email: No-Work / Error Notice") is None, (
+        "Email: No-Work / Error Notice still present — workflow hasn't been "
+        "migrated to the silent-no_work policy"
+    )
+    err_email = _node(wf, "Email: Error Notice")
+    assert err_email is not None, "Email: Error Notice node missing"
+    assert err_email.get("type") == "n8n-nodes-base.emailSend"
+
+    # Has Work? is the success/non-success split.
+    has_work = _node(wf, "Has Work?")
+    assert has_work is not None and has_work.get("type") == "n8n-nodes-base.if"
+    hw_conds = _conditions(has_work)
+    assert any(
+        c.get("rightValue") == "success"
+        and c.get("operator", {}).get("operation") == "equals"
+        for c in hw_conds
+    ), f"Has Work? must equals 'success'; got {hw_conds!r}"
+
+    # Is Error? must filter out 'no_work' before the error email.
+    is_err = _node(wf, "Is Error?")
+    assert is_err is not None, "Is Error? IF missing — no_work would still email"
+    assert is_err.get("type") == "n8n-nodes-base.if"
+    ie_conds = _conditions(is_err)
+    assert any(
+        c.get("rightValue") == "no_work"
+        and c.get("operator", {}).get("operation") == "notEquals"
+        for c in ie_conds
+    ), f"Is Error? must notEquals 'no_work'; got {ie_conds!r}"
+
+    # Connection wiring: Has Work? false → Is Error?; Is Error? true →
+    # Email: Error Notice; Is Error? false branch must be empty (silent end).
+    conns = wf.get("connections") or {}
+    hw_branches = (conns.get("Has Work?") or {}).get("main") or []
+    assert len(hw_branches) >= 2, "Has Work? must have true + false branches"
+    hw_false_targets = [c.get("node") for c in (hw_branches[1] or [])]
+    assert hw_false_targets == ["Is Error?"], (
+        f"Has Work? false branch must go to Is Error?; got {hw_false_targets!r}"
+    )
+
+    ie_branches = (conns.get("Is Error?") or {}).get("main") or []
+    assert len(ie_branches) >= 2, "Is Error? must have true + false branches"
+    ie_true_targets = [c.get("node") for c in (ie_branches[0] or [])]
+    ie_false_targets = [c.get("node") for c in (ie_branches[1] or [])]
+    assert ie_true_targets == ["Email: Error Notice"], (
+        f"Is Error? true branch must go to Email: Error Notice; "
+        f"got {ie_true_targets!r}"
+    )
+    assert ie_false_targets == [], (
+        f"Is Error? false branch (the no_work case) must be UNWIRED so the "
+        f"workflow ends silently; got {ie_false_targets!r}"
+    )
+
+
+def test_brain_dump_processor_has_no_email_directly_after_has_work_false():
+    """Belt-and-suspenders: rule out a future regression where someone wires
+    an email back into ``Has Work?``'s false branch directly.
+    """
+    wf = _load_brain_dump_processor()
+    has_work = _node(wf, "Has Work?")
+    assert has_work is not None
+    branches = (wf.get("connections") or {}).get("Has Work?", {}).get("main") or []
+    if len(branches) < 2:
+        pytest.fail("Has Work? missing branches")
+    false_targets = [c.get("node") for c in (branches[1] or [])]
+    by_name = {n.get("name"): n for n in wf.get("nodes", [])}
+    bad = [
+        t for t in false_targets
+        if (by_name.get(t) or {}).get("type") == "n8n-nodes-base.emailSend"
+    ]
+    assert not bad, (
+        f"Has Work? false branch points directly at an email node ({bad!r}). "
+        f"Insert an Is Error? IF that filters out 'no_work' first."
+    )

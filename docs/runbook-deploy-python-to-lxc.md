@@ -1,179 +1,253 @@
-# Runbook — Deploy Python brain-dump processor to n8n LXC
+# Runbook — Deploy the brain-dump processor runner to n8n LXC
 
-**Target:** Proxmox LXC CT-202 at `192.168.1.121` (the n8n host)
-**Reason:** Per ADR-0005 § 9, the brain-dump-processor-v2 workflow shells out to
-`python3 tools/process_brain_dump.py` instead of re-implementing the integrity
-layer in JavaScript. The n8n process needs Python + the repo + `.env`.
-
----
-
-## TL;DR — Do I need a new LXC?
-
-**No.** Reuse the existing n8n LXC (CT-202). Justification:
-
-| Resource | brain-dump-processor.py needs | CT-202 has |
-|---|---|---|
-| Python 3.12+ | yes (verify once) | almost certainly yes |
-| pip packages | `boto3`, `openai`, `python-dotenv` (~80MB) | install via `pip3 install --user` |
-| RAM (peak) | ~50–80MB during a run | n8n already uses ≥150MB; LXC presumably has ≥512MB |
-| CPU | 5–10s once per day at 7AM CDT | trivially available |
-| Disk | ~150MB total (Python deps + repo) | trivially available |
-| Network | MinIO (192.168.1.240) + OpenRouter HTTPS | already reachable from CT-202 (n8n hits both) |
-| Isolation concern | none — runs the same kind of code n8n itself runs | n/a |
-
-A dedicated LXC would be over-engineering for a once-daily, 10-second
-job. If you ever scale the Python workload (e.g. real-time webhook
-ingestion) we revisit.
+**Target:** Proxmox LXC CT-202 at `192.168.1.121`
+**Runtime shape:** n8n runs in Docker; n8n calls a dedicated `oho-runner`
+HTTP sidecar; the sidecar runs `/opt/oho/tools/process_brain_dump.py`.
 
 ---
 
-## Inspection — run this first on CT-202
+## TL;DR
 
-SSH to the LXC and run the block below. It's read-only (no changes)
-and tells you exactly what's missing.
+Do **not** use n8n `executeCommand` for the P1 brain-dump processor.
 
-```bash
-echo "=== OS ===" && uname -a
-echo "=== Python ===" && python3 --version 2>&1
-echo "=== pip3 ===" && pip3 --version 2>&1 || echo "pip3 missing"
-echo "=== Required packages ===" && python3 -c "import boto3,openai,dotenv; print('boto3',boto3.__version__,'openai',openai.__version__,'dotenv ok')" 2>&1 || echo "missing one of: boto3 / openai / python-dotenv"
-echo "=== Repo location candidates ===" && for p in /opt/oho /mnt/home/!!\ AI_Scripts_Automations_Projects/Projects_Repos/ObsidianHomeOrchestrator /home/oho/repo; do [ -d "$p" ] && echo "FOUND $p" || echo "absent $p"; done
-echo "=== MinIO reachable? ===" && curl -sS -m 3 -o /dev/null -w "minio: HTTP %{http_code}\n" http://192.168.1.240:9000/minio/health/live
-echo "=== OpenRouter reachable? ===" && curl -sS -m 3 -o /dev/null -w "openrouter: HTTP %{http_code}\n" https://openrouter.ai/
-echo "=== n8n process ===" && pgrep -af n8n | head -3
+The live n8n host is on n8n 2.x inside Docker. In that environment:
+
+- `n8n-nodes-base.executeCommand` is not available to active-workflow
+  registration.
+- `/opt/oho` on the LXC host is not visible inside the n8n container unless
+  explicitly mounted.
+
+The supported P1 architecture is:
+
+```text
+n8n workflow
+  -> HTTP Request node
+  -> http://oho-runner:8080/process-brain-dump
+  -> FastAPI runner sidecar
+  -> python3 -u /opt/oho/tools/process_brain_dump.py
+  -> MinIO verified writes + receipts + archives
 ```
 
-Expected GOOD output:
-- Python 3.12 or higher
-- boto3 / openai / dotenv all import successfully (or "missing one of …" if not yet installed)
-- One of the repo paths is `FOUND`
-- MinIO returns HTTP 200, OpenRouter returns HTTP 2xx or 3xx
-- n8n is running
-
-Anything else → see the relevant section below.
-
 ---
 
-## What the LXC needs
+## What CT-202 needs
 
-### 1. Python 3.12+
+### 1. Repo at `/opt/oho`
 
 Verify:
+
 ```bash
-python3 --version   # ≥ 3.12
+ls -la /opt/oho/tools/process_brain_dump.py
+ls -la /opt/oho/tools/bd_integrity.py
+ls -la /opt/oho/services/oho_runner/app.py
 ```
 
-If not present: `apt install python3 python3-pip python3-venv` (or whatever
-the LXC's distro uses).
+If the repo is not there, copy the canonical repo to `/opt/oho`. Include the
+repo `.env` on the LXC host, but never commit it.
 
-### 2. Python packages
+### 2. Runner `.env`
 
-Install at the system or n8n-user level:
+Create `/opt/oho/services/oho_runner/.env` from the example:
+
 ```bash
-pip3 install --user --upgrade boto3 openai python-dotenv
+cd /opt/oho/services/oho_runner
+cp .env.example .env
 ```
 
-`python-dotenv` is optional (the workflow sources `.env` via shell), but
-install it anyway — `tools/process_brain_dump.py` falls back to it if the
-shell didn't source `.env`.
+Set at least:
 
-The processor imports only stdlib (`re`, `json`, `hashlib`, `unicodedata`,
-`datetime`, `dataclasses`, `pathlib`, `argparse`, `logging`) plus the three
-above. No other deps.
+```text
+OHO_RUNNER_TOKEN=<long random bearer token>
+OHO_RUNNER_WORKDIR=/opt/oho
+OHO_RUNNER_TIMEOUT=180
+```
 
-### 3. Repo at `${OHO_REPO_PATH}` (default `/opt/oho`)
+Generate the token on the LXC:
 
-Two options. Pick one:
-
-**Option A — NAS mount (preferred if the LXC already mounts `/Volumes/home/`):**
 ```bash
-# As root:
-ln -s "/mnt/home/!! AI_Scripts_Automations_Projects/Projects_Repos/ObsidianHomeOrchestrator" /opt/oho
+openssl rand -hex 32
 ```
-The repo stays a single source of truth — `git pull` on the Mac, the LXC
-sees the new code immediately. No sync needed.
 
-**Option B — rsync on a cron (if the NAS isn't mounted on the LXC):**
+Create an n8n `httpHeaderAuth` credential named exactly:
+
+```text
+OHO Runner Auth
+```
+
+Header name:
+
+```text
+Authorization
+```
+
+Header value:
+
+```text
+Bearer <same OHO_RUNNER_TOKEN>
+```
+
+### 3. Runner sidecar
+
+Build and start the sidecar:
+
 ```bash
-# From the Mac (or wherever the canonical repo lives), every 5 min:
-rsync -avz --delete --exclude='.git' --exclude='__pycache__' --exclude='.pytest_cache' \
-  "/Volumes/home/.../ObsidianHomeOrchestrator/" \
-  root@192.168.1.121:/opt/oho/
+cd /opt/oho/services/oho_runner
+docker compose up -d --build
 ```
 
-Verify:
+Verify from the LXC host:
+
 ```bash
-ls -la /opt/oho/tools/process_brain_dump.py    # must exist
-ls -la /opt/oho/tools/bd_integrity.py          # must exist
+docker compose ps
+curl -sS http://localhost:8080/health
 ```
 
-### 4. `.env` at `${OHO_REPO_PATH}/.env`
+Verify from inside the n8n container. The URL must use Docker DNS, not
+`127.0.0.1`:
 
-Required variables (see `.env.example`):
-```
-MINIO_ENDPOINT=http://192.168.1.240:9000
-MINIO_ACCESS_KEY=...
-MINIO_SECRET_KEY=...
-MINIO_BUCKET=obsidian-vault
-OPENROUTER_API_KEY=...
-```
-
-If using NAS mount (Option A), the `.env` is already there. If using rsync,
-include `.env` explicitly (it's normally gitignored).
-
-### 5. Optional environment override
-
-If the repo lives somewhere other than `/opt/oho`, set in the n8n LXC's
-shell environment (e.g. `/etc/environment` or systemd service unit):
-```
-OHO_REPO_PATH=/your/custom/path
-```
-
----
-
-## Smoke test — does the LXC run the processor?
-
-SSH to the LXC, then:
 ```bash
-cd ${OHO_REPO_PATH:-/opt/oho}
-set -a && source .env && set +a
-python3 -u tools/process_brain_dump.py --dry-run 2>&1 | tail -20
+docker exec -it n8n-n8n-1 sh -lc 'curl -sS http://oho-runner:8080/health'
 ```
 
-Expected output: a JSON summary on stdout, INFO log lines on stderr.
-Stdout's last block should be valid JSON like:
+Expected health fields:
 
 ```json
 {
-  "status": "success",
-  "files_discovered": 11,
-  "files_with_content": 2,
-  ...
+  "status": "ok",
+  "script_present": true,
+  "env_present": true,
+  "token_configured": true
 }
 ```
 
-If stdout isn't valid JSON, the workflow's "Parse Python Output" node will
-fall to the no-work email branch with `top_status: 'parse_error'`.
+### 4. Optional host-side Python smoke test
+
+The runner container is self-contained. Host-side Python is useful for manual
+debugging only.
+
+On Debian 13, prefer apt packages over `pip --user`:
+
+```bash
+apt update
+apt install -y python3-boto3 python3-openai python3-dotenv python3-pytest python3-moto
+```
+
+Then:
+
+```bash
+cd /opt/oho
+set -a && source .env && set +a
+python3 -u tools/process_brain_dump.py --dry-run
+```
+
+Expected: valid JSON with `"status": "success"`.
 
 ---
 
-## Re-enable the n8n workflow
+## Deploy only the brain-dump workflow
 
-Once the smoke test passes:
+Do **not** run `scripts/setup-n8n.sh` for this cutover unless you intentionally
+want to reconcile all workflow templates.
+
+Use the surgical deploy tool:
 
 ```bash
-curl -X POST -H "X-N8N-API-KEY: $N8N_API_KEY" \
-  http://192.168.1.121:5678/api/v1/workflows/1SiacuC68kFgYayV/activate
+cd /opt/oho
+set -a && source .env && set +a
+
+python3 scripts/deploy_n8n_workflow.py \
+  workflows/n8n/brain-dump-processor-v2.json \
+  --workflow-id 1SiacuC68kFgYayV \
+  --assert-nodes 7 \
+  --assert-no-execute-command \
+  --assert-http-url-contains oho-runner \
+  --assert-http-url-contains /process-brain-dump
 ```
 
-Then trigger a manual run from the n8n UI to confirm the gated path runs
-end-to-end. Inspect:
-- the digest email (or no-work email)
-- `99_System/extraction-receipts/` (one new receipt per file with content)
-- `99_System/archive/brain-dumps/<YYYY-MM-DD>/` (raw archives)
-- `99_System/logs/brain-dump-processor-<YYYY-MM-DD>.json` (run log)
-- `00_Inbox/brain-dumps/*.md` frontmatter — `status` should be `extracted`
-  for files that processed cleanly, `partial` if some downstream write failed.
+The script performs:
+
+1. Backup of the live workflow JSON to `/opt/oho/backups/n8n/`.
+2. Placeholder hydration, including `__OHO_RUNNER_CRED_ID__`.
+3. `PUT /api/v1/workflows/<id>` for this workflow only.
+4. Re-fetch assertions before activation.
+
+Activate only after assertions pass:
+
+```bash
+python3 scripts/deploy_n8n_workflow.py \
+  workflows/n8n/brain-dump-processor-v2.json \
+  --workflow-id 1SiacuC68kFgYayV \
+  --assert-nodes 7 \
+  --assert-no-execute-command \
+  --assert-http-url-contains oho-runner \
+  --assert-http-url-contains /process-brain-dump \
+  --activate
+```
+
+---
+
+## Manual runner test
+
+From inside the n8n container:
+
+```bash
+docker exec -it n8n-n8n-1 sh -lc '
+  curl -sS -X POST http://oho-runner:8080/process-brain-dump \
+    -H "Authorization: Bearer <OHO_RUNNER_TOKEN>"
+'
+```
+
+Expected response:
+
+```json
+{
+  "exit_code": 0,
+  "stdout_json": {
+    "status": "success"
+  },
+  "timed_out": false
+}
+```
+
+If the brain dumps were already drained, `stdout_json.files_with_content` may be
+`0`; that is a valid no-work run.
+
+---
+
+## Post-deploy verification
+
+Run:
+
+```bash
+cd /opt/oho
+set -a && source .env && set +a
+
+python3 scripts/health_check.py
+python3 scripts/audit_extraction_receipts.py
+```
+
+Then manually click **Execute Workflow** in n8n for:
+
+```text
+🧠 Brain Dump Processor v2 — Daily 7AM
+```
+
+For a same-day second run, expected behavior is:
+
+- Runner returns `files_with_content: 0`.
+- n8n parse node sets `top_status: "no_work"`.
+- `Has Work?` false branch flows through `Is Error?`.
+- `Is Error?` false branch is intentionally unwired, so no email sends.
+- No new task data is written.
+
+Inspect MinIO after a real content run:
+
+```text
+99_System/extraction-receipts/
+99_System/archive/brain-dumps/<YYYY-MM-DD>/
+99_System/logs/brain-dump-processor-<YYYY-MM-DD>.json
+00_Inbox/processed/
+```
 
 ---
 
@@ -181,25 +255,27 @@ end-to-end. Inspect:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Workflow execution fails with non-zero exit | Python script itself errored at env-gate (MinIO unreachable, creds missing) | Inspect stderr in the n8n execution log; fix env / creds; re-run |
-| `top_status: parse_error` in the no-work email | Python emitted non-JSON to stdout (e.g. an unhandled exception printed traceback) | Inspect `parse_error` and `raw_stderr_tail` fields in the email; fix the script issue |
-| Audit `audit_extraction_receipts.py` reports R5 findings | `status: extracted` files still have content sections | Likely a logic bug in `bd_integrity.apply_reset` — re-read the code, write a test, fix |
-| Audit reports R4 findings | A file has been `partial` for >7 days | Investigate the failed-section reason in the file's retention block; fix the underlying transient (MinIO write, etc.); re-run the workflow |
-| Files repeatedly land in `partial` after retries | Persistent downstream failure | Check the retention block's stated reason; the ARTICLES_FILE or MTL is unreachable / locked; investigate that target |
+| n8n cannot reach `http://oho-runner:8080/health` | Runner is not on `n8n_default`, or wrong container name/network | `cd services/oho_runner && docker compose ps`; confirm compose network is `n8n_default` |
+| HTTP 401 from `/process-brain-dump` | Token mismatch between runner `.env` and n8n credential | Update `OHO Runner Auth` credential or runner `.env`; restart runner |
+| HTTP 409 from `/process-brain-dump` | Another processor run is active | Wait for current run; inspect runner logs |
+| `stdout_json` is null | Python emitted non-JSON or exited before summary | Inspect `stderr_tail` and `stdout_raw` in the n8n execution |
+| Runner health says `script_present: false` | `/opt/oho` bind mount missing/wrong | Fix `services/oho_runner/docker-compose.yml` volume and restart |
+| Audit R1 reports receipt missing | Receipt stem normalization drift | Use `tools.bd_integrity.slug_for_filename`; run `tests/test_audit_extraction_receipts.py` |
 
----
-
-## Rollback
-
-If step 6's thin-scheduler workflow misbehaves, revert to the prior version:
+Runner logs:
 
 ```bash
-cd ${OHO_REPO_PATH:-/opt/oho}
-git checkout 2024dba -- workflows/n8n/brain-dump-processor-v2.json
-bash scripts/setup-n8n.sh   # re-imports the older workflow
+cd /opt/oho/services/oho_runner
+docker compose logs --tail=100 oho-runner
 ```
 
-The Python integrity layer (commits `641011d`, `cd66a20`, `2024dba`,
-`c8e7013`) stays in place — only the n8n workflow JSON reverts. Manual
-`python3 tools/process_brain_dump.py` invocations continue to work with
-full P1 gates.
+Rollback to the previous live workflow body:
+
+```bash
+cd /opt/oho
+set -a && source .env && set +a
+
+# Pick a backup from /opt/oho/backups/n8n, then PUT it back manually or with
+# the n8n UI. Do not run setup-n8n.sh unless you intend to reconcile all workflows.
+ls -lah /opt/oho/backups/n8n/
+```

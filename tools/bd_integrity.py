@@ -1,8 +1,8 @@
 """
 tools/bd_integrity.py — Brain-dump pipeline integrity primitives.
 
-Pure functions only; no I/O. The orchestrator (process_brain_dump.py and
-the n8n shell-out) is responsible for actual S3/MinIO calls.
+Pure functions only; no I/O. The orchestrator (process_brain_dump.py, invoked
+directly or through the OHO runner) is responsible for actual S3/MinIO calls.
 
 This is the single logic kernel that both the Python processor and the
 n8n workflow consume. Keeping this pure means: same input → same output
@@ -186,13 +186,26 @@ _SLUG_NORMALIZE_RE = re.compile(r"[\s—–]+")
 _SLUG_DEDUP_RE = re.compile(r"-+")
 
 
-def _slug_for_filename(filename: str) -> str:
+def slug_for_filename(filename: str) -> str:
+    """Canonical filename → receipt-stem normalizer.
+
+    Strip ``.md``, collapse any run of whitespace and em/en dashes to a single
+    ``-``, dedup repeated hyphens, and trim leading/trailing hyphens. This is
+    the *single source of truth* for the stem embedded in a receipt key —
+    anyone who needs to derive a receipt-stem from a filename (the live
+    processor, the audit, future tooling) MUST use this function so the
+    derivations stay in sync.
+    """
     stem = filename
     if stem.endswith(".md"):
         stem = stem[:-3]
     stem = _SLUG_NORMALIZE_RE.sub("-", stem)
     stem = _SLUG_DEDUP_RE.sub("-", stem).strip("-")
     return stem
+
+
+# Backward-compat alias for any external caller that imported the private name.
+_slug_for_filename = slug_for_filename
 
 
 def receipt_path(source_filename: str, date_yyyymmdd: str, content_hash: str) -> str:

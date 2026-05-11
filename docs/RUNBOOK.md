@@ -448,15 +448,18 @@ cat ~/.claude/settings.json | python3 -c "import json,sys; cfg=json.load(sys.std
 
 ## MCP Server Capabilities
 
-Configured in `~/.claude/settings.json`. These give Claude Code direct access to the stack:
+The canonical registry is [docs/AI_TOOLING.md](AI_TOOLING.md). Shared, no-secret
+MCPs may live in `~/.claude/settings.json`; OHO-specific examples live in
+`.mcp.example.json` and must use placeholders only.
 
 | Server | What it enables | When to use |
 |--------|----------------|-------------|
-| **Bitwarden** | Pull secrets from self-hosted Vaultwarden | Rotating credentials without editing .env |
-| **Filesystem** | Read/write vault files directly | Inspect or edit Obsidian notes without shell |
-| **n8n MCP** | List workflows, trigger executions, view logs | Debug failing workflows in one chat turn |
-| **PostgreSQL** | Read-only query of n8n execution DB | "What failed last night?" in one query |
+| **Context7** | Current docs lookup | Libraries/frameworks with unstable APIs |
+| **Playwright** | Browser/UI verification | n8n UI inspection or visual checks |
+| **Memory** | Cross-project engineering memory | Reusable decisions/preferences |
 | **Sequential Thinking** | Structured multi-step reasoning | Complex workflow design tasks |
+| **Bitwarden** | Pull secrets from self-hosted Vaultwarden | Deferred until `bw` CLI/session are ready |
+| **PostgreSQL** | Read-only query of n8n execution DB | Deferred until a read-only DB URL exists |
 
 ---
 
