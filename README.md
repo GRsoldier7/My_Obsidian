@@ -154,6 +154,7 @@ ObsidianHomeOrchestrator/
 │   └── archive/v1/                 # Superseded v1 workflows (kept for rollback)
 ├── docs/
 │   ├── RUNBOOK.md                  # Operations playbook: credentials, failures, deploy
+│   ├── AI_TOOLING.md               # Skills, MCPs, plugins, and agent routing
 │   ├── adr/                        # Architecture Decision Records
 │   │   ├── 0001-regex-first-extraction.md
 │   │   ├── 0002-openrouter-free-tier-cascade.md
@@ -161,6 +162,8 @@ ObsidianHomeOrchestrator/
 │   │   └── 0004-v2-section-aware-extraction.md
 │   └── superpowers/specs/          # Design specifications
 ├── .env.example                    # Environment variable template
+├── .mcp.example.json               # Safe MCP examples with placeholders only
+├── AGENTS.md                       # Codex/OpenAI agent instructions
 ├── CLAUDE.md                       # Claude Code project instructions
 └── Makefile                        # make setup / test / e2e / health / deploy
 ```
@@ -173,10 +176,12 @@ ObsidianHomeOrchestrator/
 - **Canonical task format** — all Dataview queries depend on `[area:: X] [priority:: X]`
 - **Never commit secrets** — `.env` is gitignored; use `.env.example` as the template
 - **Verified writes** — every S3 put calls `head_object` to confirm write succeeded
+- **AI tooling drift is audited** — run `make audit-ai-tooling` after changing agent instructions or MCP examples
 
 ## Docs
 
 - [RUNBOOK.md](docs/RUNBOOK.md) — operations playbook
+- [AI_TOOLING.md](docs/AI_TOOLING.md) — Skills/MCP/tools registry
 - [ADR-0001](docs/adr/0001-regex-first-extraction.md) — regex-first extraction
 - [ADR-0002](docs/adr/0002-openrouter-free-tier-cascade.md) — OpenRouter cascade
 - [ADR-0003](docs/adr/0003-bucket-root-no-prefix.md) — bucket root (no prefix)

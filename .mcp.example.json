@@ -1,0 +1,65 @@
+{
+  "_comment": "Safe example only. Copy selected entries to .mcp.json or user-level MCP config. Do not commit .mcp.json or real credentials.",
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {
+        "MEMORY_FILE_PATH": "${OHO_MCP_MEMORY_FILE:-.memory/knowledge-graph.jsonl}"
+      }
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "filesystem-oho": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "${OHO_REPO_ROOT}"
+      ]
+    },
+    "bitwarden": {
+      "_status": "deferred until bw CLI and scoped session are ready",
+      "command": "npx",
+      "args": ["-y", "@bitwarden/mcp-server"],
+      "env": {
+        "BW_SESSION": "${BW_SESSION}",
+        "BW_SERVER": "${BW_SERVER}"
+      }
+    },
+    "postgres-n8n-readonly": {
+      "_status": "optional; use a read-only n8n execution DB URL only",
+      "command": "uvx",
+      "args": ["postgres-mcp"],
+      "env": {
+        "DATABASE_URL": "${N8N_READONLY_DATABASE_URL}"
+      }
+    },
+    "github": {
+      "_status": "optional; prefer installed GitHub connector when available",
+      "command": "docker",
+      "args": [
+        "run",
+        "-i",
+        "--rm",
+        "-e",
+        "GITHUB_PERSONAL_ACCESS_TOKEN",
+        "ghcr.io/github/github-mcp-server"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    }
+  }
+}
+

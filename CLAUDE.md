@@ -66,6 +66,8 @@ Area values: faith, family, business, consulting, work, health, home, personal
 
 **Primary source (upstream):** https://github.com/GRsoldier7/-Foundational-Add-on-Project — local clone at `! Foundation_AddOn_Project/`. CLAUDE.md there has the full 60+ skill routing table across 6 tiers (core, engineering, superpowers, strategy, gstack, tech).
 
+**Canonical AI tooling registry:** [docs/AI_TOOLING.md](docs/AI_TOOLING.md) is the source of truth for which Skills, MCPs, plugins, and tools are user-level shared vs OHO project-local. [AGENTS.md](AGENTS.md) mirrors the critical rules for Codex/OpenAI agents. Run `make audit-ai-tooling` after changing AI instructions, `.mcp.example.json`, or this tooling registry.
+
 **Anti-hallucination — practical rules in this repo:**
 - File-grounded claims: re-read with the Read tool before citing specific content; in any session past the AMBER threshold, never paraphrase from memory.
 - External APIs: anything not seen in current session = LIKELY at best; flag for verification.
@@ -126,12 +128,13 @@ set -a && source .env && set +a && bash scripts/setup-n8n.sh
 Without `set -a`, child processes (Python, bash subshells) do NOT inherit shell variables.
 
 ## MCP Servers
-| Name | Purpose | Config |
-|------|---------|--------|
-| Bitwarden | Pull secrets from self-hosted vault | `~/.claude/settings.json` |
+Use [docs/AI_TOOLING.md](docs/AI_TOOLING.md) as the canonical MCP registry.
 
-Bitwarden self-hosted: `https://vault.tailfab8a7.ts.net:8443`
-Session token required — run `bw unlock --raw` and update `BW_SESSION` in `~/.claude/settings.json`.
+Project-local examples live in [.mcp.example.json](.mcp.example.json). Live `.mcp.json` files are ignored and must not be committed.
+
+Shared no-secret MCPs that are useful across projects may be registered in `~/.claude/settings.json` (for example `context7`, `playwright`, `memory`, `sequential-thinking`). Credentialed MCPs such as Bitwarden, GitHub, and Postgres need scoped credentials before registration.
+
+Bitwarden self-hosted: `https://vault.tailfab8a7.ts.net:8443`. Session token required — run `bw unlock --raw` and update `BW_SESSION` only in user-level local config, never in this repo.
 
 ## n8n Credentials (live)
 | Name | Type | ID |
