@@ -188,28 +188,21 @@ Enforced by [scripts/audit_workflow_credentials.py](scripts/audit_workflow_crede
 
 | Notebook | ID | Account | Status |
 |----------|-----|---------|--------|
-| ObsidianHomeOrchestrator — Life OS Project Memory (canonical) | `d056e9d5-64d9-4f64-aa94-faff603de835` | `authuser=1` | ACTIVE — Aaron's canonical target. CLI must be auth'd to authuser=1 to reach it. |
-| ObsidianHomeOrchestrator — Life OS Project Memory (fallback) | `fee28c3f-9fba-4567-9457-88dea5cec838` | `authuser=0` | Created 2026-05-11 as CLI-reachable fallback when the canonical was unreachable. |
-| (stale) `a428969b-c3f1-480b-b54c-876974650674` | — | — | RETURNS RPC NULL as of 2026-05-11. Do not use. |
-| (stale) `844aa6a1-e3fc-4d75-af9e-d4653a755ae3` | — | — | RETURNS RPC NULL as of 2026-05-11. Do not use. |
+| ObsidianHomeOrchestrator — Life OS Project Memory | `d056e9d5-64d9-4f64-aa94-faff603de835` | `authuser=1` | ACTIVE — canonical project memory. CLI is auth'd to authuser=1 as of 2026-05-11. |
+| (stale) `a428969b-c3f1-480b-b54c-876974650674` | — | — | RPC null as of 2026-05-11. Do not use. |
+| (stale) `844aa6a1-e3fc-4d75-af9e-d4653a755ae3` | — | — | RPC null as of 2026-05-11. Do not use. |
+| (deleted) `fee28c3f-9fba-4567-9457-88dea5cec838` | — | `authuser=0` | Authuser=0 fallback created + deleted 2026-05-11 during the auth migration. |
 
-**Two-account caveat (load-bearing — confirmed 2026-05-11):** Aaron's canonical NotebookLM workspace lives on his `authuser=1` Google account; the `notebooklm` CLI on pve is currently auth'd to `authuser=0`. The CLI has no `--authuser` flag — to push to the canonical notebook, run `notebooklm login` from pve and pick the second account during the browser flow. Until that's done, push to the fallback ID instead.
+**Two-account caveat (historical — fully reconciled 2026-05-11):** Aaron's canonical NotebookLM workspace lives on `authuser=1`. CLAUDE.md previously misdiagnosed `d056e9d5-…` as a "phantom" because the `notebooklm` CLI was auth'd to `authuser=0`. Re-authenticated via the Playwright login script (`/tmp/nlm_login.py`, runs from any subprocess context — see the [notebooklm skill](.claude/skills/notebooklm/SKILL.md) for the canonical helper). Never use `notebooklm login` directly — it requires interactive terminal stdin unavailable inside Claude Code.
 
-**Push workflow (after re-auth to authuser=1):**
+**Push workflow:**
 
 ```bash
 notebooklm use d056e9d5-64d9-4f64-aa94-faff603de835
-notebooklm source add <path>
+notebooklm source add <path> --title "<title>"
 ```
 
-**Push workflow (current authuser=0):**
-
-```bash
-notebooklm use fee28c3f-9fba-4567-9457-88dea5cec838
-notebooklm source add <path>
-```
-
-Both IDs are mirrored in [.claude/nlm-notebook-ids.env](.claude/nlm-notebook-ids.env) (`NLM_PROJECT_NOTEBOOK_ID`, `NLM_PROJECT_NOTEBOOK_ID_FALLBACK`) and [.claude/notebooklm.json](.claude/notebooklm.json).
+ID mirrored in [.claude/nlm-notebook-ids.env](.claude/nlm-notebook-ids.env) (`NLM_PROJECT_NOTEBOOK_ID`) and [.claude/notebooklm.json](.claude/notebooklm.json).
 
 ## Current Status
 
