@@ -98,6 +98,42 @@
         }
       },
       "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://oho-runner:8080/build-command-center",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": false,
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": false
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "run-command-center",
+      "name": "Run: build_command_center.py (via OHO runner)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__OHO_RUNNER_CRED_ID__",
+          "name": "OHO Runner Auth"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "continueOnFail": true
     }
   ],
   "connections": {
@@ -139,6 +175,17 @@
         [
           {
             "node": "S3: Write Dashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Write Dashboard": {
+      "main": [
+        [
+          {
+            "node": "Run: build_command_center.py (via OHO runner)",
             "type": "main",
             "index": 0
           }

@@ -68,6 +68,9 @@ LOGS_PREFIX = "99_System/logs/"
 METRICS_KEY = "99_System/metrics/brain-dump-extraction.jsonl"
 REVIEW_QUEUE_KEY = "00_Inbox/review-queue.md"
 DAILY_NOTES_PREFIX = "40_Timeline_Weekly/Daily/"
+# Operator summary state file. Read by tools/build_command_center.py to render
+# the 🧠 New From Brain Dumps section. Decoupled from run-log schema (ADR-0006).
+OPERATOR_SUMMARY_KEY = "99_System/state/last-brain-dump-summary.json"
 
 # Confidence threshold below which items go to review queue (Layer 3).
 CONFIDENCE_THRESHOLD = 0.6
@@ -175,6 +178,10 @@ class RunLog:
         "files_reset_partial": 0,
         "files_reset_skipped": 0,
     })
+    # Captured for the operator-summary state file (ADR-0006). Stores the
+    # post-dedup MTL-bound task lines exactly as appended, so the command-center
+    # generator can parse area/priority/desc without re-reading MTL.
+    new_tasks_added: list = field(default_factory=list)
 
 
 # ── MinIO helpers ────────────────────────────────────────────────────────────
@@ -836,13 +843,13 @@ def append_tasks_to_mtl(s3, tasks: list[str], source_file: str, today: str,
         retain the source section instead of clearing it (ADR-0005 §4).
     """
     if not tasks:
-        return {"appended": 0, "verified": True, "error": None}
+        return {"appended": 0, "verified": True, "error": None, "new_tasks": []}
 
     try:
         mtl = s3_get(s3, MTL_KEY)
     except Exception as e:
         logging.error(f"Failed to read MTL for append: {e}")
-        return {"appended": 0, "verified": False, "error": f"mtl_read: {str(e)[:200]}"}
+        return {"appended": 0, "verified": False, "error": f"mtl_read: {str(e)[:200]}", "new_tasks": []}
 
     existing = set()
     for line in mtl.splitlines():
@@ -863,7 +870,7 @@ def append_tasks_to_mtl(s3, tasks: list[str], source_file: str, today: str,
 
     if not new_tasks:
         logging.info(f"      all {len(tasks)} tasks already in MTL (deduped)")
-        return {"appended": 0, "verified": True, "error": None}
+        return {"appended": 0, "verified": True, "error": None, "new_tasks": []}
 
     append_block = (
         f"\n\n## Brain Dump Capture — {today} ({source_file})\n"
@@ -874,14 +881,14 @@ def append_tasks_to_mtl(s3, tasks: list[str], source_file: str, today: str,
 
     if dry_run:
         logging.info(f"      [dry-run] would append {len(new_tasks)} tasks to MTL")
-        return {"appended": len(new_tasks), "verified": True, "error": None}
+        return {"appended": len(new_tasks), "verified": True, "error": None, "new_tasks": list(new_tasks)}
 
     ok = s3_put_verified(s3, MTL_KEY, updated_mtl, dry_run=False)
     if ok:
         logging.info(f"      appended {len(new_tasks)} tasks to MTL")
-        return {"appended": len(new_tasks), "verified": True, "error": None}
+        return {"appended": len(new_tasks), "verified": True, "error": None, "new_tasks": list(new_tasks)}
     logging.error(f"      FAILED to append tasks to MTL")
-    return {"appended": 0, "verified": False, "error": "mtl_put_or_head_failed"}
+    return {"appended": 0, "verified": False, "error": "mtl_put_or_head_failed", "new_tasks": []}
 
 
 def write_note_file(s3, note: dict, source_file: str, today: str, dry_run: bool) -> bool:
@@ -980,6 +987,62 @@ def write_run_log(s3, log: RunLog, dry_run: bool):
     key = f"{LOGS_PREFIX}brain-dump-processor-{log.run_date}.json"
     log_dict = asdict(log)
     s3_put_verified(s3, key, json.dumps(log_dict, indent=2), dry_run)
+
+
+def build_operator_summary(log: RunLog, *, top_n: int = 10) -> dict:
+    """Build the operator-summary payload for the daily command center.
+
+    Pure function — no I/O. Reads the captured `new_tasks_added` lines and
+    parses each into {area, priority, desc} for the home page's "🧠 New From
+    Brain Dumps" section. Sort key: priority A → B → C → none, then insertion
+    order. ADR-0006.
+    """
+    parsed: list[dict] = []
+    for line in log.new_tasks_added:
+        m_open = re.match(r"^- \[ \] (.+)$", line)
+        if not m_open:
+            continue
+        body = m_open.group(1)
+        area = re.search(r"\[area::\s*([a-z]+)\]", body)
+        prio = re.search(r"\[priority::\s*([ABC])\]", body)
+        desc = re.sub(r"\s*\[(?:area|priority|due|explore|completion|source)::[^\]]*\]", "", body).strip()
+        parsed.append({
+            "area": area.group(1) if area else None,
+            "priority": prio.group(1) if prio else None,
+            "desc": desc,
+        })
+
+    rank = {"A": 0, "B": 1, "C": 2, None: 3}
+    parsed_sorted = sorted(parsed, key=lambda t: rank.get(t["priority"], 3))
+
+    return {
+        "run_finished_at": log.finished_at,
+        "run_started_at": log.started_at,
+        "status": log.status,
+        "tasks_written": log.tasks_written,
+        "review_added": log.items_routed.get("review_queue", 0),
+        "articles_queued": log.articles_queued,
+        "files_extracted": list(log.files_extracted),
+        "files_partial": list(log.files_partial),
+        "files_error": list(log.files_error),
+        "files_by_state": dict(log.files_by_state),
+        "reset_summary": dict(log.reset_summary),
+        "top_added_tasks": parsed_sorted[:top_n],
+        "total_added_tasks": len(parsed),
+    }
+
+
+def write_operator_summary(s3, log: RunLog, dry_run: bool):
+    """Persist the operator-summary state file (ADR-0006).
+
+    Decoupled from run-log schema so build_command_center.py reads a stable
+    contract. Idempotent — overwrites prior summary every run.
+    """
+    if dry_run:
+        return
+    summary = build_operator_summary(log)
+    body = json.dumps(summary, indent=2, ensure_ascii=False)
+    s3_put_verified(s3, OPERATOR_SUMMARY_KEY, body, dry_run)
 
 
 # ── Layer 3: Intent classification + routing ─────────────────────────────────
@@ -1664,6 +1727,8 @@ def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
         if mtl_outcome["verified"]:
             if mtl_outcome["appended"] > 0:
                 log.write_verifications_pass += 1
+                # ADR-0006: capture for the operator summary state file.
+                log.new_tasks_added.extend(mtl_outcome.get("new_tasks", []))
         else:
             log.write_verifications_fail += 1
 
@@ -1888,7 +1953,9 @@ def _extract_no_reset(s3, client, name, key, content, body, fm,
     if all_tasks:
         # --no-reset path: we don't gate on the result (sources stay untouched
         # regardless), but the function now returns dict — capture for stats.
-        _ = append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
+        no_reset_mtl = append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
+        if no_reset_mtl.get("verified") and no_reset_mtl.get("appended", 0) > 0:
+            log.new_tasks_added.extend(no_reset_mtl.get("new_tasks", []))
     if all_articles:
         art_outcome = append_articles(s3, all_articles, today, dry_run)
         if art_outcome.get("verified"):
@@ -1971,8 +2038,14 @@ def main():
     log.status = "success" if not log.errors else "partial"
 
     write_run_log(s3, log, args.dry_run)
+    # ADR-0006: persist a decoupled operator-summary state file for the
+    # daily command center. Best-effort — never fails the run.
+    try:
+        write_operator_summary(s3, log, args.dry_run)
+    except Exception as e:
+        logging.warning(f"operator summary write failed (non-fatal): {e}")
 
-    # Summary shape designed for the n8n Execute Command consumer (step 6).
+    # Summary shape designed for the OHO runner / n8n HTTP consumer.
     # Includes the P1 integrity-layer counters so the digest email can show
     # per-state breakdown instead of just totals.
     result = {
@@ -1996,10 +2069,9 @@ def main():
     print(json.dumps(result, indent=2))
     # Exit 0 unless something prevented the run end-to-end.
     # Per-file failures (partial, error) are reported in the JSON, not via
-    # the exit code — the n8n Execute Command treats non-zero as workflow
-    # failure, and we only want that on environment-level problems (MinIO
-    # unreachable, creds missing, etc.) which already exit 1 above before
-    # we get here.
+    # the exit code — the runner reports non-zero separately, and we only want
+    # that on environment-level problems (MinIO unreachable, creds missing,
+    # etc.) which already exit 1 above before we get here.
     sys.exit(0)
 
 

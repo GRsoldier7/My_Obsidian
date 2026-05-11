@@ -11,8 +11,9 @@
 #   make validate-env   — check all required env vars
 #   make coverage       — unit tests with coverage report
 #   make deploy         — full deploy: validate + setup + health check
+#   make audit-ai-tooling — validate AI tooling docs and MCP examples
 
-.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows logs help
+.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme
 
 PYTHON := python3
 PYTEST := pytest
@@ -80,6 +81,12 @@ audit-workflows:
 	@$(PYTHON) scripts/audit_workflow_credentials.py
 	@$(PYTHON) scripts/audit_workflow_connections.py
 
+# ── AI tooling targets ───────────────────────────────────────────────────────
+
+## Validate AI tooling docs, agent instructions, and MCP examples
+audit-ai-tooling:
+	@$(PYTHON) scripts/audit_ai_tooling.py
+
 # ── Operational targets ───────────────────────────────────────────────────────
 
 ## Tail today's brain-dump-processor log from MinIO
@@ -104,6 +111,14 @@ run:
 dry-run:
 	$(ENV_PREFIX) $(PYTHON) tools/process_brain_dump.py --dry-run --verbose
 
+## Rebuild the daily command center (ADR-0006). Verified write to MinIO.
+build-home:
+	$(ENV_PREFIX) $(PYTHON) tools/build_command_center.py
+
+## Drop / refresh the audit-only README in 00_Inbox/processed/. Idempotent.
+processed-readme:
+	$(ENV_PREFIX) $(PYTHON) tools/write_processed_readme.py
+
 # ── Help ──────────────────────────────────────────────────────────────────────
 
 help:
@@ -120,9 +135,12 @@ help:
 	@echo "  make deploy         Full deploy: validate + setup + health + e2e"
 	@echo "  make lint-workflows Validate all workflow JSONs"
 	@echo "  make audit-workflows Block mixed awsS3/s3 credential families"
+	@echo "  make audit-ai-tooling Validate AI tooling docs and MCP examples"
 	@echo "  make logs           Tail today's brain-dump-processor log"
 	@echo "  make run            Run processor manually (verbose)"
 	@echo "  make dry-run        Processor dry-run (no S3 writes)"
+	@echo "  make build-home     Rebuild !!! DAILY COMMAND CENTER.md (ADR-0006)"
+	@echo "  make processed-readme  Drop audit-only README in 00_Inbox/processed/"
 	@echo ""
 	@echo "  Tip: prefix with ENV=1 to auto-source .env:"
 	@echo "    make ENV=1 health"
