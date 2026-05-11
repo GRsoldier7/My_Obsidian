@@ -198,41 +198,60 @@ Push project session logs to the **active** notebook via `notebooklm source add 
 
 **Reframe 2026-05-03:** OHO is a personal **Life Operating System** across 8 domains, not a brain-dump pipeline. v1.0 roadmap below; task-level threading explicitly wanted.
 
-**P0 landed 2026-05-03 (commit `2b518b1`, branch `polish/prod-ready`)** — recovered the brain-dump pipeline from 11 days of silent skipped runs caused by:
-- Crons fired 5–6 hours late (UTC-adjusted while `settings.timezone: America/Chicago` was applied → double offset). Fixed local-time crons across 5 workflows.
-- MinIO list step in brain-dump-processor-v2 used HTTP+SigV4 with an unhydrated `__AWS_CRED_ID__` placeholder; auth failed daily and was mislabeled `source_prefix_empty`. Replaced with native `n8n-nodes-base.s3` `list` (canonical `s3` family) and added `minio_auth_error` / `minio_list_failed` to the canonical skip_reason enum.
-- Backlog drained via `python3 tools/process_brain_dump.py --no-reset` (new safe-mode flag) — 5 new tasks landed in MTL with `[source:: [[…]]]` backrefs; source brain-dump files left intact pending P1's gates.
-- NotebookLM ID drift reconciled — `a428969b-…` is authoritative (9 historical sources); `844aa6a1-…` is sidecar; `d056e9d5-…` was a phantom.
-- Test suite: **202 pass, 1 skip.** All 4 workflow audits green.
+**Branch:** `polish/prod-ready`, **46 commits ahead** of `master`, never PR'd. Three milestone waves landed this session (`179a03b` → `097892a` → `a1bd438`).
 
-**Earlier work (still relevant):**
-- Emails: HTML across 6 workflows, `parameters.emailFormat` at top level. Live SMTP messageSize 13,710–15,493 B. Audited by `scripts/audit_workflow_email_format.py`.
-- Brain-dump Python path proven E2E (`tools/process_brain_dump.py`) — section-aware, prose-imperative regex, OpenRouter cascade, intent classification, source-link wikilinks, fuzzy dedup, confidence-gated review queue.
-- Home.md, Pipeline Health.md, anomaly detector all live.
-- Windows encoding hardening complete (UTF-8 everywhere).
-- MinIO bucket versioning **enabled** — recover deletes via `s3.list_object_versions(Prefix=key)`.
+**Test suite:** **311 pass, 1 skip** (was 202 pre-P1). All 5 audits green: workflow-credentials, workflow-connections, workflow-runlogs, extraction-receipts, ai-tooling.
+
+### What's landed (code complete, deployment pending)
+
+**P0 — stop the bleed (2026-05-03, `2b518b1`).** Recovered the brain-dump pipeline from 11 days of silent skipped runs: timezone-double-offset crons fixed, MinIO list step migrated to native `n8n-nodes-base.s3` (`s3` family, not mixed `awsS3`), `minio_auth_error` / `minio_list_failed` added to the canonical skip_reason enum, NotebookLM ID drift reconciled.
+
+**P1 — integrity layer (ADR-0005, `f3f8325` → `947e507`).** State machine + content-hash receipts + gated reset. Pure-functions kernel in [tools/bd_integrity.py](tools/bd_integrity.py). Migration script for the 11 existing brain-dump files. Fail-fast audit ([scripts/audit_extraction_receipts.py](scripts/audit_extraction_receipts.py)) wired into the weekly vault-health-report. LXC deployment runbook + read-only readiness checker.
+
+**P1.5 — HTTP-runner pivot (ADR-0005 revision, `a1bd438`).** n8n 2.18.5 dropped `executeCommand` from the active-workflow registry; the boundary moved to a hardened FastAPI sidecar at [services/oho_runner/](services/oho_runner/). Two endpoints (`/process-brain-dump`, `/build-command-center`), bearer-auth via `hmac.compare_digest`, asyncio-lock serialised, 180s timeout, argv tuple (no shell expansion path). Container is read-only-mounted on `/opt/oho`. Drift fix: receipt-stem derivation centralised in `bd_integrity.slug_for_filename` so the audit and the writer can never disagree.
+
+**ADR-0006 — daily command center (`097892a`).** Replaces 12 stale dashboards with one auto-rebuilt landing page (`000_Master Dashboard/!!! DAILY COMMAND CENTER.md`) named to float to the top of the file tree. Locked section structure; Dataview TASK queries so checking off the rendered task also checks the MTL line. Operator-summary state file (`99_System/state/last-brain-dump-summary.json`) is the stable contract between the processor and the home generator. [tools/build_command_center.py](tools/build_command_center.py) is idempotent and verified-write.
+
+**AI tooling layer (`179a03b`).** [AGENTS.md](AGENTS.md) (Codex/OpenAI mirror), [docs/AI_TOOLING.md](docs/AI_TOOLING.md) (canonical Skills/MCP/plugin registry), [.mcp.example.json](.mcp.example.json) (no-secret placeholders), [scripts/audit_ai_tooling.py](scripts/audit_ai_tooling.py) (`make audit-ai-tooling`).
+
+### Operator actions remaining (P1+P1.5 deployment)
+
+The path changed when P1.5 landed — Python no longer installs onto the LXC host; it runs inside a sidecar container on the n8n Docker network:
+
+1. SSH to n8n LXC CT-202 (`192.168.1.121`). Run [scripts/lxc_inspect.sh](scripts/lxc_inspect.sh) for read-only readiness check.
+2. `cd /opt/oho && git pull` (or rsync the repo into `/opt/oho`).
+3. Add `OHO_RUNNER_TOKEN=<secret>` to `/opt/oho/.env`.
+4. `cd /opt/oho/services/oho_runner && docker compose up -d --build`.
+5. Smoke test from the n8n container: `curl -fsS http://oho-runner:8080/health`.
+6. In n8n UI: create credential `OHO Runner Auth` (Header Auth, `Authorization: Bearer <OHO_RUNNER_TOKEN>`), copy its ID into `.env` as `OHO_RUNNER_CRED_ID`.
+7. Re-deploy workflows: `python3 scripts/deploy_n8n_workflow.py` (hydrates `__OHO_RUNNER_CRED_ID__` + the rest).
+8. Reactivate `brain-dump-processor-v2`; manual run; verify receipt + archive + digest email.
+9. `make build-home` once to seed the command center; subsequent rebuilds run hourly via `live-dashboard-updater`.
 
 ## Life Orchestrator v1.0 Roadmap
 
 | Phase | Theme | Status |
 |---|---|---|
 | **P0** | Stop the bleed | ✅ shipped commit `2b518b1` |
-| **P1** | Safe reset — state machine + extraction receipts + raw-source archive + `last_checked` / `last_processed` semantics + truthful run logs | NEXT — non-negotiable, boring, hard to break |
-| **P2** | Threaded tasks (stable `task_id` not slugs; backing files in `30_Tasks/<area>/`) | Design-first AFTER P1; spec must cover IDs, migration, dedup, backlinks, completion sync, manual-edit resilience, audit |
-| **P3** | Capture-from-anywhere (Telegram, email-forward, voice→text) | Waits until P1 + likely P2 |
+| **P1** | State machine + receipts + gated reset + truthful run logs | ✅ code-complete (`f3f8325` → `947e507`); awaiting LXC deploy |
+| **P1.5** | n8n→Python boundary moved to HTTP runner sidecar (n8n 2.x compat) | ✅ code-complete (`a1bd438`); awaiting LXC deploy |
+| **ADR-0006** | Single Daily Command Center replaces dashboard sprawl | ✅ code-complete (`097892a`); wired into live-dashboard-updater |
+| **P2** | Threaded tasks (stable `task_id`; backing files in `30_Tasks/<area>/`) | Design-first AFTER P1 stabilises in prod; spec must cover IDs, migration, dedup, backlinks, completion sync, manual-edit resilience, audit |
+| **P3** | Capture-from-anywhere (Telegram, email-forward, voice→text) | Design partially scoped — see [docs/superpowers/specs/2026-05-10-agent-quick-add-design.md](docs/superpowers/specs/2026-05-10-agent-quick-add-design.md) for the coding-session capture slice. Implementation waits until P1 + likely P2 |
 | **P4** | Decision-ready briefings (today's ONE thing + 3 unblock decisions + accountability) | After P3 |
 | **P5** | Review rituals — auto-prepped weekly + quarterly + monthly templates | After P4 |
 | **P6** | Domain-aware UX (faith/health/business/family-specific) | After P5 |
 | **P7** | Insight loop / AI coach email | Last (compounds with data history) |
 
 **Hard rules:**
-- P1 closes the integrity layer before any expansion. While P1 is open: no new capture surfaces, no insights/coach scripts, no domain UX scope.
+- P1+P1.5 must run clean in prod for ≥7 days before P2 starts. While that gate is open: no new capture surfaces, no insights/coach scripts, no domain UX scope.
 - P2 is design-first. Spec lands as `docs/adr/<date>-threaded-tasks.md` before code.
-- "Insight v0" if it ships is read-only + non-blocking, and only AFTER P1 (and probably P2).
+- "Insight v0" if it ships is read-only + non-blocking, and only AFTER P2.
 
-## Pending (carry-forward, not in P1 scope)
+## Pending (carry-forward, not blocking the deploy)
 
+- LXC sidecar deployment — the 9-step procedure above.
 - GCAL OAuth2 → `GCAL_CRED_ID` in `.env` → re-deploy Weekend Planner.
 - OpenRouter key rotation.
 - MTL backfill of `[due::]` (only 11% populated) and `[completion::]` (0%).
-- `reset_to_template` conditional on MTL append success (P1 will close this properly via the receipt model).
+- Step-8 decision: deprecate `--no-reset` after ≥7 days of clean receipt-audit reports.
