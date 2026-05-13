@@ -405,16 +405,49 @@ def step_runner_env(args, ctx) -> StepResult:
     r = StepResult(name="runner-env")
     token = os.environ["OHO_RUNNER_TOKEN"]
     remote = f"{ctx['oho_repo_path']}/services/oho_runner/.env"
+    remote_repo_env = f"{ctx['oho_repo_path']}/.env"
+    local_env = REPO_ROOT / ".env"
 
-    # The runner.env on the LXC is composed from: shared repo .env + the token.
-    # We pull MinIO + OpenRouter from the local .env (which we know is valid
-    # from preflight) and reproject onto the runner env file. Simpler: just
-    # symlink/copy the repo .env and append OHO_RUNNER_TOKEN if missing.
+    # First-time-deploy seeding: rsync (step `sync`) excludes `.env`, so the
+    # repo `.env` may not exist on the LXC. Seed from the validated local
+    # `.env` here so the token-injection cp can succeed on the first run.
 
+    if args.dry_run:
+        dry(f"ssh {ctx['ssh_host']} test -f {remote_repo_env} || scp local .env up")
+        dry(f"ssh {ctx['ssh_host']} <write {remote} with token + repo env>")
+        r.status = "dry"; return r
+
+    check = run_remote(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"],
+                       f"test -f {shlex.quote(remote_repo_env)} "
+                       f"&& echo EXISTS || echo MISSING")
+    if "MISSING" in (check.stdout or ""):
+        if not local_env.exists():
+            fail("local .env missing — preflight should have blocked this")
+            r.status = "fail"; r.detail = "local .env missing"
+            return r
+        scp_cmd: list[str] = ["scp"]
+        if ctx["ssh_opts"]:
+            scp_cmd.extend(shlex.split(ctx["ssh_opts"]))
+        if ctx["ssh_key"]:
+            scp_cmd.extend(["-i", ctx["ssh_key"]])
+        scp_cmd.extend([str(local_env),
+                        f"{ctx['ssh_host']}:{remote_repo_env}"])
+        scp = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=30)
+        if scp.returncode != 0:
+            fail(f"scp .env → {ctx['ssh_host']}:{remote_repo_env} failed: "
+                 f"{(scp.stderr or '').strip()[:300]}")
+            r.status = "fail"; r.detail = f"scp failed: {scp.stderr[:200]}"
+            return r
+        # Lock down the file mode immediately after upload.
+        run_remote(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"],
+                   f"chmod 600 {shlex.quote(remote_repo_env)}")
+        ok(f"seeded {remote_repo_env} from local .env (first-time deploy)")
+
+    # Compose runner.env from repo.env + bearer token override.
     cmd = (
         f"set -e; "
         f"runner_env={shlex.quote(remote)}; "
-        f"repo_env={shlex.quote(ctx['oho_repo_path'] + '/.env')}; "
+        f"repo_env={shlex.quote(remote_repo_env)}; "
         f"if [ ! -f \"$repo_env\" ]; then echo 'MISSING:repo_env'; exit 11; fi; "
         f"cp \"$repo_env\" \"$runner_env\"; "
         # Replace any existing OHO_RUNNER_TOKEN line then ensure ours is present.
@@ -424,10 +457,6 @@ def step_runner_env(args, ctx) -> StepResult:
         f"chmod 600 \"$runner_env\"; "
         f"echo 'OK:wrote '\"$runner_env\"' (mode 600)'"
     )
-    if args.dry_run:
-        dry(f"ssh {ctx['ssh_host']} <write {remote} with token + repo env>")
-        r.status = "dry"; return r
-
     p = run_remote(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"], cmd)
     if p.returncode == 0 and "OK:" in (p.stdout or ""):
         ok((p.stdout or "").strip())
