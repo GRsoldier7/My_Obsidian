@@ -134,6 +134,60 @@ def test_workflow_lookup_prefers_exact_over_fuzzy(deploy_module, monkeypatch):
         "http://n8n", "k", target) == "wf-102"
 
 
+class _FakeBoto3:
+    """Inject via sys.modules so the in-function `import boto3` resolves
+    to a controllable stub during tests."""
+
+    def __init__(self, versioning_status: str | None = "Enabled",
+                 raise_on_call: Exception | None = None):
+        self._status = versioning_status
+        self._raise = raise_on_call
+
+    def client(self, *args, **kwargs):
+        return self
+
+    def get_bucket_versioning(self, *, Bucket):
+        if self._raise is not None:
+            raise self._raise
+        if self._status is None:
+            return {}
+        return {"Status": self._status}
+
+
+def test_minio_versioning_enabled_is_ok(deploy_module, monkeypatch):
+    monkeypatch.setitem(sys.modules, "boto3", _FakeBoto3("Enabled"))
+    monkeypatch.setenv("MINIO_ENDPOINT", "http://minio")
+    monkeypatch.setenv("MINIO_ACCESS_KEY", "k")
+    monkeypatch.setenv("MINIO_SECRET_KEY", "s")
+    monkeypatch.setenv("MINIO_BUCKET", "obsidian-vault")
+    ok, msg = deploy_module.check_minio_versioning()
+    assert ok is True
+    assert msg == "Enabled"
+
+
+def test_minio_versioning_suspended_fails(deploy_module, monkeypatch):
+    monkeypatch.setitem(sys.modules, "boto3", _FakeBoto3("Suspended"))
+    monkeypatch.setenv("MINIO_ENDPOINT", "http://minio")
+    monkeypatch.setenv("MINIO_ACCESS_KEY", "k")
+    monkeypatch.setenv("MINIO_SECRET_KEY", "s")
+    monkeypatch.setenv("MINIO_BUCKET", "obsidian-vault")
+    ok, msg = deploy_module.check_minio_versioning()
+    assert ok is False
+    assert "Suspended" in msg
+    assert "mc version enable" in msg
+
+
+def test_minio_versioning_absent_fails(deploy_module, monkeypatch):
+    monkeypatch.setitem(sys.modules, "boto3", _FakeBoto3(None))
+    monkeypatch.setenv("MINIO_ENDPOINT", "http://minio")
+    monkeypatch.setenv("MINIO_ACCESS_KEY", "k")
+    monkeypatch.setenv("MINIO_SECRET_KEY", "s")
+    monkeypatch.setenv("MINIO_BUCKET", "obsidian-vault")
+    ok, msg = deploy_module.check_minio_versioning()
+    assert ok is False
+    assert "absent" in msg
+
+
 def test_workflow_lookup_refuses_ambiguous(deploy_module, monkeypatch):
     """Multiple fuzzy hits without an exact must return None so the
     operator disambiguates rather than the script guessing."""

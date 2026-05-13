@@ -214,6 +214,38 @@ def n8n_api(method: str, path: str, *, host: str, key: str, body: Any = None
         return json.loads(raw) if raw else {}
 
 
+def check_minio_versioning() -> tuple[bool, str]:
+    """Return ``(ok, message)``. Versioning on the vault bucket is the
+    rollback safety net the integrity layer (ADR-0005) and the threaded-
+    tasks migration (P2) depend on. Treat ``Enabled`` as the only
+    acceptable state; ``Suspended`` and ``absent`` both fail preflight.
+
+    To enable from the mc CLI::
+
+        mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+        mc version enable myminio/"$MINIO_BUCKET"
+    """
+    try:
+        import boto3  # type: ignore[import-not-found]
+    except ImportError:
+        return False, "boto3 not installed — `pip install boto3` then re-run"
+    try:
+        client = boto3.client(
+            "s3",
+            endpoint_url=os.environ["MINIO_ENDPOINT"],
+            aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
+            aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
+        )
+        resp = client.get_bucket_versioning(Bucket=os.environ["MINIO_BUCKET"])
+    except Exception as e:
+        return False, f"get_bucket_versioning failed: {type(e).__name__}: {e}"
+    status = resp.get("Status", "absent")
+    if status == "Enabled":
+        return True, "Enabled"
+    return False, (f"Status={status} — must be `Enabled`. "
+                   f"Run: mc version enable <alias>/{os.environ['MINIO_BUCKET']}")
+
+
 def n8n_find_workflow_id(host: str, key: str, name: str) -> str | None:
     """Return workflow id for `name`. Live workflows in this n8n carry emoji
     prefixes that diverge from the canonical repo template names (e.g. the
@@ -286,6 +318,15 @@ def step_preflight(args, ctx) -> StepResult:
         ok(f"n8n API reachable at {os.environ['N8N_HOST']}")
     except Exception as e:
         issues.append(f"n8n API not reachable: {e}")
+
+    # MinIO bucket versioning — rollback safety net for ADR-0005 receipts
+    # and the P2 threaded-tasks migration. Hard gate.
+    if not missing:  # only check if MinIO creds are present
+        ver_ok, ver_msg = check_minio_versioning()
+        if ver_ok:
+            ok(f"MinIO bucket versioning: {ver_msg}")
+        else:
+            issues.append(f"MinIO bucket versioning: {ver_msg}")
 
     if issues:
         for i in issues:
