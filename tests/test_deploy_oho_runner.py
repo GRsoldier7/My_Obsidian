@@ -188,6 +188,30 @@ def test_minio_versioning_absent_fails(deploy_module, monkeypatch):
     assert "absent" in msg
 
 
+def test_wrap_for_transport_ssh_direct_passthrough(deploy_module):
+    """In SSH-direct mode (no pct_ctid) the wrapper must be a no-op so the
+    existing call-sites stay unchanged."""
+    ctx = {"pct_ctid": None}
+    assert deploy_module.wrap_for_transport(ctx, "echo hi") == "echo hi"
+
+
+def test_wrap_for_transport_pct_mode_wraps_with_quoting(deploy_module):
+    """In pct mode the wrapper produces `pct exec <ctid> -- bash -c
+    '<shell-quoted-cmd>'` so shell metacharacters in the inner command
+    are passed verbatim into the CT's bash, not interpreted on pve."""
+    ctx = {"pct_ctid": "202"}
+    out = deploy_module.wrap_for_transport(ctx, "cd /opt/oho && ls -la")
+    assert out.startswith("pct exec 202 -- bash -c ")
+    # shlex.quote should preserve the && and the spaces inside a single quoted block
+    assert "'cd /opt/oho && ls -la'" in out
+
+
+def test_sync_excludes_constant_includes_dotenv(deploy_module):
+    """Don't sync the local .env over rsync/tarpipe — secrets are seeded
+    via the dedicated scp/`pct push` path in step_runner_env."""
+    assert ".env" in deploy_module.SYNC_EXCLUDES
+
+
 def test_workflow_lookup_refuses_ambiguous(deploy_module, monkeypatch):
     """Multiple fuzzy hits without an exact must return None so the
     operator disambiguates rather than the script guessing."""

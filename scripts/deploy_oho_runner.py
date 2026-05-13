@@ -59,6 +59,11 @@ Optional env:
     LXC_SSH_KEY    (default: ~/.ssh/id_ed25519)
     OHO_REPO_PATH  (default: /opt/oho — applies on the LXC)
     LXC_SSH_OPTS   (default: -o StrictHostKeyChecking=accept-new)
+    LXC_PCT_CTID   Opt-in pct-exec transport. When set (e.g. ``202``):
+                   commands are wrapped as ``ssh <LXC_SSH_HOST> pct exec
+                   <ctid> -- bash -c '<cmd>'`` and LXC_SSH_HOST should
+                   point at the Proxmox host (pve), not the CT itself.
+                   Matches Aaron's interactive ``pct exec`` workflow.
 
 Exit codes:
     0   success (dry-run or apply)
@@ -187,16 +192,35 @@ def ssh_cmd(ssh_host: str, ssh_key: str | None, ssh_opts: str) -> list[str]:
     return cmd
 
 
-def run_remote(ssh_host: str, ssh_key: str | None, ssh_opts: str,
-               remote_cmd: str, *, capture: bool = True
+def wrap_for_transport(ctx: dict, remote_cmd: str) -> str:
+    """If ``ctx['pct_ctid']`` is set, wrap the command in
+    ``pct exec <ctid> -- bash -c '<cmd>'`` so it runs inside the CT after
+    SSH lands on the Proxmox host. Otherwise return the command as-is
+    (the SSH target is the CT itself)."""
+    ctid = ctx.get("pct_ctid")
+    if not ctid:
+        return remote_cmd
+    return f"pct exec {ctid} -- bash -c {shlex.quote(remote_cmd)}"
+
+
+def run_remote(ctx: dict, remote_cmd: str, *, capture: bool = True,
+               input: str | None = None, timeout: int | None = None
                ) -> subprocess.CompletedProcess:
-    """Run a command on the remote LXC over SSH."""
-    return subprocess.run(
-        ssh_cmd(ssh_host, ssh_key, ssh_opts) + [remote_cmd],
-        capture_output=capture,
-        text=True,
-        check=False,
-    )
+    """Run a command on the LXC.
+
+    Honors ``ctx['pct_ctid']`` so the same call works against both an
+    ssh-direct-to-CT setup (legacy) and an ssh-to-pve + ``pct exec``
+    setup (preferred — matches Aaron's interactive workflow)."""
+    args = ssh_cmd(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"]) \
+        + [wrap_for_transport(ctx, remote_cmd)]
+    kwargs: dict[str, Any] = {
+        "capture_output": capture, "text": True, "check": False,
+    }
+    if input is not None:
+        kwargs["input"] = input
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    return subprocess.run(args, **kwargs)
 
 
 # ── n8n API helpers (stdlib urllib, mirroring deploy_n8n_workflow.py) ───────
@@ -298,7 +322,8 @@ def step_preflight(args, ctx) -> StepResult:
         warn(f"OHO_RUNNER_TOKEN does not look like `openssl rand -hex 32` output "
              f"(len={len(tok)}); will deploy anyway")
 
-    # SSH reachability (non-fatal; some steps can be skipped without ssh)
+    # Transport reachability — verify both SSH and (if configured) `pct exec`
+    # so a misconfigured pct mode fails preflight instead of step `inspect`.
     if ctx["ssh_host"]:
         p = subprocess.run(
             ssh_cmd(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"])
@@ -310,6 +335,18 @@ def step_preflight(args, ctx) -> StepResult:
         else:
             issues.append(f"SSH to {ctx['ssh_host']} failed: "
                           f"{(p.stderr or '').strip().splitlines()[-1][:200]}")
+
+        if ctx.get("pct_ctid") and p.returncode == 0:
+            pct_probe = run_remote(ctx, "true", timeout=10)
+            if pct_probe.returncode == 0:
+                ok(f"pct exec {ctx['pct_ctid']} via {ctx['ssh_host']} works")
+            else:
+                issues.append(
+                    f"pct exec {ctx['pct_ctid']} via {ctx['ssh_host']} failed: "
+                    f"{(pct_probe.stderr or '').strip().splitlines()[-1:][0][:200]}"
+                    if pct_probe.stderr else
+                    f"pct exec {ctx['pct_ctid']} exit={pct_probe.returncode}"
+                )
 
     # n8n API reachable
     try:
@@ -352,8 +389,12 @@ def step_inspect(args, ctx) -> StepResult:
         dry(f"ssh {ctx['ssh_host']} 'bash -s' < {script}")
         r.status = "dry"; return r
 
+    # In pct mode we still want to pipe the script body into the CT's bash;
+    # wrap_for_transport handles the `pct exec ctid -- bash -c '<cmd>'`
+    # wrapping. We pass `bash -s` so stdin becomes the script body.
     p = subprocess.run(
-        ssh_cmd(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"]) + ["bash -s"],
+        ssh_cmd(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"])
+        + [wrap_for_transport(ctx, "bash -s")],
         input=script.read_text(),
         capture_output=True, text=True, timeout=60,
     )
@@ -367,14 +408,56 @@ def step_inspect(args, ctx) -> StepResult:
     return r
 
 
+SYNC_EXCLUDES = (".git/", "__pycache__/", ".venv/", ".env", "*.pyc",
+                 ".pytest_cache/", "99_System/", "tests/")
+
+
 def step_sync(args, ctx) -> StepResult:
     r = StepResult(name="sync")
     remote_path = ctx["oho_repo_path"]
+
+    if ctx.get("pct_ctid"):
+        # pct-exec mode: can't rsync through `pct exec`. Use a tarpipe
+        # streamed over ssh into pct's stdin. Trade-off: no `--delete`
+        # equivalent — stale files on the CT linger until the next deploy
+        # overwrites them. Acceptable for a code+config sync.
+        excludes = " ".join(f"--exclude={shlex.quote(e)}" for e in SYNC_EXCLUDES)
+        local_tar_argv = ["tar", "czf", "-", "-C", str(REPO_ROOT)] \
+            + [f"--exclude={e}" for e in SYNC_EXCLUDES] + ["."]
+        remote_cmd = (f"mkdir -p {shlex.quote(remote_path)} && "
+                      f"tar xzf - -C {shlex.quote(remote_path)}")
+        ssh_argv = ssh_cmd(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"]) \
+            + [wrap_for_transport(ctx, remote_cmd)]
+
+        if args.dry_run:
+            dry(f"tar c (excludes: {', '.join(SYNC_EXCLUDES)}) "
+                f"| {' '.join(shlex.quote(a) for a in ssh_argv)}")
+            info(f"pct-mode sync streams a tar (no --delete equivalent)")
+            r.status = "dry"; return r
+
+        # Stream tar → ssh
+        tar_p = subprocess.Popen(local_tar_argv, stdout=subprocess.PIPE)
+        ssh_p = subprocess.run(
+            ssh_argv, stdin=tar_p.stdout,
+            capture_output=True, text=True, timeout=600,
+        )
+        tar_p.stdout.close() if tar_p.stdout else None
+        tar_p.wait(timeout=60)
+
+        if ssh_p.returncode == 0 and tar_p.returncode == 0:
+            ok(f"tar-piped repo → {ctx['ssh_host']}:pct {ctx['pct_ctid']}:{remote_path}/")
+            r.status = "ok"
+        else:
+            fail(f"tarpipe sync failed: tar={tar_p.returncode} "
+                 f"ssh={ssh_p.returncode}; stderr={(ssh_p.stderr or '')[:400]}")
+            r.status = "fail"
+            r.detail = (ssh_p.stderr or f"tar={tar_p.returncode}")[:400]
+        return r
+
+    # SSH-direct: existing rsync flow.
     rsync_cmd = [
         "rsync", "-az", "--delete",
-        "--exclude=.git/", "--exclude=__pycache__/", "--exclude=.venv/",
-        "--exclude=.env", "--exclude=*.pyc", "--exclude=.pytest_cache/",
-        "--exclude=99_System/", "--exclude=tests/",
+    ] + [f"--exclude={e}" for e in SYNC_EXCLUDES] + [
         "-e", f"ssh {ctx['ssh_opts']} "
              + (f"-i {shlex.quote(ctx['ssh_key'])}" if ctx['ssh_key'] else ""),
         f"{REPO_ROOT}/",
@@ -417,7 +500,7 @@ def step_runner_env(args, ctx) -> StepResult:
         dry(f"ssh {ctx['ssh_host']} <write {remote} with token + repo env>")
         r.status = "dry"; return r
 
-    check = run_remote(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"],
+    check = run_remote(ctx,
                        f"test -f {shlex.quote(remote_repo_env)} "
                        f"&& echo EXISTS || echo MISSING")
     if "MISSING" in (check.stdout or ""):
@@ -425,22 +508,51 @@ def step_runner_env(args, ctx) -> StepResult:
             fail("local .env missing — preflight should have blocked this")
             r.status = "fail"; r.detail = "local .env missing"
             return r
-        scp_cmd: list[str] = ["scp"]
-        if ctx["ssh_opts"]:
-            scp_cmd.extend(shlex.split(ctx["ssh_opts"]))
-        if ctx["ssh_key"]:
-            scp_cmd.extend(["-i", ctx["ssh_key"]])
-        scp_cmd.extend([str(local_env),
-                        f"{ctx['ssh_host']}:{remote_repo_env}"])
-        scp = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=30)
-        if scp.returncode != 0:
-            fail(f"scp .env → {ctx['ssh_host']}:{remote_repo_env} failed: "
-                 f"{(scp.stderr or '').strip()[:300]}")
-            r.status = "fail"; r.detail = f"scp failed: {scp.stderr[:200]}"
-            return r
-        # Lock down the file mode immediately after upload.
-        run_remote(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"],
-                   f"chmod 600 {shlex.quote(remote_repo_env)}")
+
+        if ctx.get("pct_ctid"):
+            # scp to pve's /tmp, then pct push into the CT, then clean up.
+            pve_tmp = f"/tmp/oho-env-{os.getpid()}"
+            scp_cmd: list[str] = ["scp"]
+            if ctx["ssh_opts"]:
+                scp_cmd.extend(shlex.split(ctx["ssh_opts"]))
+            if ctx["ssh_key"]:
+                scp_cmd.extend(["-i", ctx["ssh_key"]])
+            scp_cmd.extend([str(local_env), f"{ctx['ssh_host']}:{pve_tmp}"])
+            scp = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=30)
+            if scp.returncode != 0:
+                fail(f"scp local .env → {ctx['ssh_host']}:{pve_tmp} failed: "
+                     f"{(scp.stderr or '').strip()[:300]}")
+                r.status = "fail"; r.detail = f"scp failed: {scp.stderr[:200]}"
+                return r
+            # On pve: pct push <ctid> <src> <dst> ; then remove tmp.
+            push = subprocess.run(
+                ssh_cmd(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"])
+                + [f"pct push {ctx['pct_ctid']} {shlex.quote(pve_tmp)} "
+                   f"{shlex.quote(remote_repo_env)} "
+                   f"&& rm -f {shlex.quote(pve_tmp)}"],
+                capture_output=True, text=True, timeout=30,
+            )
+            if push.returncode != 0:
+                fail(f"pct push → CT {ctx['pct_ctid']}:{remote_repo_env} failed: "
+                     f"{(push.stderr or '').strip()[:300]}")
+                r.status = "fail"; r.detail = f"pct push failed: {push.stderr[:200]}"
+                return r
+        else:
+            scp_cmd = ["scp"]
+            if ctx["ssh_opts"]:
+                scp_cmd.extend(shlex.split(ctx["ssh_opts"]))
+            if ctx["ssh_key"]:
+                scp_cmd.extend(["-i", ctx["ssh_key"]])
+            scp_cmd.extend([str(local_env),
+                            f"{ctx['ssh_host']}:{remote_repo_env}"])
+            scp = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=30)
+            if scp.returncode != 0:
+                fail(f"scp .env → {ctx['ssh_host']}:{remote_repo_env} failed: "
+                     f"{(scp.stderr or '').strip()[:300]}")
+                r.status = "fail"; r.detail = f"scp failed: {scp.stderr[:200]}"
+                return r
+        # Lock down the file mode inside the CT regardless of upload path.
+        run_remote(ctx, f"chmod 600 {shlex.quote(remote_repo_env)}")
         ok(f"seeded {remote_repo_env} from local .env (first-time deploy)")
 
     # Compose runner.env from repo.env + bearer token override.
@@ -457,7 +569,7 @@ def step_runner_env(args, ctx) -> StepResult:
         f"chmod 600 \"$runner_env\"; "
         f"echo 'OK:wrote '\"$runner_env\"' (mode 600)'"
     )
-    p = run_remote(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"], cmd)
+    p = run_remote(ctx, cmd)
     if p.returncode == 0 and "OK:" in (p.stdout or ""):
         ok((p.stdout or "").strip())
         r.status = "ok"
@@ -487,8 +599,7 @@ def step_compose(args, ctx) -> StepResult:
         dry(f"ssh {ctx['ssh_host']} '{compose_cmd[:80]}…'")
         r.status = "dry"; return r
 
-    p = run_remote(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"],
-                   compose_cmd)
+    p = run_remote(ctx, compose_cmd)
     print(C.DIM + (p.stdout or "") + C.RESET)
     if p.returncode == 0:
         ok(f"{RUNNER_CONTAINER} container is healthy")
@@ -530,16 +641,16 @@ def step_smoke_runner(args, ctx) -> StepResult:
         dry("3 probes: GET /health (200), POST /process-brain-dump w/good token, w/bad token")
         r.status = "dry"; return r
 
-    h = run_remote(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"], health)
+    h = run_remote(ctx, health)
     if h.returncode != 0 or '"ok"' not in (h.stdout or "").lower():
         fail(f"/health probe failed: {h.stdout!r} stderr={h.stderr[:200]!r}")
         r.status = "fail"; r.detail = "health probe failed"
         return r
     ok(f"/health → {h.stdout.strip()[:120]}")
 
-    g = run_remote(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"], bearer)
+    g = run_remote(ctx, bearer)
     good_code = (g.stdout or "").strip()
-    b = run_remote(ctx["ssh_host"], ctx["ssh_key"], ctx["ssh_opts"], bad_bearer)
+    b = run_remote(ctx, bad_bearer)
     bad_code = (b.stdout or "").strip()
 
     # Note: a POST to /process-brain-dump with a good token may return 200 or
@@ -802,11 +913,15 @@ def main() -> int:
         "ssh_opts":   os.environ.get("LXC_SSH_OPTS",
                                      "-o StrictHostKeyChecking=accept-new"),
         "oho_repo_path": os.environ.get("OHO_REPO_PATH", "/opt/oho"),
+        "pct_ctid":   os.environ.get("LXC_PCT_CTID") or None,
     }
 
     mode = "APPLY" if args.apply else "DRY-RUN"
     banner(f"OHO RUNNER DEPLOY — {mode}")
-    info(f"SSH:           {ctx['ssh_host']}")
+    if ctx["pct_ctid"]:
+        info(f"Transport:     pct exec (CT {ctx['pct_ctid']}) via SSH to {ctx['ssh_host']}")
+    else:
+        info(f"Transport:     SSH-direct to {ctx['ssh_host']}")
     info(f"Remote path:   {ctx['oho_repo_path']}")
     info(f"n8n:           {os.environ.get('N8N_HOST', '(unset)')}")
     info(f"Repo:          {REPO_ROOT}")
