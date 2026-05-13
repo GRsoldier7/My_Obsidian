@@ -215,10 +215,28 @@ def n8n_api(method: str, path: str, *, host: str, key: str, body: Any = None
 
 
 def n8n_find_workflow_id(host: str, key: str, name: str) -> str | None:
+    """Return workflow id for `name`. Live workflows in this n8n carry emoji
+    prefixes that diverge from the canonical repo template names (e.g. the
+    repo says ``brain-dump-processor-v2`` while the live workflow is named
+    ``🧠 brain-dump-processor-v2``). Match strategy:
+
+      1. Exact match wins outright.
+      2. Otherwise: any workflow whose name *contains* the target substring.
+         A single hit is returned; multiple hits log a warning and return
+         ``None`` so the operator can rename or disambiguate before
+         activation/execute calls run against the wrong workflow.
+    """
     data = n8n_api("GET", "/workflows", host=host, key=key).get("data", [])
     for wf in data:
         if wf.get("name") == name:
             return wf.get("id")
+    fuzzy = [wf for wf in data if name in (wf.get("name") or "")]
+    if len(fuzzy) == 1:
+        return fuzzy[0].get("id")
+    if len(fuzzy) > 1:
+        warn(f"ambiguous workflow lookup for `{name}` — "
+             f"{len(fuzzy)} matches: "
+             + ", ".join(repr(wf.get('name')) for wf in fuzzy[:5]))
     return None
 
 

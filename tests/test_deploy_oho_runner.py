@@ -97,3 +97,54 @@ def test_runner_endpoints_are_declared_in_app_py():
     assert '"build-command-center"' in app_py
     assert '@app.post("/process-brain-dump")' in app_py
     assert '@app.post("/build-command-center")' in app_py
+
+
+def test_workflow_lookup_is_emoji_prefix_tolerant(deploy_module, monkeypatch):
+    """Live n8n workflows in this stack carry emoji prefixes that diverge
+    from the canonical repo template names (memory:
+    feedback_n8n_workflow_name_emoji_prefix). Lookup must succeed both for
+    exact match and for a single contains-match — and refuse ambiguous
+    matches rather than guess."""
+    target = "brain-dump-processor-v2"
+
+    def fake_api(method, path, *, host, key, body=None):
+        return {"data": [
+            {"id": "wf-101", "name": "🧠 brain-dump-processor-v2"},
+            {"id": "wf-201", "name": "📰 article-processor"},
+        ]}
+
+    monkeypatch.setattr(deploy_module, "n8n_api", fake_api)
+    assert deploy_module.n8n_find_workflow_id(
+        "http://n8n", "k", target) == "wf-101"
+
+
+def test_workflow_lookup_prefers_exact_over_fuzzy(deploy_module, monkeypatch):
+    """An exact match must win over any number of fuzzy ones."""
+    target = "brain-dump-processor-v2"
+
+    def fake_api(method, path, *, host, key, body=None):
+        return {"data": [
+            {"id": "wf-101", "name": "🧠 brain-dump-processor-v2"},
+            {"id": "wf-102", "name": "brain-dump-processor-v2"},  # exact
+            {"id": "wf-103", "name": "old-brain-dump-processor-v2-backup"},
+        ]}
+
+    monkeypatch.setattr(deploy_module, "n8n_api", fake_api)
+    assert deploy_module.n8n_find_workflow_id(
+        "http://n8n", "k", target) == "wf-102"
+
+
+def test_workflow_lookup_refuses_ambiguous(deploy_module, monkeypatch):
+    """Multiple fuzzy hits without an exact must return None so the
+    operator disambiguates rather than the script guessing."""
+    target = "brain-dump-processor-v2"
+
+    def fake_api(method, path, *, host, key, body=None):
+        return {"data": [
+            {"id": "wf-101", "name": "🧠 brain-dump-processor-v2"},
+            {"id": "wf-102", "name": "old-brain-dump-processor-v2-archive"},
+        ]}
+
+    monkeypatch.setattr(deploy_module, "n8n_api", fake_api)
+    assert deploy_module.n8n_find_workflow_id(
+        "http://n8n", "k", target) is None
