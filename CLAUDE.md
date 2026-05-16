@@ -208,9 +208,9 @@ ID mirrored in [.claude/nlm-notebook-ids.env](.claude/nlm-notebook-ids.env) (`NL
 
 **Reframe 2026-05-03:** OHO is a personal **Life Operating System** across 8 domains, not a brain-dump pipeline. v1.0 roadmap below; task-level threading explicitly wanted.
 
-**Branch:** `polish/prod-ready`, **46 commits ahead** of `master`, never PR'd. Three milestone waves landed this session (`179a03b` → `097892a` → `a1bd438`).
+**Branch:** `polish/prod-ready`, **55 commits ahead** of `master`. **PR #2 open + MERGEABLE since 2026-05-11** (`P0 + P1 + P1.5 + ADR-0006 — Life OS v1.0 foundation (live in prod)`). Four milestone waves landed this session (`179a03b` → `097892a` → `a1bd438` → `00cf972`). **Soak window** (per [ADR-0007](docs/adr/0007-master-plan-v2.md) Phase A): runs ≥7 days clean before Phase C — earliest exit **2026-05-18**.
 
-**Test suite:** **311 pass, 1 skip** (was 202 pre-P1). All 5 audits green: workflow-credentials, workflow-connections, workflow-runlogs, extraction-receipts, ai-tooling.
+**Test suite:** **326 pass, 1 skip** (was 311 mid-session, 202 pre-P1). All 5 audits green: workflow-credentials, workflow-connections, workflow-runlogs, extraction-receipts, ai-tooling.
 
 ### What's landed (code complete, deployment pending)
 
@@ -246,25 +246,46 @@ The orchestrator handles all 10 steps (preflight → inspect → sync → runner
 
 If you prefer to do it by hand: see [docs/runbook-deploy-python-to-lxc.md](docs/runbook-deploy-python-to-lxc.md) for the manual procedure.
 
-## Life Orchestrator v1.0 Roadmap
+## Life Orchestrator v1.0 Roadmap (per [ADR-0007 Master Plan v2](docs/adr/0007-master-plan-v2.md))
 
 | Phase | Theme | Status |
 |---|---|---|
 | **P0** | Stop the bleed | ✅ shipped commit `2b518b1` |
-| **P1** | State machine + receipts + gated reset + truthful run logs | ✅ code-complete (`f3f8325` → `947e507`); awaiting LXC deploy |
-| **P1.5** | n8n→Python boundary moved to HTTP runner sidecar (n8n 2.x compat) | ✅ code-complete (`a1bd438`); awaiting LXC deploy |
-| **ADR-0006** | Single Daily Command Center replaces dashboard sprawl | ✅ code-complete (`097892a`); wired into live-dashboard-updater |
-| **P2** | Threaded tasks (stable `task_id`; backing files in `30_Tasks/<area>/`) | Design-first AFTER P1 stabilises in prod; spec must cover IDs, migration, dedup, backlinks, completion sync, manual-edit resilience, audit |
-| **P3** | Capture-from-anywhere (Telegram, email-forward, voice→text) | Design partially scoped — see [docs/superpowers/specs/2026-05-10-agent-quick-add-design.md](docs/superpowers/specs/2026-05-10-agent-quick-add-design.md) for the coding-session capture slice. Implementation waits until P1 + likely P2 |
-| **P4** | Decision-ready briefings (today's ONE thing + 3 unblock decisions + accountability) | After P3 |
-| **P5** | Review rituals — auto-prepped weekly + quarterly + monthly templates | After P4 |
-| **P6** | Domain-aware UX (faith/health/business/family-specific) | After P5 |
-| **P7** | Insight loop / AI coach email | Last (compounds with data history) |
+| **P1** | State machine + receipts + gated reset + truthful run logs | ✅ code-complete (`f3f8325` → `947e507`); deployed; in soak |
+| **P1.5** | n8n→Python boundary moved to HTTP runner sidecar (n8n 2.x compat) | ✅ code-complete (`a1bd438`); deployed; in soak |
+| **ADR-0006** | Single Daily Command Center replaces dashboard sprawl | ✅ code-complete (`097892a`); HTTP wire-in to live-dashboard-updater **deferred until P0.5 deploy verified** |
+| **P0.5** | Deploy + ≥7-day soak (BLOCKING GATE) | ⏳ in flight; earliest exit **2026-05-18** |
+| **P2** | Threaded tasks (stable `task_id`; backing files in `30_Tasks/<area>/`) | 🔒 design-first via [ADR-0009](docs/adr/0009-threaded-tasks.md); spec at `docs/superpowers/specs/2026-05-12-P2-threaded-tasks-spec.md` |
+| **P2.5** | Decision Journal (rides P2 IDs) | 🔒 post-P2 |
+| **P3** | Capture-Everywhere — voice-first | 🔒 post-P2 |
+| **P3.5** | OHO-as-Broker-Client (client of CT 215 `agent-orch-lxc` broker) | 🔒 design via [ADR-0008](docs/adr/0008-cross-host-comms.md); spec at `docs/superpowers/specs/2026-05-13-comms-layer-lxc-desktop-vps-spec.md` |
+| **P4** | Decision-Ready Briefings (eval-gated) | 🔒 post-P3 |
+| **Wave-X** | Cross-cut: security · eval · observability · comms-dashboard | 🔒 post-P4 (4 named lanes) |
+| **P5** | Review Rituals (daily/weekly/monthly/quarterly/annual) | 🔒 post-Wave-X |
+| **P6** | Domain-aware UX (8 domains + 4 named deliverables) | 🔒 post-P5 |
+| **P6.5** | Spouse-Shared Mode (conditional on Christy) | 🔒 design-only until confirmed |
+| **P7** | AI Coach + Insight Loop | 🔒 LAST; gated on all Wave-X infra live |
 
 **Hard rules:**
-- P1+P1.5 must run clean in prod for ≥7 days before P2 starts. While that gate is open: no new capture surfaces, no insights/coach scripts, no domain UX scope.
-- P2 is design-first. Spec lands as `docs/adr/<date>-threaded-tasks.md` before code.
+
+- P0.5 soak must run clean ≥7 days before Phase C (P2) starts. While that gate is open: no new capture surfaces, no insights/coach scripts, no domain UX scope, no new code-heavy cron slots.
+- P2 is design-first. [ADR-0009](docs/adr/0009-threaded-tasks.md) lands before code.
+- P3.5 is **integration not construction** — target `agents/orchestrator/` canonical tree on CT 215 (NOT the older `orchestrator/` Compass tree).
+- Privacy classifier (deny-list) gates the OHO→broker edge: `faith`/`family-named`/`kid-named`/`health-biomarker` NEVER egress without explicit `allow_egress_to`.
 - "Insight v0" if it ships is read-only + non-blocking, and only AFTER P2.
+
+## Cross-host fleet (per ADR-0008 design)
+
+OHO is a peer in a three-host fleet, NOT a standalone system:
+
+| Host                              | Tailscale                | Role                                                              | Repo                          |
+|-----------------------------------|--------------------------|-------------------------------------------------------------------|-------------------------------|
+| **CT-202**                        | n8n + oho-runner sidecar | LXC orchestrator + canonical truth + privacy hub                  | this repo                     |
+| **CT 215** `orch-lxc`             | `100.122.188.108`        | Agent broker (FastAPI + Redis Streams, ACL prefix `agent:orch:*`) | `GRsoldier7/agent-orch-lxc`   |
+| **VPS** `agent-core-01` (Vultr)   | `100.75.73.27`           | 24/7 fallback worker, OpenRouter free only, `read_only`           | sister-managed                |
+| **Desktop** `aaron-inspiron-3030` | `100.112.192.78`         | Claude Code, Ollama, full_workspace                               | local                         |
+
+Cross-host invariants: (a) one canonical `trace_id` across all hops; (b) no sensitive payload class crosses OHO→broker without explicit allow-list (classifier-enforced).
 
 ## Pending (carry-forward, not blocking the deploy)
 
