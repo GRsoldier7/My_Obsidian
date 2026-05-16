@@ -1,0 +1,22 @@
+{
+  "id": "F-0102",
+  "class": "sensitive",
+  "category": "kid-name",
+  "payload": {
+    "text": "Pick up Hudson from soccer practice at 6, drop off his cleats for the cobbler tomorrow.",
+    "fields": {"area": "personal", "priority": "B"}
+  },
+  "hints": {
+    "caller_asserted_class": null,
+    "_test_kid_names": ["Hudson"]
+  },
+  "expected_reasons": ["kid-name:Hudson"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  },
+  "notes": "Kid-name match elevates to sensitive even when `[area:: personal]` (not in the sensitive area set). Requires OHO_KID_NAMES=Hudson in the runtime env; the fixture's `_test_kid_names` field is for the eval harness to set context. Guards against the failure mode 'sensitive content escapes because area-tag was wrong/missing'."
+}

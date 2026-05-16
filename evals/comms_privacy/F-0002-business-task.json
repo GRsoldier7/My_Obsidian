@@ -1,0 +1,21 @@
+{
+  "id": "F-0002",
+  "class": "public",
+  "category": "edge-case",
+  "payload": {
+    "text": "Draft a one-page SOW template that works for both fixed-fee and time-and-materials engagements.",
+    "fields": {"area": "business", "priority": "B"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["default"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "allow",
+    "to_broker": "allow",
+    "to_openrouter": "allow"
+  },
+  "notes": "Business-area content without client identifiers or financial figures. `[area:: business]` is NOT in the sensitive area set. Default-public. Guards against over-classification of generic business templates."
+}

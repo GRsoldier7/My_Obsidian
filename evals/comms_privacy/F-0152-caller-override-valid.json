@@ -1,0 +1,22 @@
+{
+  "id": "F-0152",
+  "class": "sensitive",
+  "category": "edge-case",
+  "payload": {
+    "text": "Brain dump payload: a mix of sermon notes, kids' soccer schedule, and consulting client follow-ups.",
+    "fields": {"area": "personal", "priority": "B"}
+  },
+  "hints": {
+    "caller_asserted_class": "sensitive",
+    "_test_caller_signature": "valid-ed25519-signature-placeholder"
+  },
+  "expected_reasons": ["caller-asserted:sensitive"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  },
+  "notes": "Trusted local agent (e.g., brain-dump-processor) signs an assertion that the payload is sensitive. The classifier honors the caller-asserted class verbatim when the signature verifies. Tier-1 short-circuit prevents the classifier from second-guessing a more-informed agent. The signature verification happens against infra/agent-keys.yaml (not yet created at Phase F implementation start)."
+}

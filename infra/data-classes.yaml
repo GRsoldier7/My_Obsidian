@@ -25,7 +25,8 @@ rules:
   # verbatim. Used to avoid double-guessing a more-informed caller.
   - id: caller-asserted-override
     tier: 1
-    matches: signed_caller_assertion
+    matches:
+      signed_caller_assertion: true
     result: caller_specified
     notes: |
       Caller writes `hints.caller_asserted_class` + a Ed25519 signature over the

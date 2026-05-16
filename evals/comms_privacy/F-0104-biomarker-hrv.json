@@ -1,0 +1,21 @@
+{
+  "id": "F-0104",
+  "class": "sensitive",
+  "category": "biomarker",
+  "payload": {
+    "text": "HRV dropped to 38 ms last night; recovery score 41. Investigate magnesium-glycinate timing.",
+    "fields": {"area": "personal", "priority": "B"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["biomarker:HRV", "biomarker:recovery"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  },
+  "notes": "Biomarker dictionary (Tier 5) catches HRV + recovery even when `[area:: personal]` doesn't trip area-health. Important coverage: most wearable / biohacking captures will use 'personal' or no area tag. Guards against biomarker data reaching OpenRouter cascade."
+}

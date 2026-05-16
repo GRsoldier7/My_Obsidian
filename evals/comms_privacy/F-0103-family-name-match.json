@@ -1,0 +1,22 @@
+{
+  "id": "F-0103",
+  "class": "sensitive",
+  "category": "family-name",
+  "payload": {
+    "text": "Christy mentioned she'd like a quiet weekend; reschedule the home walkthrough to Monday.",
+    "fields": {"area": "home", "priority": "B"}
+  },
+  "hints": {
+    "caller_asserted_class": null,
+    "_test_family_names": ["Christy"]
+  },
+  "expected_reasons": ["family-name:Christy"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  },
+  "notes": "Family-name match elevates to sensitive. Mirrors the kid-name fixture but for spouses/parents/siblings whose names appear in OHO_FAMILY_NAMES. Guards the same failure mode: spousal context escaping because the area-tag was generic."
+}

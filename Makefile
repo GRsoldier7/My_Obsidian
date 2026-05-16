@@ -13,7 +13,7 @@
 #   make deploy         — full deploy: validate + setup + health check
 #   make audit-ai-tooling — validate AI tooling docs and MCP examples
 
-.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts
+.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets evals audit-all
 
 PYTHON := python3
 PYTEST := pytest
@@ -144,6 +144,24 @@ backfill-mtl-apply:
 audit-extraction-receipts:
 	$(ENV_PREFIX) $(PYTHON) scripts/audit_extraction_receipts.py
 
+# ── Phase F prep audits (ADR-0007 / ADR-0008) ─────────────────────────────────
+
+## Enforce the infra/data-classes.yaml contract (privacy classifier source-of-truth).
+audit-data-classes:
+	$(PYTHON) scripts/audit_data_classes.py --strict
+
+## Surface overdue + upcoming secret rotations from docs/security/secrets-rotation.md.
+audit-secrets:
+	$(PYTHON) scripts/audit_secrets_rotation.py
+
+## Run the eval harness in schema-only mode (no classifier yet; Phase F gates the runtime pass).
+evals:
+	$(PYTHON) scripts/run_evals.py
+
+## Run every audit in one shot (use as a pre-merge gate).
+audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets
+	@echo "✓ All offline audits passed."
+
 # ── Help ──────────────────────────────────────────────────────────────────────
 
 help:
@@ -171,6 +189,10 @@ help:
 	@echo "  make backfill-mtl-review  MTL backfill dry-run + review report (HYG-B4)"
 	@echo "  make backfill-mtl-apply   MTL backfill — write TODO markers (post-review only)"
 	@echo "  make audit-extraction-receipts  Daily soak audit (ADR-0005)"
+	@echo "  make audit-data-classes      Enforce infra/data-classes.yaml contract (ADR-0008)"
+	@echo "  make audit-secrets           Overdue + upcoming secret rotations"
+	@echo "  make evals                   Privacy classifier eval harness (schema-only)"
+	@echo "  make audit-all               Run every offline audit (pre-merge gate)"
 	@echo ""
 	@echo "  Tip: prefix with ENV=1 to auto-source .env:"
 	@echo "    make ENV=1 health"
