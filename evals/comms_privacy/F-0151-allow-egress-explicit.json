@@ -1,0 +1,22 @@
+{
+  "id": "F-0151",
+  "class": "sensitive",
+  "category": "edge-case",
+  "payload": {
+    "text": "Need an outside opinion on the hip-replacement timing decision. Surgery vs. wait + physical therapy. Open to public research.",
+    "fields": {"area": "health", "priority": "A"}
+  },
+  "hints": {
+    "caller_asserted_class": null,
+    "allow_egress_to": ["vps"]
+  },
+  "expected_reasons": ["area:health"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "allow_with_explicit_override",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  },
+  "notes": "Aaron explicitly authorized this single message to reach the VPS for outside research. Classifier still marks it sensitive (the content IS sensitive), but the egress gate honors the explicit override AND logs the override for weekly review. Guards against the allow-list escape hatch being too quiet — every override must appear in audit."
+}
