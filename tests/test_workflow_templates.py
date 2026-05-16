@@ -17,7 +17,9 @@ SCHEDULED_WORKFLOWS = [
     "article-processor.json",
     "brain-dump-processor-v2.json",
     "daily-note-creator-v2.json",
-    "job-search-pipeline.json",
+    # "job-search-pipeline.json" — quarantined 2026-05-16 after the credentials
+    # leak (docs/security/2026-05-16-INCIDENT-job-search-leak.md). When it's
+    # rebuilt with placeholders + a fresh Google sheet, restore here.
     "link-enricher.json",
     "live-dashboard-updater.json",
     "morning-briefing.json",

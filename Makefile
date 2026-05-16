@@ -11,12 +11,21 @@
 #   make validate-env   — check all required env vars
 #   make coverage       — unit tests with coverage report
 #   make deploy         — full deploy: validate + setup + health check
+#   make verify         — fast pre-PR gate: audit-all + unit tests
 #   make audit-ai-tooling — validate AI tooling docs and MCP examples
 
-.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs evals audit-all
+# Force bash (recipes use `source`, `[[ ]]`, etc.). Without this, GNU Make picks
+# /bin/sh — on Debian/Ubuntu that's dash, which has no `source`, no `[[`, no
+# arrays. That broke `make ENV=1 health` until 2026-05-16 (Codex review P1).
+SHELL := /usr/bin/env bash
+.SHELLFLAGS := -eu -o pipefail -c
+
+.PHONY: setup test e2e health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets evals audit-all
 
 PYTHON := python3
-PYTEST := pytest
+# Always invoke pytest via the same interpreter as PYTHON — avoids the case
+# where `pytest` on $PATH is from a different venv than the project's python.
+PYTEST := $(PYTHON) -m pytest
 
 # Auto-source .env if ENV=1 is set
 ifeq ($(ENV),1)
@@ -158,13 +167,24 @@ audit-secrets:
 audit-planning-docs:
 	$(PYTHON) scripts/audit_planning_docs.py --allow-orphans
 
+## Scan n8n workflow JSONs for hardcoded secrets/IDs/PII (born from 2026-05-16 incident).
+audit-workflow-secrets:
+	$(PYTHON) scripts/audit_workflow_secrets.py
+
 ## Run the eval harness in schema-only mode (no classifier yet; Phase F gates the runtime pass).
 evals:
 	$(PYTHON) scripts/run_evals.py
 
-## Run every audit in one shot (use as a pre-merge gate).
-audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs
+## Run every offline audit in one shot (use as a pre-merge gate).
+audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets
 	@echo "✓ All offline audits passed."
+
+## Pre-PR gate: every offline audit + unit tests. ≤30s on a warm cache.
+verify: audit-all
+	$(PYTEST) tests/ -q --tb=short \
+		--ignore=tests/test_process_brain_dump_e2e.py \
+		-k "not integration"
+	@echo "✓ make verify passed — safe to PR."
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
@@ -196,8 +216,10 @@ help:
 	@echo "  make audit-data-classes      Enforce infra/data-classes.yaml contract (ADR-0008)"
 	@echo "  make audit-secrets           Overdue + upcoming secret rotations"
 	@echo "  make audit-planning-docs     ADR / spec / phase cross-ref integrity"
+	@echo "  make audit-workflow-secrets  Scan n8n workflow JSONs for hardcoded creds/IDs/PII"
 	@echo "  make evals                   Privacy classifier eval harness (schema-only)"
 	@echo "  make audit-all               Run every offline audit (pre-merge gate)"
+	@echo "  make verify                  audit-all + unit tests (pre-PR gate)"
 	@echo ""
 	@echo "  Tip: prefix with ENV=1 to auto-source .env:"
 	@echo "    make ENV=1 health"

@@ -13,7 +13,7 @@
 | Edge / secret                       | Type            | Where it lives                                 | Rotation cadence | Last rotated | Next due   | Runbook                                         |
 |-------------------------------------|-----------------|------------------------------------------------|------------------|--------------|------------|-------------------------------------------------|
 | Telegram bot (`aarondy3777-bot`)    | bot token       | `.env` `TELEGRAM_BOT_TOKEN`; n8n cred          | 90d              | TBD (HYG-A)  | TBD        | `docs/runbooks/rotate-telegram-token.md`        |
-| OpenRouter API                      | API key         | `.env` `OPENROUTER_API_KEY`; n8n httpHeaderAuth cred | 90d        | TBD (HYG-B2) | TBD        | (TBD — write at first rotation)                 |
+| **OpenRouter API** ⚠️ **URGENT**     | API key         | `.env` `OPENROUTER_API_KEY`; n8n httpHeaderAuth cred | **rotate NOW** (HYG-B2 + 2026-05-16 incident) | TBD          | **rotate immediately** | `docs/security/2026-05-16-INCIDENT-job-search-leak.md` |
 | MinIO S3                            | access+secret   | `.env` `MINIO_*`; n8n s3 cred                  | 180d             | 2026-04-08*  | 2026-10-05 | (TBD)                                           |
 | Gmail SMTP (Aaron)                  | app password    | n8n smtp cred only                             | 90d              | TBD          | TBD        | Google account → 2SV → app passwords → revoke + reissue |
 | Google Calendar OAuth (GCAL)        | OAuth2 token    | n8n cred `GCAL_CRED_ID`                        | n/a — refresh    | not-issued (HYG-B3) | n/a   | n8n → Credentials → Google Calendar OAuth2      |

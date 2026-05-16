@@ -32,6 +32,7 @@ NOTIFICATION_EMAIL="${NOTIFICATION_EMAIL:-${SMTP_USER:-}}"
 MINIO_CRED_NAME="MinIO S3"
 SMTP_CRED_NAME="Gmail SMTP (Aaron)"
 OPENROUTER_CRED_NAME="OpenRouter API"
+OHO_RUNNER_CRED_NAME="OHO Runner Auth"
 
 # ── Validate required env vars ──────────────────────────────────
 required_vars=(N8N_API_KEY MINIO_ACCESS_KEY MINIO_SECRET_KEY SMTP_USER SMTP_PASS OPENROUTER_API_KEY)
@@ -214,12 +215,35 @@ OPENROUTER_CRED_PAYLOAD='{
 }'
 OPENROUTER_CRED_ID=$(upsert_credential "$OPENROUTER_CRED_ID" "OpenRouter API" "$OPENROUTER_CRED_PAYLOAD")
 
+# ── Step 4: Create or find OHO Runner Auth credential ───────────
+# Used by httpRequest nodes that call the oho-runner sidecar at :8080.
 echo ""
-echo "Credential IDs:"
-echo "   MinIO:      $MINIO_CRED_ID"
-echo "   SMTP:       $SMTP_CRED_ID"
-echo "   OpenRouter: $OPENROUTER_CRED_ID"
-echo "   Email:      $NOTIFICATION_EMAIL"
+echo "--- OHO Runner Auth Credential ---"
+OHO_RUNNER_CRED_ID="${OHO_RUNNER_CRED_ID:-$(find_cred_id_from_workflows "$OHO_RUNNER_CRED_NAME" "httpHeaderAuth" || true)}"
+if [[ -z "$OHO_RUNNER_CRED_ID" ]]; then
+  if [[ -z "${OHO_RUNNER_TOKEN:-}" ]]; then
+    echo "ERROR: __OHO_RUNNER_CRED_ID__ is referenced by brain-dump-processor-v2 and live-dashboard-updater" >&2
+    echo "but the n8n credential 'OHO Runner Auth' does not exist AND OHO_RUNNER_TOKEN is unset." >&2
+    echo "Set OHO_RUNNER_TOKEN in .env (openssl rand -hex 32) and re-run." >&2
+    exit 1
+  fi
+  OHO_RUNNER_CRED_PAYLOAD='{
+    "name": "'"$OHO_RUNNER_CRED_NAME"'",
+    "type": "httpHeaderAuth",
+    "data": {
+      "name": "Authorization",
+      "value": "Bearer '"$OHO_RUNNER_TOKEN"'"
+    }
+  }'
+  OHO_RUNNER_CRED_ID=$(upsert_credential "" "OHO Runner Auth" "$OHO_RUNNER_CRED_PAYLOAD")
+fi
+
+# Credential summary — IDs intentionally NOT printed; they're an n8n-internal
+# reference that, combined with an n8n API key leak, lets an attacker re-use
+# credentials. Counts confirm presence without leaking the references.
+echo ""
+echo "Credentials configured: 4 (MinIO, SMTP, OpenRouter, OHO Runner Auth)"
+echo "Notification email: $NOTIFICATION_EMAIL"
 
 # ── Step 3: Hydrate workflow templates and import ────────────────
 echo ""
@@ -286,6 +310,7 @@ raw = json.dumps(wf)
 raw = raw.replace('__MINIO_CRED_ID__', '$MINIO_CRED_ID')
 raw = raw.replace('__SMTP_CRED_ID__', '$SMTP_CRED_ID')
 raw = raw.replace('__OPENROUTER_CRED_ID__', '$OPENROUTER_CRED_ID')
+raw = raw.replace('__OHO_RUNNER_CRED_ID__', '$OHO_RUNNER_CRED_ID')
 raw = raw.replace('__NOTIFICATION_EMAIL__', '$NOTIFICATION_EMAIL')
 raw = raw.replace('__GCAL_CRED_ID__', '${GCAL_CRED_ID:-__GCAL_CRED_ID__}')
 with open('$wf_hydrated', 'w') as f:
@@ -296,6 +321,22 @@ with open('$wf_hydrated', 'w') as f:
   if ! python3 -c "import json; json.load(open('$wf_hydrated'))" 2>/dev/null; then
     echo "ERROR: $wf_file failed JSON validation after hydration"
     continue
+  fi
+
+  # Validate ALL placeholders resolved — fail-loud before sending to n8n.
+  # Tolerates __GCAL_CRED_ID__ if GCAL is intentionally unused on this deploy.
+  unresolved=$(python3 -c "
+import re, sys
+with open('$wf_hydrated') as f:
+    raw = f.read()
+# Allow the GCAL placeholder to pass through if Weekend Planner is disabled
+hits = [m for m in re.findall(r'__[A-Z0-9_]+__', raw) if m != '__GCAL_CRED_ID__']
+print(','.join(sorted(set(hits))))
+" 2>/dev/null)
+  if [[ -n "$unresolved" ]]; then
+    echo "ERROR: $wf_file has unresolved placeholders after hydration: $unresolved" >&2
+    echo "       Setup must register a credential ID for each placeholder before import." >&2
+    exit 1
   fi
 
   wf_json=$(cat "$wf_hydrated")
