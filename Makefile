@@ -13,7 +13,7 @@
 #   make deploy         — full deploy: validate + setup + health check
 #   make audit-ai-tooling — validate AI tooling docs and MCP examples
 
-.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry
+.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts
 
 PYTHON := python3
 PYTEST := pytest
@@ -127,6 +127,23 @@ deploy-runner-dry:
 deploy-runner:
 	$(ENV_PREFIX) $(PYTHON) scripts/deploy_oho_runner.py --apply
 
+# ── Hygiene B4: MTL metadata backfill (ADR-0007) ──────────────────────────────
+
+## MTL backfill — dry-run / review-only. Writes a triage report to MinIO; never modifies MTL.
+backfill-mtl-review:
+	$(ENV_PREFIX) $(PYTHON) scripts/backfill_mtl_metadata.py --review-only --verbose
+
+## MTL backfill — apply TODO markers on closed_no_completion tasks. Backs up canonical MTL first.
+##  Always run `make backfill-mtl-review` first and triage the report before this target.
+backfill-mtl-apply:
+	$(ENV_PREFIX) $(PYTHON) scripts/backfill_mtl_metadata.py --apply --verbose
+
+# ── Soak audit (P0.5 / ADR-0005) ──────────────────────────────────────────────
+
+## Daily soak audit — extraction receipts integrity. Must be green for ≥7 days before Phase C.
+audit-extraction-receipts:
+	$(ENV_PREFIX) $(PYTHON) scripts/audit_extraction_receipts.py
+
 # ── Help ──────────────────────────────────────────────────────────────────────
 
 help:
@@ -151,6 +168,9 @@ help:
 	@echo "  make deploy-runner-dry   Preview LXC sidecar deploy plan (no changes)"
 	@echo "  make deploy-runner       Run the LXC sidecar deploy end-to-end"
 	@echo "  make processed-readme  Drop audit-only README in 00_Inbox/processed/"
+	@echo "  make backfill-mtl-review  MTL backfill dry-run + review report (HYG-B4)"
+	@echo "  make backfill-mtl-apply   MTL backfill — write TODO markers (post-review only)"
+	@echo "  make audit-extraction-receipts  Daily soak audit (ADR-0005)"
 	@echo ""
 	@echo "  Tip: prefix with ENV=1 to auto-source .env:"
 	@echo "    make ENV=1 health"
