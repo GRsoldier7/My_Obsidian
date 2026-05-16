@@ -13,7 +13,7 @@
 #   make deploy         — full deploy: validate + setup + health check
 #   make audit-ai-tooling — validate AI tooling docs and MCP examples
 
-.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets evals audit-all
+.PHONY: setup test e2e health validate-env coverage deploy lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs evals audit-all
 
 PYTHON := python3
 PYTEST := pytest
@@ -154,12 +154,16 @@ audit-data-classes:
 audit-secrets:
 	$(PYTHON) scripts/audit_secrets_rotation.py
 
+## Verify every ADR/spec/phase cross-reference resolves; flag missing **Status:** lines.
+audit-planning-docs:
+	$(PYTHON) scripts/audit_planning_docs.py --allow-orphans
+
 ## Run the eval harness in schema-only mode (no classifier yet; Phase F gates the runtime pass).
 evals:
 	$(PYTHON) scripts/run_evals.py
 
 ## Run every audit in one shot (use as a pre-merge gate).
-audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets
+audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs
 	@echo "✓ All offline audits passed."
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -191,6 +195,7 @@ help:
 	@echo "  make audit-extraction-receipts  Daily soak audit (ADR-0005)"
 	@echo "  make audit-data-classes      Enforce infra/data-classes.yaml contract (ADR-0008)"
 	@echo "  make audit-secrets           Overdue + upcoming secret rotations"
+	@echo "  make audit-planning-docs     ADR / spec / phase cross-ref integrity"
 	@echo "  make evals                   Privacy classifier eval harness (schema-only)"
 	@echo "  make audit-all               Run every offline audit (pre-merge gate)"
 	@echo ""

@@ -1,0 +1,21 @@
+{
+  "id": "F-0004",
+  "class": "public",
+  "category": "edge-case",
+  "payload": {
+    "text": "Research note: FastAPI lifespan handlers replaced startup/shutdown events in 0.93. Migrate the runner sidecar accordingly.",
+    "fields": {"area": "personal", "priority": "C"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["default"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "allow",
+    "to_broker": "allow",
+    "to_openrouter": "allow"
+  },
+  "notes": "Tech research note with no PII, no faith/family/health, no client identifiers. `[area:: personal]` is NOT in the sensitive area set. Default-public. Guards against over-classification of generic technical notes."
+}

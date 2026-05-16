@@ -1,0 +1,21 @@
+{
+  "id": "F-0053",
+  "class": "private",
+  "category": "pii-phone",
+  "payload": {
+    "text": "Plumber's number: (512) 555-0143. Call after 9AM for the kitchen sink quote.",
+    "fields": {"area": "home", "priority": "B"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["pii:phone"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "require_explicit_allow_egress_to_vps",
+    "to_broker": "require_explicit_allow_egress_to_broker",
+    "to_openrouter": "require_explicit_allow_egress_to_openrouter"
+  },
+  "notes": "US-format phone number triggers the Tier 9 PII rule (private, not sensitive). Guards against contractor / vendor contact info reaching cloud LLMs without explicit override."
+}

@@ -1,0 +1,186 @@
+# Task backing-file schema v1 — ADR-0009 (Threaded Tasks).
+#
+# Each task in the MTL gets a backing file at:
+#   30_Tasks/<area>/t-2026wNN-XXXX.md
+#
+# The backing file has YAML front-matter (this schema) + free-form body.
+# Body holds notes, links, status updates, related-task references — anything that
+# doesn't fit the MTL line.
+#
+# Lock contract:
+#   - Schema is FROZEN at v1 once Phase C ships. Additive changes only (new optional
+#     fields). Field removals require a schema-version bump.
+#   - `id` is immutable. Splits get new IDs that link back via `parent_id`. Merges
+#     fold under one ID with the others recorded in `merged_from`.
+#   - MTL line is canonical for: text, area, priority, due, completion. Backing
+#     file is canonical for: notes, links, status_log. Conflicts surface in audit;
+#     they never silently win.
+
+schema_version: 1
+schema: oho.task-backing-file.v1
+
+required_fields:
+  # Identity
+  id:
+    type: string
+    pattern: '^t-\d{4}w\d{2}-[a-z0-9]{4}$'  # t-2026w20-a7f1
+    description: |
+      Immutable task ID. Format: t-<YYYY>w<NN>-<4-char-hash>. The hash is the first
+      4 chars of sha256(area + description + created_at_iso) at the moment of
+      creation. Re-extraction does NOT regenerate the ID — it reads it back from MTL.
+
+  area:
+    type: enum
+    values: [faith, family, business, consulting, work, health, home, personal]
+    description: |
+      Must match the MTL line's `[area:: ...]` value. Audit fails if they drift.
+
+  created_at:
+    type: iso8601-utc
+    description: First time the task was extracted. Never changes after first write.
+
+  state:
+    type: enum
+    values: [open, in_progress, completed, archived, abandoned]
+    description: |
+      Lifecycle state. `open` and `completed` mirror MTL checkbox state; the
+      other three are backing-file-only.
+
+  source:
+    type: object
+    fields:
+      kind:
+        type: enum
+        values: [brain-dump, manual, telegram, email-forward, voice, comms-envelope]
+      ref:
+        type: string
+        description: |
+          Stable reference: brain-dump filename + line, Telegram update_id,
+          email Message-ID, voice transcript ID, comms envelope message_id.
+      captured_at:
+        type: iso8601-utc
+
+optional_fields:
+  # Identity linkage
+  parent_id:
+    type: string
+    pattern: '^t-\d{4}w\d{2}-[a-z0-9]{4}$'
+    description: For splits — the originating task ID.
+
+  merged_from:
+    type: list[string]
+    description: For merges — the task IDs that folded into this one.
+
+  thread_root_id:
+    type: string
+    description: For multi-step initiatives — anchor task ID for the thread.
+
+  # Scheduling
+  priority:
+    type: enum
+    values: [A, B, C]
+    description: Mirror of MTL `[priority:: ...]`.
+
+  due:
+    type: yyyy-mm-dd
+    description: Mirror of MTL `[due:: ...]`. Empty allowed.
+
+  completion:
+    type: yyyy-mm-dd
+    description: Mirror of MTL `[completion:: ...]`. Empty allowed.
+
+  # Cross-references
+  related_tasks:
+    type: list[string]
+    description: Sibling task IDs (not parent/child, just adjacent context).
+
+  external_refs:
+    type: list[object]
+    description: Decision-journal entries, project docs, briefings.
+    fields:
+      kind:
+        type: enum
+        values: [decision, project, briefing, calendar, email, file]
+      ref:
+        type: string
+
+  # Status journal (append-only audit trail inside the backing file)
+  status_log:
+    type: list[object]
+    description: Every state transition + free-text note.
+    fields:
+      ts:
+        type: iso8601-utc
+      from_state:
+        type: enum
+      to_state:
+        type: enum
+      note:
+        type: string
+        description: Optional human or AI commentary.
+
+  # Domain tags (free-form; not enforced)
+  tags:
+    type: list[string]
+
+  # Privacy hints (consumed by tools/privacy_classifier.py per ADR-0008)
+  privacy_hints:
+    type: object
+    fields:
+      caller_asserted_class:
+        type: enum
+        values: [public, private, sensitive]
+      classification_reason:
+        type: string
+
+invariants:
+  # Things the audit enforces
+  - "id MUST match the regex above"
+  - "area MUST equal the MTL line's [area::] field"
+  - "if state == completed THEN completion MUST be set"
+  - "if state == open THEN completion MUST be empty"
+  - "parent_id and merged_from are mutually exclusive (a task is split-result OR merge-result, not both)"
+  - "source.captured_at <= created_at <= now"
+  - "status_log entries MUST be monotonically increasing by ts"
+  - "every status_log entry's from_state MUST equal the previous entry's to_state"
+
+# ── Example ───────────────────────────────────────────────────────────────────
+example:
+  id: t-2026w20-a7f1
+  area: business
+  created_at: "2026-05-19T07:00:13Z"
+  state: in_progress
+  source:
+    kind: brain-dump
+    ref: "00_Inbox/brain-dumps/BrainDump — Personal.md:L42"
+    captured_at: "2026-05-19T06:55:00Z"
+  priority: A
+  due: "2026-05-23"
+  thread_root_id: t-2026w20-a7f1
+  external_refs:
+    - kind: decision
+      ref: "40_Decisions/business/d-2026w20-0001.md"
+  status_log:
+    - ts: "2026-05-19T07:00:13Z"
+      from_state: open
+      to_state: open
+      note: "Initial extract."
+    - ts: "2026-05-20T14:32:00Z"
+      from_state: open
+      to_state: in_progress
+      note: "Started SOW draft today."
+  privacy_hints:
+    caller_asserted_class: private
+    classification_reason: "Contains client name; tier-8 client-id rule would also fire."
+
+# ── Migration from flat-MTL ───────────────────────────────────────────────────
+migration:
+  tool: scripts/migrate_threaded_tasks.py
+  phases:
+    1_plan:
+      description: "Read MTL; emit per-task migration plan to 99_System/reports/threaded-tasks-migration-plan.md."
+    2_apply:
+      description: "Append [id::] to each MTL line; create backing files. Idempotent."
+    3_verify:
+      description: "Round-trip every backing file → derived MTL line matches canonical."
+  rollback: "scripts/migrate_threaded_tasks.py --revert strips [id::] from MTL and quarantines backing files under 30_Tasks/.revert/."

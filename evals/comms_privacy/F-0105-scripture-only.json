@@ -1,0 +1,21 @@
+{
+  "id": "F-0105",
+  "class": "sensitive",
+  "category": "faith-term",
+  "payload": {
+    "text": "Cross-ref note: Psalm 23 → John 10:11 → 1 Peter 5:4 — shepherd thread for next sermon.",
+    "fields": {"area": "personal", "priority": "C"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["faith-term:sermon", "faith-term:Psalm 23", "faith-term:John 10:11", "faith-term:1 Peter 5:4"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  },
+  "notes": "Scripture references trigger Tier 6 even when `[area:: personal]` doesn't trip area-faith. Tests the regex form `\\b\\d?\\s?[A-Z][a-z]+\\s\\d+:\\d+\\b` against multiple book formats: single-name (Psalm), gospel (John), numbered epistle (1 Peter). Guards against sermon prep escaping to cloud LLMs when Aaron forgot the `[area:: faith]` tag."
+}
