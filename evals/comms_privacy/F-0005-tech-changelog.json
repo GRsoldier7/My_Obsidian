@@ -1,0 +1,14 @@
+{
+  "id": "F-0005",
+  "class": "public",
+  "category": "edge-case",
+  "payload": {
+    "text": "Changelog entry: postgres 16.2 fixes a query planner edge case for partitioned tables under heavy concurrent writes.",
+    "fields": {"area": "personal", "priority": "C"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["default"],
+  "expected_egress": {"to_lxc": "allow", "to_desktop": "allow", "to_vps": "allow", "to_broker": "allow", "to_openrouter": "allow"}
+}

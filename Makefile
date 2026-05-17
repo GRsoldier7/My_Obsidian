@@ -20,7 +20,7 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: setup test e2e health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets evals audit-all
+.PHONY: setup test e2e health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-no-executecommand evals audit-all
 
 PYTHON := python3
 # Always invoke pytest via the same interpreter as PYTHON — avoids the case
@@ -171,12 +171,17 @@ audit-planning-docs:
 audit-workflow-secrets:
 	$(PYTHON) scripts/audit_workflow_secrets.py
 
+## Block n8n-nodes-base.executeCommand regressions (P1.5 / vault-health-report breakage).
+## vault-health-report.json allowlisted until its post-soak migration to httpRequest.
+audit-no-executecommand:
+	$(PYTHON) scripts/audit_no_executecommand.py --allowlist vault-health-report.json
+
 ## Run the eval harness in schema-only mode (no classifier yet; Phase F gates the runtime pass).
 evals:
 	$(PYTHON) scripts/run_evals.py
 
 ## Run every offline audit in one shot (use as a pre-merge gate).
-audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets
+audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-no-executecommand
 	@echo "✓ All offline audits passed."
 
 ## Pre-PR gate: every offline audit + unit tests. ≤30s on a warm cache.
@@ -217,6 +222,7 @@ help:
 	@echo "  make audit-secrets           Overdue + upcoming secret rotations"
 	@echo "  make audit-planning-docs     ADR / spec / phase cross-ref integrity"
 	@echo "  make audit-workflow-secrets  Scan n8n workflow JSONs for hardcoded creds/IDs/PII"
+	@echo "  make audit-no-executecommand Block n8n executeCommand regressions (P1.5)"
 	@echo "  make evals                   Privacy classifier eval harness (schema-only)"
 	@echo "  make audit-all               Run every offline audit (pre-merge gate)"
 	@echo "  make verify                  audit-all + unit tests (pre-PR gate)"

@@ -1,0 +1,20 @@
+{
+  "id": "F-0109",
+  "class": "sensitive",
+  "category": "faith-term",
+  "payload": {
+    "text": "Prayer for clarity on the hip surgery decision — wisdom and peace either way. Also pastoral conversation Friday.",
+    "fields": {"area": "faith", "priority": "A"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["area:faith", "faith-term:prayer", "faith-term:pastoral"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  }
+}

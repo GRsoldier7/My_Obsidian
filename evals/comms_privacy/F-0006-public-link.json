@@ -1,0 +1,14 @@
+{
+  "id": "F-0006",
+  "class": "public",
+  "category": "edge-case",
+  "payload": {
+    "text": "Bookmark: https://github.com/anthropics/anthropic-cookbook — useful prompt patterns reference.",
+    "fields": {"area": "personal", "priority": "C"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["default"],
+  "expected_egress": {"to_lxc": "allow", "to_desktop": "allow", "to_vps": "allow", "to_broker": "allow", "to_openrouter": "allow"}
+}

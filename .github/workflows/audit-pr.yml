@@ -1,0 +1,66 @@
+name: audit
+
+# This workflow runs the offline audit suite + unit tests. It does NOT consume
+# any github.event.* user-controlled fields in `run:` commands. Inputs from
+# user-controlled events (PR title/body, commit messages, head_ref) are
+# explicitly NOT used — see GitHub Actions injection guide:
+# https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+on:
+  pull_request:
+    branches: [master, polish/prod-ready]
+  push:
+    branches: [master, polish/prod-ready]
+
+permissions:
+  contents: read
+
+jobs:
+  offline-audits:
+    name: Offline audits + unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pyyaml pytest pytest-asyncio pytest-cov pytest-respx boto3 httpx anyio
+
+      - name: Audit — AI tooling
+        run: make audit-ai-tooling
+
+      - name: Audit — workflow credentials + connections
+        run: make audit-workflows
+
+      - name: Audit — data-classes (ADR-0008)
+        run: make audit-data-classes
+
+      - name: Audit — secrets rotation
+        run: make audit-secrets
+
+      - name: Audit — planning docs
+        run: python3 scripts/audit_planning_docs.py --allow-orphans
+
+      - name: Audit — workflow secrets
+        run: make audit-workflow-secrets
+
+      - name: Audit — no executeCommand
+        run: make audit-no-executecommand
+
+      - name: Evals — schema-only pass
+        run: make evals
+
+      - name: Unit tests
+        run: |
+          python3 -m pytest tests/ -q --tb=short \
+            --ignore=tests/test_process_brain_dump_e2e.py \
+            -k "not integration"

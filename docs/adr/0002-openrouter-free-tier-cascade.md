@@ -36,7 +36,7 @@ The processor tries each model in order. If a model returns a rate-limit error (
 
 **Model selection:**
 
-- **gemma-3-4b-it** — Small, fast, consistently follows JSON output instructions. First choice because free tier rate limits reset most frequently on smaller models.
+- **gemma-3-4b-it** — Small, fast, consistently follows JSON output instructions. First choice because small models are typically routed to less-saturated provider capacity at OpenRouter — empirically lower 429 rates in OHO logs, though OpenRouter publishes no formal rate-limit guarantee per model size. Treat as a heuristic, not a contract.
 - **llama-3.3-70b-instruct** — Higher quality reasoning for complex prose. Used when gemma is rate-limited.
 - **nemotron-3-super-120b** — Largest available free model. Slowest, but highest reasoning quality. Last resort.
 

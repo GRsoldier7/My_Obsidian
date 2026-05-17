@@ -1,0 +1,21 @@
+{
+  "id": "F-0154",
+  "class": "sensitive",
+  "category": "edge-case",
+  "payload": {
+    "text": "Note for Acme renewal: include the resilience case study from the Q3 wellness pilot (HRV improvement metric).",
+    "fields": {"area": "consulting", "priority": "A"}
+  },
+  "hints": {
+    "caller_asserted_class": null,
+    "_test_client_identifiers": ["Acme"]
+  },
+  "expected_reasons": ["client-id:Acme", "biomarker:HRV"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  }
+}

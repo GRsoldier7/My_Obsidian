@@ -1,0 +1,14 @@
+{
+  "id": "F-0007",
+  "class": "public",
+  "category": "edge-case",
+  "payload": {
+    "text": "Pizza dough: 500g flour, 325g water, 10g salt, 2g yeast. 24h cold ferment. Stretch + bake 700F.",
+    "fields": {"area": "home", "priority": "C"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["default"],
+  "expected_egress": {"to_lxc": "allow", "to_desktop": "allow", "to_vps": "allow", "to_broker": "allow", "to_openrouter": "allow"}
+}
