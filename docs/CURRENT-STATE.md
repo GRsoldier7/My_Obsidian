@@ -15,14 +15,13 @@ Last refresh: 2026-05-16 (auto-regenerable from `make audit-all` + `git rev-list
 
 | Metric | Value | Source |
 |---|---|---|
-| Commits ahead of `master` (polish/prod-ready) | **65** | `git rev-list --left-right --count master...HEAD` |
-| Test suite (full, polish/prod-ready) | **516 pass + 1 skip** | `python3 -m pytest --tb=no -q` |
-| Test suite (`make verify` scope) | **516 pass** | `make verify` (excludes e2e + integration; new tests now inside the scope) |
-| Offline audits | **8 green** | see below |
+| Commits ahead of `master` (polish/prod-ready) | **67** | `git rev-list --left-right --count master...HEAD` |
+| Test suite (`make verify` scope) | **599 pass + 1 skip** | `make verify` |
+| Offline audits | **10 green** | see below |
 | Active n8n workflows | **14** | `workflows/n8n/*.json` (job-search quarantined) |
 | ADRs | **9** (0001-0006 historical, 0007 Accepted, 0008-0009 Proposed) | `docs/adr/` |
-| Eval fixtures | **25 / 200 target** | `evals/comms_privacy/` |
-| Pre-staged Phase F+C skeletons | branch `feature/phase-c-f-skeletons`, 36 tests | merge post-soak |
+| Eval fixtures | **35 / 200 target** | `evals/comms_privacy/` |
+| Pre-staged Phase C+F skeletons | branch `feature/phase-c-f-skeletons`, **63 tests** across 4 modules | merge post-soak |
 
 ### Offline audits (all green)
 
@@ -36,6 +35,8 @@ Last refresh: 2026-05-16 (auto-regenerable from `make audit-all` + `git rev-list
 8. `audit_planning_docs.py` — ADR / spec / phase / runbook cross-refs
 9. `audit_workflow_secrets.py` — hardcoded creds / IDs / PII (R1-R6) — born from 2026-05-16 incident
 10. `audit_no_executecommand.py` — blocks n8n `executeCommand` regressions (P1.5); `vault-health-report.json` allowlisted until post-soak migration
+11. `audit_no_argv_secrets.py` — blocks `curl -H "Bearer $VAR"` argv leaks (Codex P0 #2); `setup-n8n.sh` + `deploy_oho_runner.py` allowlisted until post-soak refactor
+12. `audit_slo_conformance.py` — Wave-X H3 skeleton; parses `docs/SLO-life-os.md` (8 workflow targets); MinIO log walk lands post-soak
 
 Run all in one shot: `make audit-all`. Pre-PR gate: `make verify` (audit-all + unit tests).
 
