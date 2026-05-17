@@ -1,0 +1,165 @@
+# Decision Record schema v1 — ADR-0007 Phase D (Decision Journal / P2.5).
+#
+# Each meaningful life-OS decision lives at:
+#   40_Decisions/<area>/d-2026wNN-XXXX.md
+#
+# Structure: YAML front-matter (this schema) + free-form body sections (Context,
+# Options, Choice, Why, 90-day review notes).
+#
+# Lock contract:
+#   - Schema FROZEN at v1 once Phase D ships. Additive changes only; removals
+#     require a schema-version bump.
+#   - `id` immutable; format mirrors task IDs but with `d-` prefix.
+#   - Decision IDs ride P2 (threaded-tasks) IDs — a decision can `affects: [t-...]`
+#     a task; the audit script ensures referenced task IDs exist.
+#
+# Why mirror task-backing-file.v1.yaml: same audit + sync + Command Center
+# render pipeline. One schema family, two record types.
+
+schema_version: 1
+schema: oho.decision-record.v1
+
+required_fields:
+  id:
+    type: string
+    pattern: '^d-\d{4}w\d{2}-[a-f0-9]{4,8}$'    # d-2026w21-a7f1
+    description: |
+      Immutable decision ID. Same format as task IDs but `d-` prefix. Generated
+      by tools/decision_id.py (parallel to tools/task_id.py, post-Phase C).
+
+  area:
+    type: enum
+    values: [faith, family, business, consulting, work, health, home, personal]
+    description: One of the 8 canonical OHO areas.
+
+  created_at:
+    type: iso8601-utc
+    description: First time the decision was logged. Never changes.
+
+  title:
+    type: string
+    description: Short imperative phrase (≤80 chars), e.g. "Hip surgery vs. wait + PT".
+
+  state:
+    type: enum
+    values: [deliberating, decided, archived, abandoned]
+    description: |
+      `deliberating` → options still open.
+      `decided` → choice recorded; `chosen` field MUST be set; 90-day review pending.
+      `archived` → 90-day review complete; outcome captured in `review_outcome`.
+      `abandoned` → decision no longer relevant; document why in `archived_reason`.
+
+  options:
+    type: list[object]
+    description: |
+      All viable options at decision time. Even after `decided`, the unchosen
+      options stay here for post-mortem learning.
+    fields:
+      id:
+        type: string
+        description: Short slug, unique within this decision.
+      title:
+        type: string
+      summary:
+        type: string
+
+optional_fields:
+  chosen:
+    type: string
+    description: |
+      The option id (above) that was selected. REQUIRED when state ∈
+      {decided, archived}.
+
+  decided_at:
+    type: iso8601-utc
+    description: When the decision moved from `deliberating` to `decided`.
+
+  review_due:
+    type: yyyy-mm-dd
+    description: |
+      90-day review date. Auto-computed as decided_at + 90 days. The morning
+      briefing surfaces decisions whose review_due ≤ today.
+
+  review_outcome:
+    type: enum
+    values: [success, partial, failure, undecidable]
+    description: |
+      Filled at archive time. Compare predicted outcome to observed reality.
+      `undecidable` = not enough signal to judge (rare; document in body).
+
+  review_notes:
+    type: string
+    description: Free-form. What did we learn?
+
+  affects:
+    type: list[string]
+    description: |
+      Task IDs this decision creates or modifies. Audit script ensures each
+      referenced task ID exists in the threaded-tasks index.
+
+  blocks:
+    type: list[string]
+    description: |
+      Other decision IDs that depend on this one. Useful for dependency graphs.
+
+  stakeholders:
+    type: list[string]
+    description: |
+      Who else is affected. Mirrors family-name / kid-name / client-id privacy
+      dictionaries — the classifier treats decisions with stakeholders as
+      sensitive by default.
+
+  external_refs:
+    type: list[object]
+    description: Briefings / docs / file links anchoring the decision.
+    fields:
+      kind:
+        type: enum
+        values: [briefing, doc, file, calendar, email, conversation]
+      ref:
+        type: string
+
+  privacy_hints:
+    type: object
+    fields:
+      caller_asserted_class:
+        type: enum
+        values: [public, private, sensitive]
+
+invariants:
+  - "id MUST match the regex above"
+  - "if state == decided OR state == archived THEN chosen MUST be set"
+  - "if state == archived THEN review_outcome MUST be set"
+  - "review_due == decided_at + 90 days (auto-computed; never edited manually)"
+  - "options MUST be a non-empty list"
+  - "chosen (if set) MUST be the id of one of the options"
+
+example:
+  id: d-2026w20-a7f1
+  area: health
+  created_at: "2026-05-19T08:00:00Z"
+  title: "Hip replacement timing — surgery now or wait + PT 6 months"
+  state: decided
+  chosen: "wait-pt"
+  decided_at: "2026-05-22T15:30:00Z"
+  review_due: "2026-08-20"
+  options:
+    - id: "surgery-now"
+      title: "Schedule surgery for July"
+      summary: "Definitive fix; 6-week recovery; insurance covers"
+    - id: "wait-pt"
+      title: "6 months of PT + targeted strength work"
+      summary: "Conservative; may delay surgery 12+ months; risk of acute episode"
+    - id: "wait-no-action"
+      title: "Do nothing; revisit when pain escalates"
+      summary: "Lowest cost; highest risk of emergency surgery later"
+  affects:
+    - t-2026w20-pt01
+    - t-2026w20-pt02
+  stakeholders:
+    - "Christy"
+  external_refs:
+    - kind: briefing
+      ref: "40_Briefings/2026-05-19-hip-decision-briefing.md"
+  privacy_hints:
+    caller_asserted_class: sensitive

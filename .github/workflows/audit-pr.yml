@@ -56,6 +56,12 @@ jobs:
       - name: Audit — no executeCommand
         run: make audit-no-executecommand
 
+      - name: Audit — no argv-secrets (Codex P0 #2)
+        run: make audit-no-argv-secrets
+
+      - name: Audit — SLO doc parse (Wave-X H3 skeleton)
+        run: make audit-slo
+
       - name: Evals — schema-only pass
         run: make evals
 

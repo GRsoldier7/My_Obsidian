@@ -1,0 +1,12 @@
+{
+  "id": "F-0008",
+  "class": "public",
+  "category": "edge-case",
+  "payload": {
+    "text": "Fed signals two more rate cuts likely by Q4. Treasury yields fell across the curve.",
+    "fields": {"area": "personal", "priority": "C"}
+  },
+  "hints": {"caller_asserted_class": null},
+  "expected_reasons": ["default"],
+  "expected_egress": {"to_lxc": "allow", "to_desktop": "allow", "to_vps": "allow", "to_broker": "allow", "to_openrouter": "allow"}
+}

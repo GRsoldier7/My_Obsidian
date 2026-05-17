@@ -4,7 +4,7 @@
 
 ## Architecture
 - **n8n:** Proxmox LXC at `192.168.1.121:5678`
-- **Vault sync:** Obsidian → MinIO `obsidian-vault` bucket prefix `Homelab/` via Remotely Save
+- **Vault sync:** Obsidian → MinIO `obsidian-vault` bucket **at root, NO prefix** via Remotely Save *(was "prefix `Homelab/`" — corrected 2026-03-29 per ADR-0003; see line 19)*
 - **MinIO:** `192.168.1.240:9000` (S3 API) / `:9001` (console)
 - **All n8n workflows use MinIO S3 — NOT filesystem** (see ADR-002)
 
@@ -48,7 +48,7 @@
 - [x] .env.example has OPENROUTER_API_KEY + consumer docs
 
 ## Remaining
-- [ ] **Verify Remotely Save** is syncing to MinIO bucket `obsidian-vault` prefix `Homelab/`
+- [x] ~~**Verify Remotely Save** is syncing to MinIO bucket `obsidian-vault` prefix `Homelab/`~~ → verified at root (no prefix) per ADR-0003 (2026-03-29)
 - [ ] **Create 8 brain dump files** in vault with correct `domain:` frontmatter
 - [ ] **QuickAdd macros** — Quick Task, Brain Dump, Quick Idea, Meeting Note
 - [ ] **Bookmarks** — 5 pinned notes for mobile quick access

@@ -1,0 +1,18 @@
+{
+  "id": "F-0057",
+  "class": "private",
+  "category": "pii-credit-card-shape",
+  "payload": {
+    "text": "Test card for sandbox: 4111-1111-1111-1111, exp 12/29. DO NOT commit to git.",
+    "fields": {"area": "personal", "priority": "B"}
+  },
+  "hints": {"caller_asserted_class": null},
+  "expected_reasons": ["pii:credit-card-shape"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "require_explicit_allow_egress_to_vps",
+    "to_broker": "require_explicit_allow_egress_to_broker",
+    "to_openrouter": "require_explicit_allow_egress_to_openrouter"
+  }
+}

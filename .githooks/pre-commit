@@ -38,6 +38,11 @@ echo "[pre-commit] no-executecommand audit …"
 # docs/NEXT-STEPS.md for post-soak fix. Allowlist until then.
 python3 scripts/audit_no_executecommand.py --allowlist vault-health-report.json
 
+echo "[pre-commit] no-argv-secrets audit …"
+# setup-n8n.sh + deploy_oho_runner.py are Codex P0 #2 known-pending until
+# the post-soak argv-hygiene refactor lands.
+python3 scripts/audit_no_argv_secrets.py --allowlist setup-n8n.sh --allowlist deploy_oho_runner.py
+
 echo "[pre-commit] unit tests …"
 python3 -m pytest tests/ -q --tb=line \
   --ignore=tests/test_process_brain_dump_e2e.py \

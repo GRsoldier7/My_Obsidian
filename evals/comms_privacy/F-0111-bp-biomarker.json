@@ -1,0 +1,18 @@
+{
+  "id": "F-0111",
+  "class": "sensitive",
+  "category": "biomarker",
+  "payload": {
+    "text": "Morning blood pressure 138/86; recheck this evening; bump magnesium back up.",
+    "fields": {"area": "personal", "priority": "B"}
+  },
+  "hints": {"caller_asserted_class": null},
+  "expected_reasons": ["biomarker:blood pressure"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  }
+}

@@ -20,7 +20,7 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: setup test e2e health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-no-executecommand evals audit-all
+.PHONY: setup test e2e health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-no-executecommand audit-no-argv-secrets audit-slo evals audit-all
 
 PYTHON := python3
 # Always invoke pytest via the same interpreter as PYTHON — avoids the case
@@ -176,12 +176,21 @@ audit-workflow-secrets:
 audit-no-executecommand:
 	$(PYTHON) scripts/audit_no_executecommand.py --allowlist vault-health-report.json
 
+## Block argv-secret-leak regressions (Codex P0 #2). setup-n8n.sh + deploy_oho_runner.py
+## allowlisted until their post-soak argv-hygiene refactors land.
+audit-no-argv-secrets:
+	$(PYTHON) scripts/audit_no_argv_secrets.py --allowlist setup-n8n.sh --allowlist deploy_oho_runner.py
+
+## Wave-X H3 SLO conformance skeleton (post-soak: --apply turns on MinIO read).
+audit-slo:
+	$(PYTHON) scripts/audit_slo_conformance.py
+
 ## Run the eval harness in schema-only mode (no classifier yet; Phase F gates the runtime pass).
 evals:
 	$(PYTHON) scripts/run_evals.py
 
 ## Run every offline audit in one shot (use as a pre-merge gate).
-audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-no-executecommand
+audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-no-executecommand audit-no-argv-secrets audit-slo
 	@echo "✓ All offline audits passed."
 
 ## Pre-PR gate: every offline audit + unit tests. ≤30s on a warm cache.

@@ -1,0 +1,22 @@
+{
+  "id": "F-0112",
+  "class": "sensitive",
+  "category": "edge-case",
+  "payload": {
+    "text": "Family dinner: Christy + Hudson + Hazel; surprise meal for Christy's promotion.",
+    "fields": {"area": "family", "priority": "A"}
+  },
+  "hints": {
+    "caller_asserted_class": null,
+    "_test_family_names": ["Christy"],
+    "_test_kid_names": ["Hudson", "Hazel"]
+  },
+  "expected_reasons": ["area:family", "family-name:Christy", "kid-name:Hudson", "kid-name:Hazel"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  }
+}
