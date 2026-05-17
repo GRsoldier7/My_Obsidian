@@ -20,7 +20,7 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: setup test e2e health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-no-executecommand audit-no-argv-secrets audit-slo evals audit-all
+.PHONY: setup test e2e health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry gcal-status gcal-create gcal-finalize backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-no-executecommand audit-no-argv-secrets audit-slo evals audit-all
 
 PYTHON := python3
 # Always invoke pytest via the same interpreter as PYTHON — avoids the case
@@ -135,6 +135,20 @@ deploy-runner-dry:
 ## End-to-end LXC sidecar deploy (APPLY — performs SSH + docker compose + n8n API calls).
 deploy-runner:
 	$(ENV_PREFIX) $(PYTHON) scripts/deploy_oho_runner.py --apply
+
+# ── GCAL OAuth setup (one-time) ────────────────────────────────────────────────
+
+## GCAL OAuth — print current state + next action (PATH A or PATH B).
+gcal-status:
+	$(ENV_PREFIX) $(PYTHON) scripts/setup_gcal_oauth.py
+
+## GCAL OAuth — create the n8n credential shell (PATH A; requires GOOGLE_CLIENT_ID+SECRET in .env).
+gcal-create:
+	$(ENV_PREFIX) $(PYTHON) scripts/setup_gcal_oauth.py --create
+
+## GCAL OAuth — after operator completes Google consent in n8n UI, write GCAL_CRED_ID to .env.
+gcal-finalize:
+	$(ENV_PREFIX) $(PYTHON) scripts/setup_gcal_oauth.py --finalize
 
 # ── Hygiene B4: MTL metadata backfill (ADR-0007) ──────────────────────────────
 
