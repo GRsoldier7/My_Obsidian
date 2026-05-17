@@ -307,12 +307,19 @@ def print_path_a_create(env: dict[str, str], existing: str | None) -> int:
         print("Otherwise: complete the consent in the n8n UI then run --finalize.")
         return 0
 
+    # n8n's `googleCalendarOAuth2Api` credential schema has conditional `allOf`
+    # branches that all match when their gate properties are absent. The
+    # validator therefore requires all 5 of these fields together — empirically
+    # discovered 2026-05-16 via the schema endpoint + probe matrix.
     payload = {
         "name": CRED_NAME,
         "type": "googleCalendarOAuth2Api",
         "data": {
+            "serverUrl": "",
             "clientId": client_id,
             "clientSecret": client_secret,
+            "sendAdditionalBodyProperties": False,
+            "additionalBodyProperties": "{}",
         },
     }
     print("POST /credentials → creating Google Calendar OAuth2 credential …")
@@ -329,24 +336,39 @@ def print_path_a_create(env: dict[str, str], existing: str | None) -> int:
     print(f"  ✓ credential shell created (ID: {new_id})")
     print()
     print("─" * 70)
-    print("NEXT — complete the OAuth consent (browser, ~30 seconds)")
+    print("NEXT — complete the OAuth consent (browser via SSH tunnel)")
     print("─" * 70)
     print()
-    print("Open this URL in your browser (logged into the Google account whose")
-    print("calendar you want OHO to read):")
+    print("Google's redirect URI is registered as `http://localhost:5678/...`,")
+    print("so the OAuth flow MUST go through localhost — NOT the LAN IP.")
     print()
-    print(f"  {host}/credentials/{new_id}")
+    print("On the PVE host (one-shot, sets N8N_EDITOR_BASE_URL + restarts n8n):")
+    print()
+    print("  bash scripts/n8n_localhost_toggle.sh on")
+    print()
+    print("On your LAPTOP (separate terminal — keep open during the OAuth dance):")
+    print()
+    print("  bash scripts/laptop_oauth_tunnel.sh")
+    print()
+    print("Then open in your laptop's browser (logged into your Google account):")
+    print()
+    print(f"  http://localhost:5678/credentials/{new_id}")
     print()
     print("→ Click 'Sign in with Google' / 'Connect my account'.")
-    print("→ Complete the Google consent screen (allow calendar read access).")
+    print("→ Complete the Google consent screen (allow calendar read).")
     print("→ n8n stores the refresh token automatically.")
     print()
-    print("Then run:")
+    print("Then on your laptop:")
     print()
-    print("  python3 scripts/setup_gcal_oauth.py --finalize")
+    print("  make gcal-finalize         # writes GCAL_CRED_ID to .env")
     print()
-    print("That writes GCAL_CRED_ID to .env and tells you to re-deploy")
-    print("Weekend Planner via `make setup`.")
+    print("Finally, on the PVE host (revert the localhost override):")
+    print()
+    print("  bash scripts/n8n_localhost_toggle.sh off")
+    print()
+    print("And re-deploy Weekend Planner from your laptop:")
+    print()
+    print("  bash scripts/setup-n8n.sh")
     print("─" * 70)
     return 0
 
