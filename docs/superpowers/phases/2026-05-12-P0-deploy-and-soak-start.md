@@ -3,7 +3,7 @@
 **Date:** 2026-05-12
 **Owner:** Aaron DeYoung (operator). Claude assists; Aaron pulls the trigger.
 **Target:** Proxmox LXC CT-202 (`192.168.1.121`), Docker network `n8n_default`.
-**Branch:** `polish/prod-ready` (46 commits ahead of `master`).
+**Branch:** `polish/prod-ready` — *live numbers at [docs/CURRENT-STATE.md](../../CURRENT-STATE.md). Numbers below are point-in-time at phase open (2026-05-12).*
 **Status when this opens:** code complete (commit `a1bd438`), 311/312 tests pass,
 all 5 audits green, **nothing is running in prod yet**.
 

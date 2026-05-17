@@ -45,8 +45,7 @@ Key shifts from v1:
 
 ## Verification
 
-- Tests baseline: 326 pass + 1 skip (confirmed 2026-05-16 pre-promotion).
-- All 5 audits green: workflow-credentials, workflow-connections, workflow-runlogs, extraction-receipts, ai-tooling.
+- See [docs/CURRENT-STATE.md](../CURRENT-STATE.md) for live numbers. At ADR promotion (2026-05-16): 326 pass + 1 skip, 5 audits green. As of 2026-05-16 EOD: 492 pass + 1 skip, 7 audits green (data-classes, secrets-rotation, planning-docs, workflow-secrets added).
 - Phase A (deploy + soak) is in flight; ends 2026-05-18 per memory.
 
 ## Rollback

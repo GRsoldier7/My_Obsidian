@@ -161,7 +161,7 @@ Enforced by [scripts/audit_workflow_credentials.py](scripts/audit_workflow_crede
 | error-handler | On error | Global error capture + email alert |
 | article-processor | 8AM + 7PM CDT | Process queued article URLs into vault notes |
 | ai-brain | Sub-workflow | Shared OpenRouter (Llama 3.3 70B) intelligence layer — called by other workflows for classify/summarize/brief/triage/review jobs |
-| job-search-pipeline | Manual / scheduled | Native n8n v3 job search pipeline (independent system) |
+| job-search-pipeline | **QUARANTINED 2026-05-16** | Credential leak — see [`docs/security/2026-05-16-INCIDENT-job-search-leak.md`](docs/security/2026-05-16-INCIDENT-job-search-leak.md). File at `workflows/quarantine/job-search-pipeline-2026-04-02-LEAKS.json`. |
 | weekend-planner | Friday 5PM CDT | Weekend plan: GCal + MTL → HTML email + vault note (INACTIVE — needs GCAL_CRED_ID) |
 
 **Repo layout note:** v1 workflows superseded by v2 are kept under [workflows/archive/v1/](workflows/archive/v1/) for one cleanup cycle in case rollback is needed. Reference snippets (S3 upload patterns) live under [docs/snippets/](docs/snippets/), not [workflows/n8n/](workflows/n8n/).
@@ -208,9 +208,11 @@ ID mirrored in [.claude/nlm-notebook-ids.env](.claude/nlm-notebook-ids.env) (`NL
 
 **Reframe 2026-05-03:** OHO is a personal **Life Operating System** across 8 domains, not a brain-dump pipeline. v1.0 roadmap below; task-level threading explicitly wanted.
 
-**Branch:** `polish/prod-ready`, **55 commits ahead** of `master`. **PR #2 open + MERGEABLE since 2026-05-11** (`P0 + P1 + P1.5 + ADR-0006 — Life OS v1.0 foundation (live in prod)`). Four milestone waves landed this session (`179a03b` → `097892a` → `a1bd438` → `00cf972`). **Soak window** (per [ADR-0007](docs/adr/0007-master-plan-v2.md) Phase A): runs ≥7 days clean before Phase C — earliest exit **2026-05-18**.
+> **Hard numbers live at [docs/CURRENT-STATE.md](docs/CURRENT-STATE.md).** This section gives the narrative; the canonical numbers go stale here fast.
 
-**Test suite:** **326 pass, 1 skip** (was 311 mid-session, 202 pre-P1). All 5 audits green: workflow-credentials, workflow-connections, workflow-runlogs, extraction-receipts, ai-tooling.
+**Branch:** `polish/prod-ready`, **63 commits ahead** of `master`. PR #2 open + MERGEABLE since 2026-05-11. **Soak window** (per [ADR-0007](docs/adr/0007-master-plan-v2.md) Phase A): runs ≥7 days clean before Phase C — earliest exit **2026-05-18** (Day 6/7 as of this refresh).
+
+**Test suite:** **492 pass, 1 skip** (full); 450 pass in `make verify` scope. **7 offline audits green** — see [docs/CURRENT-STATE.md](docs/CURRENT-STATE.md) for the full audit roster.
 
 ### What's landed (code complete, deployment pending)
 

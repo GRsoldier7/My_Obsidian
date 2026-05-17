@@ -29,13 +29,13 @@ Yesterday's roadmap assumed the LXC↔Desktop↔VPS communication layer was gree
 
 | Claim in CLAUDE.md | Reality |
 |---|---|
-| "46 commits ahead of master, never PR'd" | ~3 commits ahead; PR #2 open + mergeable since 2026-05-11 |
+| "46 commits ahead of master, never PR'd" | now 63 commits ahead; PR #2 open + MERGEABLE since 2026-05-11 (see [docs/CURRENT-STATE.md](../CURRENT-STATE.md) for live count) |
 | Roadmap = 7 phases | Now 9 phases + 1 cross-cut wave (per v1 master roadmap) |
 | ADR-0006 fully shipped | Phase 4 (HTTP wire-in to live-dashboard-updater) **deferred** until P0.5 deploy |
 | Implicit assumption: MinIO versioning ON | Now explicit P0.5 preflight gate (codified in `deploy_oho_runner.py`) |
 | Implicit assumption: SSH direct to CT-202 | `pct exec` now first-class via `LXC_PCT_CTID` (commit `ea17af2`) |
 | No mention of agent-orch-lxc broker | **Major external dependency** — CT 215 broker is a peer system OHO must integrate with |
-| Tests: 311 pass + 1 skip | Now 326 pass, 1 skip (audit) → 284 pass on `make test` excluding e2e |
+| Tests: 311 pass + 1 skip | As of 2026-05-16 EOD: **492 pass + 1 skip** (full); 450 pass in `make verify` scope. See [docs/CURRENT-STATE.md](../CURRENT-STATE.md) for live count. |
 
 ---
 

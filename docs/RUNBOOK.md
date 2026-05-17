@@ -411,7 +411,8 @@ cp .env.example .env
 set -a && source .env && set +a
 python3 scripts/validate_env.py
 
-# 4. Run setup (creates n8n credentials + imports all 11 workflows)
+# 4. Run setup (creates n8n credentials + imports all 14 active workflows)
+#    Credentials: MinIO S3, Gmail SMTP, OpenRouter API, OHO Runner Auth.
 bash scripts/setup-n8n.sh
 
 # 5. Verify

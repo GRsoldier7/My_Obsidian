@@ -2,9 +2,9 @@
 
 > **Status:** Synthesis of 7 parallel deep-dive specs landed 2026-05-12. All linked specs live in `docs/superpowers/phases/` (operational) and `docs/superpowers/specs/` (design-deep). This doc is the **navigable index + sequencing + decision register** — depth lives in the spec files.
 
-**Date:** 2026-05-12
-**Branch:** `polish/prod-ready` (46 commits ahead of `master`, PR #2 open, mergeable, CI green)
-**Current state:** P0 + P1 + P1.5 + ADR-0006 are **code-complete; awaiting LXC deploy** to start the soak that gates everything downstream.
+**Date:** 2026-05-12 · *Superseded by [ADR-0007 Master Plan v2](../adr/0007-master-plan-v2.md). Live numbers at [docs/CURRENT-STATE.md](../CURRENT-STATE.md).*
+**Branch:** `polish/prod-ready` (numbers stale at write-time; see CURRENT-STATE.md)
+**Current state at write-time (2026-05-12):** P0 + P1 + P1.5 + ADR-0006 code-complete; awaiting LXC deploy. By 2026-05-16, all four had deployed and soak Day 6/7 was underway.
 
 ---
 
