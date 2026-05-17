@@ -2,7 +2,7 @@
 
 **As of:** 2026-05-16 — Day 6/7 of P0.5 soak window
 **Branch:** `polish/prod-ready` · **PR:** [#2](https://github.com/GRsoldier7/My_Obsidian/pull/2) open + MERGEABLE
-**Commits ahead of `master`:** 63
+**Commits ahead of `master`:** 65 (polish/prod-ready) + isolated branch `feature/phase-c-f-skeletons` carrying 1 commit pre-staging task_id + privacy_classifier for Mon merge
 **Soak exit (earliest):** Mon **2026-05-18**
 
 This document is the SINGLE source of truth for "where are we?" Every other doc that quotes commit counts / test counts / phase status should link here rather than repeat the numbers.
@@ -15,13 +15,14 @@ Last refresh: 2026-05-16 (auto-regenerable from `make audit-all` + `git rev-list
 
 | Metric | Value | Source |
 |---|---|---|
-| Commits ahead of `master` | **63** | `git rev-list --left-right --count master...HEAD` |
-| Test suite (full) | **492 pass, 1 skip** | `python3 -m pytest --tb=no -q` |
-| Test suite (`make verify` scope) | **450 pass** | `make verify` (excludes e2e + integration) |
-| Offline audits | **7 green** | see below |
+| Commits ahead of `master` (polish/prod-ready) | **65** | `git rev-list --left-right --count master...HEAD` |
+| Test suite (full, polish/prod-ready) | **516 pass + 1 skip** | `python3 -m pytest --tb=no -q` |
+| Test suite (`make verify` scope) | **516 pass** | `make verify` (excludes e2e + integration; new tests now inside the scope) |
+| Offline audits | **8 green** | see below |
 | Active n8n workflows | **14** | `workflows/n8n/*.json` (job-search quarantined) |
 | ADRs | **9** (0001-0006 historical, 0007 Accepted, 0008-0009 Proposed) | `docs/adr/` |
-| Eval fixtures | **15 / 200 target** | `evals/comms_privacy/` |
+| Eval fixtures | **25 / 200 target** | `evals/comms_privacy/` |
+| Pre-staged Phase F+C skeletons | branch `feature/phase-c-f-skeletons`, 36 tests | merge post-soak |
 
 ### Offline audits (all green)
 
@@ -34,8 +35,15 @@ Last refresh: 2026-05-16 (auto-regenerable from `make audit-all` + `git rev-list
 7. `audit_secrets_rotation.py` — `docs/security/secrets-rotation.md` cadence
 8. `audit_planning_docs.py` — ADR / spec / phase / runbook cross-refs
 9. `audit_workflow_secrets.py` — hardcoded creds / IDs / PII (R1-R6) — born from 2026-05-16 incident
+10. `audit_no_executecommand.py` — blocks n8n `executeCommand` regressions (P1.5); `vault-health-report.json` allowlisted until post-soak migration
 
 Run all in one shot: `make audit-all`. Pre-PR gate: `make verify` (audit-all + unit tests).
+
+### Self-healing infrastructure (active 2026-05-16)
+
+- **CI gate** — `.github/workflows/audit-pr.yml` runs every audit + unit tests on every PR + push to `master` / `polish/prod-ready`.
+- **Pre-commit hook** — `.githooks/pre-commit` runs the offline audit subset before every commit. Activate per-clone with `git config core.hooksPath .githooks`.
+- **`make verify`** — fast local pre-PR gate (audit-all + unit tests, ≤2s warm).
 
 ---
 
@@ -82,15 +90,23 @@ Run all in one shot: `make audit-all`. Pre-PR gate: `make verify` (audit-all + u
 | Privacy rule registry | `infra/data-classes.yaml` | committed + audited (10 tiers, 5 peers) |
 | Eval fixture schema | `evals/comms_privacy/README.md` | committed + 62 parametrized tests |
 | Eval harness | `scripts/run_evals.py` | committed (schema-only mode; `--run-classifier` stubbed) |
-| Eval fixtures | `evals/comms_privacy/F-*.json` | 15 / 200 |
+| Eval fixtures | `evals/comms_privacy/F-*.json` | **25 / 200** (toward Phase F day-1) |
 | Secrets rotation table | `docs/security/secrets-rotation.md` | committed + auditor |
 | Bearer rotation runbook | `docs/runbooks/rotate-telegram-token.md` | committed |
 | S3 verified-write helper | `tools/s3_verified.py` | committed + 12 tests (no callers yet) |
 | Backing-file schema (Phase C) | `docs/schemas/task-backing-file.v1.yaml` | committed |
 | Workflow-secrets audit (R1-R6) | `scripts/audit_workflow_secrets.py` | committed + 15 tests |
+| No-executeCommand audit | `scripts/audit_no_executecommand.py` | committed + 5 tests |
+| **Phase C skeleton** `tools/task_id.py` | on `feature/phase-c-f-skeletons` | 17 tests green; merge post-soak |
+| **Phase F skeleton** `tools/privacy_classifier.py` | on `feature/phase-c-f-skeletons` | 19 tests green; SKELETON_MODE=True until day-2 wiring |
 
-Phase F code (post-soak): `tools/privacy_classifier.py`, `clients/agent_orch_client.py`, comms inbox / outbox / audit endpoints on `services/oho_runner`.
-Phase C code (post-soak): `tools/task_id.py`, `scripts/migrate_threaded_tasks.py`, `scripts/audit_threaded_tasks.py`, MTL bidirectional sync.
+Phase F code (post-soak):
+  - **Skeleton merged on Mon 2026-05-18**: `tools/privacy_classifier.py` already on `feature/phase-c-f-skeletons`. Day-1 = merge + flip SKELETON_MODE to False as each tier dictionary lands.
+  - Still to write: `clients/agent_orch_client.py`, comms inbox / outbox / audit endpoints on `services/oho_runner`.
+
+Phase C code (post-soak):
+  - **Skeleton merged on Mon 2026-05-18**: `tools/task_id.py` already on `feature/phase-c-f-skeletons`. Day-1 = merge + start writing `scripts/migrate_threaded_tasks.py` against it.
+  - Still to write: `scripts/audit_threaded_tasks.py`, MTL bidirectional sync, Command Center thread-card renderer, runner endpoints `/tasks/split` `/tasks/merge` `/tasks/archive`.
 
 ---
 

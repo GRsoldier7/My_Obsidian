@@ -88,7 +88,20 @@ make audit-extraction-receipts          # Monday morning
 
 Both green → soak gate clears → Phase C / Phase F code work can begin.
 
-### 8. Once clean: promote ADRs
+### 7.5. Merge the pre-staged Phase C/F skeletons
+
+The skeletons (`tools/task_id.py` + `tools/privacy_classifier.py` + their tests) sit on `feature/phase-c-f-skeletons`. Merge into `polish/prod-ready` and PR-the-merge or fast-forward.
+
+```bash
+git checkout polish/prod-ready
+git merge --ff-only feature/phase-c-f-skeletons
+make verify    # confirm 36 new tests still green
+git push origin polish/prod-ready
+```
+
+If `--ff-only` refuses (polish/prod-ready advanced), do a regular merge and resolve any conflict — the skeleton files are new, so conflicts are unlikely.
+
+### 8. Once soak clean: promote ADRs
 
 `docs/adr/0008-cross-host-comms.md` and `docs/adr/0009-threaded-tasks.md` move from `Status: Proposed` → `Status: Accepted`. One-line edit per ADR.
 
@@ -117,10 +130,10 @@ The Sunday 8PM workflow has been silently failing since ~2026-04 (no MinIO run l
 
 ### 11. Phase C kickoff — threaded tasks (ADR-0009)
 
-Spec is detailed at `docs/superpowers/specs/2026-05-12-P2-threaded-tasks-spec.md`. Order:
+Spec at `docs/superpowers/specs/2026-05-12-P2-threaded-tasks-spec.md`. Order:
 
-1. `tools/task_id.py` — pure ID generator + tests.
-2. `scripts/migrate_threaded_tasks.py` — 3-phase Plan / Apply / Verify.
+1. ~~`tools/task_id.py` — pure ID generator + tests~~ ✅ **pre-staged on `feature/phase-c-f-skeletons` (17 tests green); merge at step 7.5 above.**
+2. `scripts/migrate_threaded_tasks.py` — 3-phase Plan / Apply / Verify, calls `task_id.generate_task_id()`.
 3. `scripts/audit_threaded_tasks.py` — 15-min cron during cutover week.
 4. MTL ↔ backing-file bidirectional sync.
 5. Command Center renderer update.
@@ -128,12 +141,16 @@ Spec is detailed at `docs/superpowers/specs/2026-05-12-P2-threaded-tasks-spec.md
 
 ### 12. Phase F kickoff — broker-client (ADR-0008)
 
-Spec is at `docs/superpowers/specs/2026-05-13-comms-layer-lxc-desktop-vps-spec.md`. The foundation (this session) seeded everything except the runtime:
+Spec at `docs/superpowers/specs/2026-05-13-comms-layer-lxc-desktop-vps-spec.md`. Foundation seeded except the runtime + dictionary wiring:
 
-1. `tools/privacy_classifier.py` — reads `infra/data-classes.yaml` (already committed).
+1. ~~`tools/privacy_classifier.py` — reads `infra/data-classes.yaml`~~ ✅ **pre-staged on `feature/phase-c-f-skeletons` (19 tests green; `SKELETON_MODE = True`); merge at step 7.5 above.**
+   - Day-2: implement Tier 3-8 dictionary lookups (kid-names / family-names / biomarkers / faith-terms / client-IDs).
+   - Day-2: implement Tier 9 PII gates (`not_in_allowlist` for emails, `luhn_check` for credit-cards).
+   - Day-2: signature verification for Tier 1 caller-asserted-override (Ed25519 against `infra/agent-keys.yaml`).
+   - Day-2: flip `SKELETON_MODE = False`; each stubbed-mode test must update in lockstep.
 2. `clients/agent_orch_client.py` — talks to CT 215.
 3. Comms endpoints on `services/oho_runner` — inbox / outbox-ack / audit-tail / health.
-4. Eval-suite expansion — fill `evals/comms_privacy/` from 15 → 200 fixtures.
+4. Eval-suite expansion — fill `evals/comms_privacy/` from 25 → 200 fixtures.
 
 ### 13. Mass-migrate S3 writes to `tools/s3_verified.py`
 
