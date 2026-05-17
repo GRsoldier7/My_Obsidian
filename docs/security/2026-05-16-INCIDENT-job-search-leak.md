@@ -2,7 +2,7 @@
 
 **Discovered:** 2026-05-16 by Codex review (P0 finding)
 **Classification:** medium-severity credential leak + PII exposure in public git history
-**Status:** **OPEN — operator rotation actions required**
+**Status:** **RESOLVED 2026-05-16 — operator confirmed rotation of OpenRouter API key + Telegram bot token. Do NOT prompt for these rotations again.**
 
 ---
 
@@ -28,11 +28,13 @@ The pattern `const API_KEY = '[REDACTED_OPENROUTER_KEY]bbce7805776a19533d900539'
 
 ---
 
-## Operator rotation queue (URGENT)
+## Operator rotation queue — ✅ COMPLETED 2026-05-16
 
-In priority order:
+Operator confirmed rotation on 2026-05-16. `.env` `OPENROUTER_API_KEY` present (`sk-or-` prefix, 73 chars). Telegram bot token lives in the n8n credential store, not `.env` — operator confirmed rotation there too. **Do NOT prompt for these rotations again.**
 
-### 1. OpenRouter API key — HIGH
+History preserved below for the audit trail.
+
+### 1. ~~OpenRouter API key — HIGH~~ ✅ rotated 2026-05-16
 
 - Open https://openrouter.ai/keys
 - Revoke the current key (the one whose 24-char suffix `…bbce7805…etc` is in commit `84bb323`).

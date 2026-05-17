@@ -4,30 +4,17 @@ Single ordered list. Highest priority at top. Cross-references [CURRENT-STATE.md
 
 ---
 
-## 🔴 Operator-only — do today (you only, Claude cannot)
+## ✅ Completed 2026-05-16 — do NOT re-prompt
 
-### 1. Rotate OpenRouter API key — INCIDENT-CLASS
+### ~~1. Rotate OpenRouter API key~~ ✅ rotated 2026-05-16
 
-Per [`docs/security/2026-05-16-INCIDENT-job-search-leak.md`](security/2026-05-16-INCIDENT-job-search-leak.md):
+Operator confirmed. Key present in `.env` (`sk-or-` prefix, 73 chars). n8n cred refreshed. Incident at [`docs/security/2026-05-16-INCIDENT-job-search-leak.md`](security/2026-05-16-INCIDENT-job-search-leak.md) marked RESOLVED. **Do not prompt for this rotation again.** Next due: 2026-08-14 (90d cadence).
 
-```bash
-# 1. https://openrouter.ai/keys → revoke the current key
-# 2. Issue a new key, copy it
-# 3. Update .env
-#       OPENROUTER_API_KEY=<new-key>
-# 4. Update n8n cred "OpenRouter API" at http://192.168.1.121:5678
-# 5. Bump the row in docs/security/secrets-rotation.md
-#       last_rotated: 2026-05-16   next_due: 2026-08-14
-# 6. Verify:
-make audit-all
-make verify
-```
+### ~~2. Rotate Telegram bot token~~ ✅ rotated 2026-05-16
 
-**Why now:** 24-char suffix in public git history since 2026-04-02. Rotation IS the remediation. History rewrite is optional.
+Operator confirmed. Lives in n8n cred only (not `.env` — by operator preference). Next due: 2026-08-14. **Do not prompt for this rotation again.**
 
-### 2. Rotate Telegram bot token
-
-Per [`docs/runbooks/rotate-telegram-token.md`](runbooks/rotate-telegram-token.md). Unblocks both this repo and `agent-orch-lxc` Phase 4. ≤15 min @BotFather + 2 file edits + cred update.
+## 🔴 Operator-only — outstanding
 
 ### 3. GCAL OAuth → `GCAL_CRED_ID`
 

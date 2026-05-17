@@ -113,11 +113,11 @@ Phase C code (post-soak):
 
 ## Open incidents
 
-### 2026-05-16 — job-search-pipeline credential leak (OPEN)
+### 2026-05-16 — job-search-pipeline credential leak (RESOLVED)
 
 - **File:** quarantined to `workflows/quarantine/job-search-pipeline-2026-04-02-LEAKS.json`.
 - **Documentation:** [`docs/security/2026-05-16-INCIDENT-job-search-leak.md`](security/2026-05-16-INCIDENT-job-search-leak.md).
-- **Status:** code remediation shipped (commit `cd27264`); **rotation queue is operator-only**.
+- **Status:** **RESOLVED 2026-05-16.** Code remediation shipped (commit `cd27264`). Operator confirmed rotation of OpenRouter API key + Telegram bot token. `last_rotated` recorded in `docs/security/secrets-rotation.md`. Do not re-prompt for these rotations.
 
 ### 2026-05-16 — vault-health-report.json uses `executeCommand` (KNOWN, post-soak)
 

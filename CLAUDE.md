@@ -293,6 +293,6 @@ Cross-host invariants: (a) one canonical `trace_id` across all hops; (b) no sens
 
 - LXC sidecar deployment — the 9-step procedure above.
 - GCAL OAuth2 → `GCAL_CRED_ID` in `.env` → re-deploy Weekend Planner.
-- **OpenRouter key rotation — URGENT** per [2026-05-16 security incident](docs/security/2026-05-16-INCIDENT-job-search-leak.md). Partial key suffix in public git history (`workflows/quarantine/job-search-pipeline-2026-04-02-LEAKS.json`).
+- ~~OpenRouter key rotation~~ ✅ **operator rotated 2026-05-16**. Incident at [docs/security/2026-05-16-INCIDENT-job-search-leak.md](docs/security/2026-05-16-INCIDENT-job-search-leak.md) is RESOLVED. Do not prompt again.
 - MTL backfill of `[due::]` (only 11% populated) and `[completion::]` (0%).
 - Step-8 decision: deprecate `--no-reset` after ≥7 days of clean receipt-audit reports.
