@@ -11,9 +11,11 @@
 # RUN ON THE PVE HOST (the LXC host). Internally pct exec's into CT-202.
 #
 # Usage:
+#   bash n8n_localhost_toggle.sh status    # show current state, no changes
+#   bash n8n_localhost_toggle.sh dry-run-on  # show EXACT diff that `on` would apply; no changes
+#   bash n8n_localhost_toggle.sh dry-run-off # show EXACT diff that `off` would apply; no changes
 #   bash n8n_localhost_toggle.sh on        # set N8N_EDITOR_BASE_URL=localhost + restart
 #   bash n8n_localhost_toggle.sh off       # remove the override + restart
-#   bash n8n_localhost_toggle.sh status    # show current state
 #
 # Safety:
 #   - set -euo pipefail throughout
@@ -29,9 +31,9 @@ readonly OVERRIDE_LINE='      - N8N_EDITOR_BASE_URL=http://localhost:5678  # OHO
 mode="${1:-status}"
 
 case "$mode" in
-  on|off|status) ;;
+  on|off|status|dry-run-on|dry-run-off) ;;
   *)
-    echo "ERROR: unknown mode '$mode'. Use one of: on | off | status" >&2
+    echo "ERROR: unknown mode '$mode'. Use one of: status | dry-run-on | dry-run-off | on | off" >&2
     exit 2
     ;;
 esac
@@ -88,6 +90,46 @@ status() {
 case "$mode" in
   status)
     status
+    ;;
+
+  dry-run-on)
+    echo "  mode:         DRY-RUN (no changes applied)"
+    if in_lxc "grep -F '$MARKER' '$COMPOSE_PATH'" >/dev/null 2>&1; then
+      echo "  → override ALREADY present; `on` would be a no-op."
+      status
+      exit 0
+    fi
+    echo "  → `on` would insert exactly this line under the n8n service environment:"
+    echo
+    echo "      $OVERRIDE_LINE"
+    echo
+    echo "  → preview of the modified region (5 lines context around insertion):"
+    in_lxc "awk -v line='$OVERRIDE_LINE' '
+      /^[[:space:]]*n8n:[[:space:]]*\$/ { in_n8n = 1 }
+      in_n8n && /environment:/ && !inserted { print; print line; inserted = 1; next }
+      { print }
+    ' '$COMPOSE_PATH' | diff -u '$COMPOSE_PATH' -" || true
+    echo
+    echo "  → would then run: docker compose up -d --force-recreate n8n"
+    echo "  → would then probe http://localhost:5678/healthz until 200."
+    echo "  Run with `on` (not `dry-run-on`) to actually apply."
+    ;;
+
+  dry-run-off)
+    echo "  mode:         DRY-RUN (no changes applied)"
+    if ! in_lxc "grep -F '$MARKER' '$COMPOSE_PATH'" >/dev/null 2>&1; then
+      echo "  → no override marker found; `off` would be a no-op."
+      exit 0
+    fi
+    echo "  → `off` would REMOVE these line(s) (marker: $MARKER):"
+    in_lxc "grep -nF '$MARKER' '$COMPOSE_PATH'" || true
+    echo
+    echo "  → preview (diff of resulting file vs current):"
+    in_lxc "grep -vF '$MARKER' '$COMPOSE_PATH' | diff -u '$COMPOSE_PATH' -" || true
+    echo
+    echo "  → would then run: docker compose up -d --force-recreate n8n"
+    echo "  → would then probe http://localhost:5678/healthz until 200."
+    echo "  Run with `off` (not `dry-run-off`) to actually apply."
     ;;
 
   on)
