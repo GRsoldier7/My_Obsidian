@@ -98,19 +98,19 @@ audit-ai-tooling:
 
 # ── Operational targets ───────────────────────────────────────────────────────
 
-## Tail today's brain-dump-processor log from MinIO
+## Pretty-print a workflow run-log from MinIO. Defaults: today's
+## brain-dump-processor. Override:
+##   make ENV=1 logs WORKFLOW=daily-note-creator
+##   make ENV=1 logs WORKFLOW=link-enricher DATE=2026-05-25
+##   make ENV=1 logs WORKFLOW=morning-briefing LIST=1     # list available dates
+WORKFLOW ?= brain-dump-processor
+DATE ?=
+LIST ?=
 logs:
-	$(ENV_PREFIX) $(PYTHON) -c "\
-import boto3, json, os, datetime; \
-from botocore.client import Config; \
-s3 = boto3.client('s3', endpoint_url=os.environ['MINIO_ENDPOINT'], \
-    aws_access_key_id=os.environ['MINIO_ACCESS_KEY'], \
-    aws_secret_access_key=os.environ['MINIO_SECRET_KEY'], \
-    config=Config(signature_version='s3v4'), region_name='us-east-1'); \
-today = datetime.date.today().strftime('%Y-%m-%d'); \
-key = f'99_System/logs/brain-dump-processor-{today}.json'; \
-log = s3.get_object(Bucket=os.environ.get('MINIO_BUCKET','obsidian-vault'), Key=key)['Body'].read(); \
-print(json.dumps(json.loads(log), indent=2))"
+	$(ENV_PREFIX) $(PYTHON) scripts/tail_log.py \
+		--workflow $(WORKFLOW) \
+		$(if $(DATE),--date $(DATE)) \
+		$(if $(LIST),--list)
 
 ## Run brain dump processor manually (verbose)
 run:
@@ -127,6 +127,11 @@ build-home:
 ## Drop / refresh the audit-only README in 00_Inbox/processed/. Idempotent.
 processed-readme:
 	$(ENV_PREFIX) $(PYTHON) tools/write_processed_readme.py
+
+## Render the Wave-X H3 health dashboard at 99_System/health.md.
+## Rolls up the last 14 days of run-logs from MinIO into one human pane.
+health-dashboard:
+	$(ENV_PREFIX) $(PYTHON) tools/build_health_dashboard.py
 
 ## End-to-end LXC sidecar deploy (DRY-RUN — no changes; preview the plan).
 deploy-runner-dry:
