@@ -14,6 +14,12 @@ on:
 
 permissions:
   contents: read
+  # `pull-requests: write` lets the failure-notification step post a
+  # diagnostic comment on the open PR. Read-only repos can't comment, so
+  # the inline failure stays buried in the Actions tab — which is exactly
+  # how this workflow stayed broken for 2 days unnoticed (pytest-respx
+  # typo, 2026-05-17 → 2026-05-19).
+  pull-requests: write
 
 jobs:
   offline-audits:
@@ -43,4 +49,63 @@ jobs:
       # which calls the same target. One source of truth so CI cannot drift
       # from the local pre-PR gate.
       - name: Audit suite + unit tests (single entry)
+        id: audit
         run: make audit-ci
+
+      # Failure-notification: on PR runs, post a sticky diagnostic comment
+      # so the failure is visible in the PR thread (not just in the
+      # Actions tab nobody reads). No `github.event.*` user-input is
+      # interpolated into shell — only the static run URL.
+      - name: Post failure comment on PR
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const runUrl = process.env.RUN_URL;
+            const sha = process.env.HEAD_SHA;
+            const marker = '<!-- oho-audit-failure-comment -->';
+            const body = [
+              marker,
+              `### ❌ Offline audits + unit tests failed`,
+              ``,
+              `Commit: \`${sha.substring(0,7)}\``,
+              ``,
+              `Run: ${runUrl}`,
+              ``,
+              `Reproduce locally:`,
+              ``,
+              '```bash',
+              'make verify     # offline audits + unit tests',
+              'make audit-ci   # add the evals schema check too (matches CI)',
+              '```',
+              ``,
+              `Hint: if you added a new dep, also add it to`,
+              `\`requirements-dev.txt\` so CI can install it.`,
+            ].join('\n');
+
+            // Find an existing audit-failure comment to edit (sticky).
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+            const existing = comments.find(c => (c.body || '').includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body,
+              });
+            }
