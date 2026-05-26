@@ -3,6 +3,11 @@
 tools/write_processed_readme.py
 ADR-0006 — drop ! README.md into 00_Inbox/processed/ to mark it audit-only.
 
+**Status (2026-05-25):** MANUAL-ONLY tool. Invoked exclusively by
+`make processed-readme`. No cron, no n8n workflow, no oho-runner endpoint.
+Unit-test coverage 0% by design (single S3-write, idempotent). Promote to
+LIVE-UNTESTED + add a pytest module before wiring into any cron.
+
 The processed/ folder accumulates one markdown file per source per processed-day
 (audit trail of what extracted and where it went). It is NOT for human reading.
 Operator output lives in 000_Master Dashboard/!!! DAILY COMMAND CENTER.md.

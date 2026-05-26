@@ -3,6 +3,12 @@
 tools/build_pipeline_health.py
 Layer 1 of the observability stack — surfaces n8n workflow truth into the vault.
 
+**Status (2026-05-25):** MANUAL-ONLY tool. No cron, no Makefile target, not
+wired into oho-runner. Unit-test coverage 0% — promote to LIVE-UNTESTED and
+add a pytest module before scheduling this into any workflow. Wave-X H3
+(`tools/build_health_dashboard.py`) is the canonical replacement; this
+script stays as a deep-dive utility for manual investigation.
+
 Outputs:
     99_System/Pipeline Health.md   (always)
     00_Inbox/daily-summary.md      (when --daily-summary flag is set)
