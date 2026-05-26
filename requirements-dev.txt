@@ -22,3 +22,10 @@ pyyaml>=6.0,<7
 # AWS SDK — used by tools/s3_verified.py + MinIO interactions in tests
 boto3>=1.34.0
 botocore>=1.34.0
+
+# S3 mock for tests/test_health_check.py, tests/test_backfill_mtl_metadata.py,
+# tests/conftest.py — without this, those tests silently `pytest.skip`. CI
+# was skipping the moto-gated paths every run since 2026-05-17 because
+# `pip install pyyaml pytest pytest-asyncio …` (the old inline list)
+# omitted moto entirely. Coverage gap → invisible.
+moto>=5.0,<6
