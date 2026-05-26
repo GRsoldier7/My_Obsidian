@@ -1,0 +1,24 @@
+# Development + CI dependencies for OHO.
+#
+# Source-of-truth for the audit-pr.yml workflow + local dev shells. If a dep
+# is added to a test or a script, add it here so CI and local stay in lockstep.
+# Production deps live in requirements.txt (kept minimal; runner sidecar has
+# its own services/oho_runner/requirements.txt).
+
+# Test runner + plugins
+pytest>=8.0.0,<10
+pytest-asyncio>=0.23,<2
+pytest-cov>=4.1,<8
+
+# HTTP mocking — note: PyPI package is `respx`, NOT `pytest-respx`
+# (respx auto-registers as a pytest plugin via entry points).
+respx>=0.21,<1
+httpx>=0.27,<1
+anyio>=4.0,<5
+
+# YAML loader used by audits + data-classes contract
+pyyaml>=6.0,<7
+
+# AWS SDK — used by tools/s3_verified.py + MinIO interactions in tests
+boto3>=1.34.0
+botocore>=1.34.0
