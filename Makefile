@@ -20,7 +20,7 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: setup test e2e health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry gcal-status gcal-create gcal-finalize backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-no-executecommand audit-no-argv-secrets audit-slo evals audit-all
+.PHONY: setup test e2e integration health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry gcal-status gcal-create gcal-finalize backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-slo evals audit-all audit-ci hooks-install bootstrap-dev
 
 PYTHON := python3
 # Always invoke pytest via the same interpreter as PYTHON — avoids the case
@@ -185,6 +185,14 @@ audit-planning-docs:
 audit-workflow-secrets:
 	$(PYTHON) scripts/audit_workflow_secrets.py
 
+## Enforce canonical skip_reason enum + status:"skipped" always carries a reason.
+audit-workflow-runlogs:
+	$(PYTHON) scripts/audit_workflow_runlogs.py
+
+## Enforce emailSend top-level emailFormat=html (n8n 2.13.4 silent-blank-email bug).
+audit-workflow-email-format:
+	$(PYTHON) scripts/audit_workflow_email_format.py
+
 ## Block n8n-nodes-base.executeCommand regressions (P1.5 / vault-health-report breakage).
 ## vault-health-report.json allowlisted until its post-soak migration to httpRequest.
 audit-no-executecommand:
@@ -204,15 +212,46 @@ evals:
 	$(PYTHON) scripts/run_evals.py
 
 ## Run every offline audit in one shot (use as a pre-merge gate).
-audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-no-executecommand audit-no-argv-secrets audit-slo
+## `audit-extraction-receipts` deliberately NOT included — it needs live MinIO
+## and runs as a separate daily soak signal, not on every PR.
+audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-slo
 	@echo "✓ All offline audits passed."
 
-## Pre-PR gate: every offline audit + unit tests. ≤30s on a warm cache.
+## Pre-PR gate (local): every offline audit + unit tests. ≤30s on a warm cache.
 verify: audit-all
 	$(PYTEST) tests/ -q --tb=short \
 		--ignore=tests/test_process_brain_dump_e2e.py \
 		-k "not integration"
 	@echo "✓ make verify passed — safe to PR."
+
+## CI entry point (consumed by .github/workflows/audit-pr.yml). Wraps audit-all
+## + evals schema check + unit tests. Single source of truth — local `make
+## verify` and CI both ultimately run the same audit suite. If CI drifts from
+## local, this is the single line to inspect.
+audit-ci: audit-all evals
+	$(PYTEST) tests/ -q --tb=short \
+		--ignore=tests/test_process_brain_dump_e2e.py \
+		-k "not integration"
+	@echo "✓ audit-ci passed."
+
+# ── Developer environment bootstrap ───────────────────────────────────────────
+
+## Install dev dependencies + activate the per-clone pre-commit hook.
+## Run once after cloning. Idempotent. Use after pulling new dev deps too.
+bootstrap-dev:
+	$(PYTHON) -m pip install -r requirements.txt -r requirements-dev.txt
+	$(MAKE) hooks-install
+	@echo "✓ dev environment ready (deps installed + pre-commit hook active)."
+
+## Activate the .githooks/pre-commit hook for THIS clone (git config core.hooksPath).
+## Idempotent — safe to re-run. Operator-owned: never bypassable across clones.
+hooks-install:
+	@if [ ! -d .githooks ]; then \
+		echo "✗ .githooks/ missing — wrong directory or stale clone"; exit 1; \
+	fi
+	git config core.hooksPath .githooks
+	@echo "✓ pre-commit hook active (core.hooksPath=.githooks)."
+	@git config --get core.hooksPath
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
@@ -247,8 +286,13 @@ help:
 	@echo "  make audit-workflow-secrets  Scan n8n workflow JSONs for hardcoded creds/IDs/PII"
 	@echo "  make audit-no-executecommand Block n8n executeCommand regressions (P1.5)"
 	@echo "  make evals                   Privacy classifier eval harness (schema-only)"
+	@echo "  make audit-workflow-runlogs  skip_reason enum + status:\"skipped\" hygiene"
+	@echo "  make audit-workflow-email-format  Block n8n 2.13.4 silent-blank-email bug"
 	@echo "  make audit-all               Run every offline audit (pre-merge gate)"
+	@echo "  make audit-ci                CI entry point: audit-all + evals + tests"
 	@echo "  make verify                  audit-all + unit tests (pre-PR gate)"
+	@echo "  make bootstrap-dev           Install dev deps + activate pre-commit hook"
+	@echo "  make hooks-install           Activate .githooks/pre-commit for THIS clone"
 	@echo ""
 	@echo "  Tip: prefix with ENV=1 to auto-source .env:"
 	@echo "    make ENV=1 health"
