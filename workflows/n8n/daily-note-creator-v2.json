@@ -164,6 +164,16 @@
         }
       },
       "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// FALSE branch of Not Exists? — daily note already present.\n// Write a noop run log so the day is never silent (regression caught\n// 2026-05-25 after 6 weeks of empty 99_System/logs/ for this workflow).\nconst today = $('Set Today').first().json.today;\nconst log = {\n  workflow: 'daily-note-creator-v2',\n  date: today,\n  status: 'skipped',\n  skip_reason: 'daily_note_already_exists',\n  ts: new Date().toISOString()\n};\nconst buf = Buffer.from(JSON.stringify(log, null, 2), 'utf-8');\nreturn [{ json: { logKey: `99_System/logs/daily-note-creator-${today}.json`, ...log }, binary: { logFile: { data: buf.toString('base64'), mimeType: 'application/json', fileName: `daily-note-creator-${today}.json`, fileExtension: 'json', fileSize: buf.length } } }];"
+      },
+      "id": "build-noop-log",
+      "name": "Build Noop Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 420]
     }
   ],
   "connections": {
@@ -185,7 +195,7 @@
     "Not Exists?": {
       "main": [
         [{"node": "S3: Read MTL", "type": "main", "index": 0}],
-        []
+        [{"node": "Build Noop Log", "type": "main", "index": 0}]
       ]
     },
     "S3: Read MTL": {
@@ -209,6 +219,11 @@
       ]
     },
     "Build Run Log": {
+      "main": [
+        [{"node": "S3: Write Run Log", "type": "main", "index": 0}]
+      ]
+    },
+    "Build Noop Log": {
       "main": [
         [{"node": "S3: Write Run Log", "type": "main", "index": 0}]
       ]

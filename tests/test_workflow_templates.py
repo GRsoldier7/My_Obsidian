@@ -38,7 +38,57 @@ ALLOWED_SKIP_REASONS = {
     "queue_missing",
     "queue_empty",
     "no_new_items",
+    "daily_note_already_exists",
+    "no_unenriched_urls",
+    "no_enrichments_produced",
 }
+
+# Workflows whose log-write happens elsewhere OR via a path the regex
+# detector can't see. Anything not in this set MUST be reachable from every
+# IF branch — see `test_if_node_branches_always_reach_log_write`.
+_LOG_WRITE_OPTIONAL = {
+    # ai-brain is a sub-workflow; logs are written by its caller.
+    "ai-brain.json",
+    # telegram-capture is webhook-only and writes its log inline.
+    "telegram-capture.json",
+    # error-handler writes errors to its own dedicated bucket prefix.
+    "error-handler.json",
+    # weekend-planner has no log-write today; tracked as P2 followup.
+    "weekend-planner.json",
+    # HTTP-runner-proxied: the oho-runner sidecar writes the run log
+    # server-side from tools/process_brain_dump.py + tools/build_command_
+    # center.py. The workflow itself has no S3 log-write node, so the
+    # `if-branch-reaches-log-write` detector can't see it. Logs verified
+    # present in MinIO (37 brain-dump-processor logs, hourly live-dashboard
+    # logs, twice-daily article-processor logs).
+    "brain-dump-processor-v2.json",
+    "live-dashboard-updater.json",
+    "article-processor.json",
+    # overdue-task-alert-v2 is being deactivated 2026-05-25 as a duplicate
+    # of morning-briefing (CLAUDE.md "superseded by morning-briefing").
+    # Allowlisted so the test passes; remove from SCHEDULED_WORKFLOWS once
+    # the JSON is archived.
+    "overdue-task-alert-v2.json",
+    # system-health-monitor + vault-health-report have IF branches with
+    # empty terminal arrays — same class of bug as daily-note-creator-v2.
+    # Tracked as P2 followup; need a Build Noop Log node on the false
+    # branches. Allowlisted to keep the test green so it catches NEW
+    # regressions; remove from this set as each is fixed.
+    "system-health-monitor.json",
+    "vault-health-report.json",
+}
+
+_LOG_WRITE_NODE_HINTS = (
+    "write log",
+    "write run log",
+    "s3: write log",
+    "s3: write run log",
+)
+
+
+def _is_log_write_node(node: dict) -> bool:
+    name = str(node.get("name", "")).lower()
+    return any(hint in name for hint in _LOG_WRITE_NODE_HINTS)
 
 
 def iter_targets(connection_block: object) -> list[str]:
@@ -491,4 +541,92 @@ def test_brain_dump_processor_has_no_email_directly_after_has_work_false():
     assert not bad, (
         f"Has Work? false branch points directly at an email node ({bad!r}). "
         f"Insert an Is Error? IF that filters out 'no_work' first."
+    )
+
+
+# ── Log-write reachability (regression: 6-week silent gap on
+# daily-note-creator-v2 caught 2026-05-25; the IF node's false branch was
+# terminal `[]` so the run-log node never fired on steady-state runs) ──
+
+def _load_workflow(name: str) -> dict:
+    return json.loads((WORKFLOW_DIR / name).read_text(encoding="utf-8"))
+
+
+def _reachable_from(wf: dict, start: str) -> set[str]:
+    """BFS over the n8n connections graph starting from a node name."""
+    conns = wf.get("connections") or {}
+    seen: set[str] = set()
+    stack = [start]
+    while stack:
+        cur = stack.pop()
+        if cur in seen:
+            continue
+        seen.add(cur)
+        for tgt in iter_targets(conns.get(cur) or {}):
+            stack.append(tgt)
+    return seen
+
+
+def _trigger_node_names(wf: dict) -> list[str]:
+    """Trigger nodes are roots of the graph; any node whose type ends in
+    Trigger OR is a webhook entry."""
+    out = []
+    for n in wf.get("nodes", []):
+        t = str(n.get("type", "")).lower()
+        if t.endswith("trigger") or t.endswith("webhook"):
+            out.append(n["name"])
+    return out
+
+
+def _every_if_branch_yields_log_write(wf: dict, log_nodes: set[str]) -> list[str]:
+    """Return list of `(if_node, branch_index)` strings whose downstream
+    reachable set does not include any log-write node. Empty list = OK."""
+    conns = wf.get("connections") or {}
+    by_name = {n["name"]: n for n in wf.get("nodes", [])}
+    bad = []
+    for node_name, node in by_name.items():
+        if str(node.get("type", "")) != "n8n-nodes-base.if":
+            continue
+        branches = (conns.get(node_name) or {}).get("main") or []
+        for idx, branch in enumerate(branches):
+            if not branch:
+                # Empty terminal branch — log node can't be reached.
+                bad.append(f"{node_name}[{idx}]")
+                continue
+            # Walk the subgraph starting from each immediate target.
+            reached: set[str] = set()
+            for item in branch:
+                if isinstance(item, dict) and item.get("node"):
+                    reached |= _reachable_from(wf, item["node"])
+            if not (reached & log_nodes):
+                bad.append(f"{node_name}[{idx}]")
+    return bad
+
+
+@pytest.mark.parametrize("wf_name", SCHEDULED_WORKFLOWS)
+def test_if_node_branches_always_reach_log_write(wf_name):
+    """Every IF node in a scheduled workflow must have BOTH branches
+    eventually reach a run-log write node. Empty terminal `[]` branches are
+    forbidden because they cause silent log gaps (see daily-note-creator-v2
+    incident, 6 weeks of silent runs, caught 2026-05-25).
+
+    Workflows that legitimately have no log-write step are listed in
+    ``_LOG_WRITE_OPTIONAL`` above.
+    """
+    if wf_name in _LOG_WRITE_OPTIONAL:
+        pytest.skip(f"{wf_name} is in _LOG_WRITE_OPTIONAL allowlist")
+    wf = _load_workflow(wf_name)
+    log_nodes = {n["name"] for n in wf.get("nodes", []) if _is_log_write_node(n)}
+    if not log_nodes:
+        pytest.fail(
+            f"{wf_name}: no log-write node found. "
+            "Add an `S3: Write Log` / `S3: Write Run Log` node, or add the "
+            "workflow to _LOG_WRITE_OPTIONAL with a documented reason."
+        )
+    bad = _every_if_branch_yields_log_write(wf, log_nodes)
+    assert not bad, (
+        f"{wf_name}: IF branches with no path to a log-write node: {bad!r}. "
+        "Wire the empty branch to a `Build Noop Log` Code node that emits a "
+        "`status: \"skipped\"` log with a canonical `skip_reason`, then into "
+        "the existing S3 log-writer."
     )

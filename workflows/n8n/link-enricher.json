@@ -236,6 +236,26 @@
         }
       },
       "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// FALSE branch of `Has URLs to Enrich?` — no unenriched URLs in source file.\n// Always write a noop run log so the hour is never silent. Regression\n// caught 2026-05-25: this hourly workflow had ZERO log objects in MinIO\n// despite being active.\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst log = {\n  workflow: 'link-enricher',\n  run_date: today,\n  finished_at: new Date().toISOString(),\n  status: 'skipped',\n  skip_reason: 'no_unenriched_urls'\n};\nconst buf = Buffer.from(JSON.stringify(log, null, 2), 'utf-8');\nconst logKey = `99_System/logs/link-enricher-${today}.json`;\nreturn [{ json: { logKey, ...log }, binary: { logFile: { data: buf.toString('base64'), mimeType: 'application/json', fileName: logKey.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
+      },
+      "id": "build-noop-log-no-urls",
+      "name": "Build Noop Log (No URLs)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 520]
+    },
+    {
+      "parameters": {
+        "jsCode": "// FALSE branch of `Has Enrichments?` — URLs found but extraction produced\n// nothing usable (page fetch failures, schema misses). Skip-reason kept as\n// a literal so scripts/audit_workflow_runlogs.py enum match works.\nconst today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst log = {\n  workflow: 'link-enricher',\n  run_date: today,\n  finished_at: new Date().toISOString(),\n  status: 'skipped',\n  skip_reason: 'no_enrichments_produced'\n};\nconst buf = Buffer.from(JSON.stringify(log, null, 2), 'utf-8');\nconst logKey = `99_System/logs/link-enricher-${today}.json`;\nreturn [{ json: { logKey, ...log }, binary: { logFile: { data: buf.toString('base64'), mimeType: 'application/json', fileName: logKey.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
+      },
+      "id": "build-noop-log-no-enrich",
+      "name": "Build Noop Log (No Enrichments)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1760, 520]
     }
   ],
   "connections": {
@@ -281,7 +301,13 @@
             "index": 0
           }
         ],
-        []
+        [
+          {
+            "node": "Build Noop Log (No URLs)",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "HTTP: Fetch Page": {
@@ -331,7 +357,35 @@
             "index": 0
           }
         ],
-        []
+        [
+          {
+            "node": "Build Noop Log (No Enrichments)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Noop Log (No URLs)": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Noop Log (No Enrichments)": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },

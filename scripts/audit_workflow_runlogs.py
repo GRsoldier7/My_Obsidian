@@ -44,6 +44,12 @@ ALLOWED_SKIP_REASONS = {
     "queue_missing",
     "queue_empty",
     "no_new_items",
+    # Added 2026-05-25 alongside daily-note-creator / link-enricher
+    # noop-log fixes (regression: silent log gaps caught after weeks).
+    # Mirror in tests/test_workflow_templates.ALLOWED_SKIP_REASONS.
+    "daily_note_already_exists",
+    "no_unenriched_urls",
+    "no_enrichments_produced",
 }
 
 _SKIP_REASON_RE = re.compile(r"""skip_reason\s*:\s*['"]([a-z_]+)['"]""")
