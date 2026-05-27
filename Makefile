@@ -20,7 +20,7 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: setup test e2e integration health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry gcal-status gcal-create gcal-finalize backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-slo evals audit-all audit-ci hooks-install bootstrap-dev
+.PHONY: setup test e2e integration health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry gcal-status gcal-create gcal-finalize backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-no-unverified-put-object audit-slo evals audit-all audit-ci hooks-install bootstrap-dev
 
 PYTHON := python3
 # Always invoke pytest via the same interpreter as PYTHON — avoids the case
@@ -205,6 +205,11 @@ audit-no-executecommand:
 
 ## Block argv-secret-leak regressions (Codex P0 #2). setup-n8n.sh + deploy_oho_runner.py
 ## allowlisted until their post-soak argv-hygiene refactors land.
+## Block new unverified s3.put_object() call sites (Codex P1 / item 13 migration guard).
+## Known violators allowlisted; remove from allowlist as each file migrates to s3_verified.*.
+audit-no-unverified-put-object:
+	$(PYTHON) scripts/audit_no_unverified_put_object.py
+
 audit-no-argv-secrets:
 	$(PYTHON) scripts/audit_no_argv_secrets.py --allowlist setup-n8n.sh --allowlist deploy_oho_runner.py
 
@@ -219,7 +224,7 @@ evals:
 ## Run every offline audit in one shot (use as a pre-merge gate).
 ## `audit-extraction-receipts` deliberately NOT included — it needs live MinIO
 ## and runs as a separate daily soak signal, not on every PR.
-audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-slo
+audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-no-unverified-put-object audit-slo
 	@echo "✓ All offline audits passed."
 
 ## Pre-PR gate (local): every offline audit + unit tests. ≤30s on a warm cache.
