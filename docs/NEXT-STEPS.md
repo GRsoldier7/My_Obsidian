@@ -110,6 +110,47 @@ The Sunday 8PM workflow has been silently failing since ~2026-04 (no MinIO run l
 - Add audit: `tests/test_workflow_no_executecommand.py` that asserts NO workflow JSON uses `n8n-nodes-base.executeCommand`.
 - Test: simulated run, verify findings JSON makes it to the email.
 
+**Note on the silent S3-list bail caught 2026-05-27:** while investigating
+item 10b below, the execution trace for `vault-health-report` showed it
+bailing at `S3: List Brain Dumps` (the first S3 node after `Set Dates`)
+before reaching the `executeCommand` node at all. Two bugs stacked:
+(a) the `executeCommand` one tracked here, and (b) the same S3-empty-output
+class flagged in 10b. The fix for (a) will likely sidestep (b) by replacing
+the entire S3-list + Code-collect chain with an `httpRequest` to the runner.
+Verify both during item 10's smoke test.
+
+### 10b. Fix `system-health-monitor.json` silent S3-chain bail (NEW, 2026-05-27)
+
+Workflow active per n8n API, fires every 6h, n8n reports `status: success`
+on every run — but ZERO log objects in MinIO since deployed. Execution
+trace `lastNodeExecuted = S3: Check North Star` (bails after 3 of ~10
+nodes). 30-34 ms runtime — far too fast for the full S3 chain.
+
+**Hypothesis (unproven without live deploy):** `n8n-nodes-base.s3` `headObject`
+op in n8n 2.x doesn't emit a downstream item when the file exists +
+`continueOnFail: true` (it only emits an item when the file 404s, via the
+error path). `daily-note-creator-v2` survives because its file usually
+404s at cron time (file doesn't exist for today yet). `system-health-monitor`
+chains `headObject` → `headObject` against files that always exist → first
+headObject succeeds silently, no item passes, chain dies.
+
+**Diff vs working pattern:**
+
+- daily-note-creator-v2 (works): `Code (Set Today)` → `S3 headObject` → `IF (Not Exists?)` — IF tolerates empty items
+- system-health-monitor (broken): `Code (Init Checks)` → `S3 headObject` → `S3 headObject` → `Code (Evaluate)` — second S3 needs an input item, doesn't get one
+
+**Three fix options (pick one when this lands):**
+
+1. **`alwaysOutputData: true`** on both `S3: Check North Star` and `S3: Check MTL`. One-line per node. Cheapest. Test by triggering manually post-deploy + checking MinIO for `health-monitor-*.json` within 1 minute.
+
+2. **Replace headObject with httpRequest HEAD** against MinIO directly. More portable, no n8n S3 quirk. ~10 lines per check.
+
+3. **Move both checks into one Code node** that uses `boto3` / fetch to do both HEADs and emit a single item. Most refactor; eliminates the chained-S3 pattern entirely.
+
+Recommend (1) for first deploy; if still broken, jump to (2). Worth fixing alongside item 10 so we have a complete deploy of the health-workflow tier.
+
+**Allowlisted in `tests/test_workflow_templates._LOG_WRITE_OPTIONAL` so CI stays green; remove from the allowlist once the proven-working JSON lands.**
+
 ### 11. Phase C kickoff — threaded tasks (ADR-0009)
 
 Spec at `docs/superpowers/specs/2026-05-12-P2-threaded-tasks-spec.md`. Order:
