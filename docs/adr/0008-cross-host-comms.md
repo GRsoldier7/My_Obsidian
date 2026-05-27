@@ -1,6 +1,6 @@
 # ADR-0008: Cross-Host Comms Envelope + Transport
 
-**Status:** Proposed (design-only; promote to Accepted at Phase F implementation start) · **Date:** 2026-05-16 · **Soak-gated by:** [ADR-0007](0007-master-plan-v2.md) Phase A
+**Status:** Accepted — Phase F implementation kicked off; skeleton landed on `polish/prod-ready` (`tools/privacy_classifier.py` + `clients/agent_orch_client.py` + tests, currently `SKELETON_MODE = True` until day-2 dictionary wiring). · **Date:** 2026-05-16 · **Accepted:** 2026-05-27 · **Soak gate:** ✅ cleared 2026-05-18
 
 **Full design spec:** [`docs/superpowers/specs/2026-05-13-comms-layer-lxc-desktop-vps-spec.md`](../superpowers/specs/2026-05-13-comms-layer-lxc-desktop-vps-spec.md)
 

@@ -1,6 +1,6 @@
 # ADR-0009: Threaded Tasks — Stable Task Identity Across Edits
 
-**Status:** Proposed (design-only; promote to Accepted at Phase C kickoff post-soak) · **Date:** 2026-05-16 · **Soak-gated by:** [ADR-0007](0007-master-plan-v2.md) Phase A
+**Status:** Accepted — Phase C kickoff: skeleton landed on `polish/prod-ready` (`tools/task_id.py` + `scripts/migrate_threaded_tasks.py` + tests, Plan phase IMPLEMENTED; Apply/Verify stubs pending day-2 work). · **Date:** 2026-05-16 · **Accepted:** 2026-05-27 · **Soak gate:** ✅ cleared 2026-05-18
 
 **Full design spec:** [`docs/superpowers/specs/2026-05-12-P2-threaded-tasks-spec.md`](../superpowers/specs/2026-05-12-P2-threaded-tasks-spec.md)
 
