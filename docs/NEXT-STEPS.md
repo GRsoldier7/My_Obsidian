@@ -20,17 +20,21 @@ Operator confirmed. Lives in n8n cred only (not `.env` — by operator preferenc
 
 n8n cred shell `uAySKd53I6zgvFjx` already exists in n8n DB (POSTed during prior session). Google client redirect URI must include the Tailscale FQDN. Three steps:
 
-1. **Update Google OAuth client redirect URIs** at https://console.cloud.google.com/auth/clients → add (or replace localhost with):
-   ```
-   https://n8n.tailfab8a7.ts.net/rest/oauth2-credential/callback
-   ```
-2. **Click consent** in browser: https://n8n.tailfab8a7.ts.net/credentials/uAySKd53I6zgvFjx → "Sign in with Google" → Allow.
+1. **Update Google OAuth client redirect URIs** at [console.cloud.google.com/auth/clients](https://console.cloud.google.com/auth/clients) → add (or replace localhost with):
+
+    ```text
+    https://n8n.tailfab8a7.ts.net/rest/oauth2-credential/callback
+    ```
+
+2. **Click consent** in browser: [n8n cred page](https://n8n.tailfab8a7.ts.net/credentials/uAySKd53I6zgvFjx) → "Sign in with Google" → Allow.
+
 3. After consent, run from laptop:
-   ```bash
-   set -a && source .env && set +a
-   make gcal-finalize         # writes GCAL_CRED_ID=uAySKd53I6zgvFjx to .env
-   bash scripts/setup-n8n.sh  # re-deploys Weekend Planner with cred wired
-   ```
+
+    ```bash
+    set -a && source .env && set +a
+    make gcal-finalize         # writes GCAL_CRED_ID=uAySKd53I6zgvFjx to .env
+    bash scripts/setup-n8n.sh  # re-deploys Weekend Planner with cred wired
+    ```
 
 Tailscale serve already gives n8n a public-TLD HTTPS hostname → Google accepts the redirect URI directly. No localhost/SSH-tunnel/restart trick needed. The `scripts/n8n_localhost_toggle.sh` is FALLBACK for environments without Tailscale.
 
