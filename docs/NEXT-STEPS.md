@@ -16,35 +16,31 @@ Operator confirmed. Lives in n8n cred only (not `.env` — by operator preferenc
 
 ## 🔴 Operator-only — outstanding
 
-### 3. GCAL OAuth → `GCAL_CRED_ID`
+### 3. GCAL OAuth → `GCAL_CRED_ID` (cred shell created; consent step remaining)
 
-n8n UI → Credentials → Google Calendar OAuth2 → consent → copy ID → `.env` → re-deploy Weekend Planner.
+n8n cred shell `uAySKd53I6zgvFjx` already exists in n8n DB (POSTed during prior session). Google client redirect URI must include the Tailscale FQDN. Three steps:
+
+1. **Update Google OAuth client redirect URIs** at https://console.cloud.google.com/auth/clients → add (or replace localhost with):
+   ```
+   https://n8n.tailfab8a7.ts.net/rest/oauth2-credential/callback
+   ```
+2. **Click consent** in browser: https://n8n.tailfab8a7.ts.net/credentials/uAySKd53I6zgvFjx → "Sign in with Google" → Allow.
+3. After consent, run from laptop:
+   ```bash
+   set -a && source .env && set +a
+   make gcal-finalize         # writes GCAL_CRED_ID=uAySKd53I6zgvFjx to .env
+   bash scripts/setup-n8n.sh  # re-deploys Weekend Planner with cred wired
+   ```
+
+Tailscale serve already gives n8n a public-TLD HTTPS hostname → Google accepts the redirect URI directly. No localhost/SSH-tunnel/restart trick needed. The `scripts/n8n_localhost_toggle.sh` is FALLBACK for environments without Tailscale.
 
 ---
 
 ## 🟡 Operator-when-ready (any order, no urgency)
 
-### 4. Land the held artifacts
+### ~~4. Land the held artifacts~~ ✅ landed 2026-05-17 (`a6d2b2d`) + extended 2026-05-25 (`7a38f5f`, `36ed420`)
 
-`.github/workflows/audit-pr.yml` + `.githooks/pre-commit` are drafted, tested, ready. Both introduce durable persistence (durable-policy hold). Land:
-
-```bash
-git add .github/workflows/audit-pr.yml .githooks/pre-commit
-git commit -m "ci: every-PR audit gate + local pre-commit hook"
-git push origin polish/prod-ready
-# Then per-clone:
-git config core.hooksPath .githooks
-```
-
-Once landed, also extend `.githooks/pre-commit` to include the newer audits:
-
-```bash
-# Replace the audit list in .githooks/pre-commit with:
-#   python3 scripts/audit_planning_docs.py --allow-orphans
-#   python3 scripts/audit_data_classes.py --strict
-#   python3 scripts/audit_secrets_rotation.py >/dev/null
-#   python3 scripts/audit_workflow_secrets.py >/dev/null   # NEW from 2026-05-16
-```
+CI gate at `.github/workflows/audit-pr.yml` is live; sticky failure comment added 2026-05-25 (`1fc577a`). Pre-commit hook at `.githooks/pre-commit` installable via `make hooks-install`.
 
 ### 5. MTL backfill dry-run
 
@@ -64,18 +60,13 @@ gh pr edit 2 --body-file /tmp/pr2-update.md
 
 ---
 
-## 🟢 Soak-completion checks (do on Mon 2026-05-18)
+## ✅ Soak gate — CLEARED 2026-05-18
 
-### 7. Verify soak audit clean Sun + Mon
+Day 7 brain-dump-processor returned `status: success`. Receipt audit green Sun + Mon. Phase C / Phase F code work UNBLOCKED as of 2026-05-19.
 
-```bash
-make audit-extraction-receipts          # Sunday evening
-make audit-extraction-receipts          # Monday morning
-```
+### ~~7. Verify soak audit clean Sun + Mon~~ ✅ done — both runs green
 
-Both green → soak gate clears → Phase C / Phase F code work can begin.
-
-### 7.5. Merge the pre-staged Phase C/F skeletons
+### 7.5. Merge the pre-staged Phase C/F skeletons (STILL PENDING)
 
 The skeletons (`tools/task_id.py` + `tools/privacy_classifier.py` + their tests) sit on `feature/phase-c-f-skeletons`. Merge into `polish/prod-ready` and PR-the-merge or fast-forward.
 

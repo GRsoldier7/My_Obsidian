@@ -1,13 +1,13 @@
 # OHO — Current State (canonical)
 
-**As of:** 2026-05-16 — Day 6/7 of P0.5 soak window
+**As of:** 2026-05-27 (Wed) — P0.5 soak EXITED 2026-05-18; foundation deepening continues
 **Branch:** `polish/prod-ready` · **PR:** [#2](https://github.com/GRsoldier7/My_Obsidian/pull/2) open + MERGEABLE
-**Commits ahead of `master`:** 65 (polish/prod-ready) + isolated branch `feature/phase-c-f-skeletons` carrying 1 commit pre-staging task_id + privacy_classifier for Mon merge
-**Soak exit (earliest):** Mon **2026-05-18**
+**Commits ahead of `master`:** 85 (polish/prod-ready) + isolated branch `feature/phase-c-f-skeletons` carrying Phase C+F skeletons (63 tests)
+**Soak status:** ✅ CLEARED 2026-05-18 (Day 7 brain-dump-processor `status: success`); Aaron's Wave-X H3 dashboard + CI hardening landed 2026-05-25.
 
 This document is the SINGLE source of truth for "where are we?" Every other doc that quotes commit counts / test counts / phase status should link here rather than repeat the numbers.
 
-Last refresh: 2026-05-16 (auto-regenerable from `make audit-all` + `git rev-list`).
+Last refresh: 2026-05-27 (auto-regenerable from `make audit-all` + `git rev-list`).
 
 ---
 
@@ -15,13 +15,17 @@ Last refresh: 2026-05-16 (auto-regenerable from `make audit-all` + `git rev-list
 
 | Metric | Value | Source |
 |---|---|---|
-| Commits ahead of `master` (polish/prod-ready) | **67** | `git rev-list --left-right --count master...HEAD` |
-| Test suite (`make verify` scope) | **599 pass + 1 skip** | `make verify` |
+| Commits ahead of `master` (polish/prod-ready) | **85** | `git rev-list --left-right --count master...HEAD` |
+| Test suite (`make verify` scope) | **603 pass + 7 skip** | `make verify` |
 | Offline audits | **10 green** | see below |
 | Active n8n workflows | **14** | `workflows/n8n/*.json` (job-search quarantined) |
 | ADRs | **9** (0001-0006 historical, 0007 Accepted, 0008-0009 Proposed) | `docs/adr/` |
 | Eval fixtures | **35 / 200 target** | `evals/comms_privacy/` |
-| Pre-staged Phase C+F skeletons | branch `feature/phase-c-f-skeletons`, **63 tests** across 4 modules | merge post-soak |
+| Pre-staged Phase C+F skeletons | branch `feature/phase-c-f-skeletons`, **63 tests** across 4 modules | NOT YET MERGED (post-soak action pending) |
+| Wave-X H3 health dashboard | `tools/build_health_dashboard.py` + `99_System/health.md` | ✅ landed 2026-05-25 (commit `2217ab5`) |
+| CI gate | `.github/workflows/audit-pr.yml` + sticky failure comment | ✅ live (commits `1fc577a` + `36ed420`) |
+| Dev/CI deps | pinned in `requirements-dev.txt` | ✅ pinned 2026-05-25 (`c7c5755` + `961fc6d`) |
+| GCAL OAuth | cred shell `uAySKd53I6zgvFjx` exists in n8n; consent NOT YET CLICKED; `.env` missing `GCAL_CRED_ID` | ⏳ blocked on operator browser consent at `https://n8n.tailfab8a7.ts.net/credentials/uAySKd53I6zgvFjx` |
 
 ### Offline audits (all green)
 
