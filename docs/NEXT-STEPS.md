@@ -70,22 +70,13 @@ Day 7 brain-dump-processor returned `status: success`. Receipt audit green Sun +
 
 ### ~~7. Verify soak audit clean Sun + Mon~~ ✅ done — both runs green
 
-### 7.5. Merge the pre-staged Phase C/F skeletons (STILL PENDING)
+### ~~7.5. Merge the pre-staged Phase C/F skeletons~~ ✅ already on `polish/prod-ready`
 
-The skeletons (`tools/task_id.py` + `tools/privacy_classifier.py` + their tests) sit on `feature/phase-c-f-skeletons`. Merge into `polish/prod-ready` and PR-the-merge or fast-forward.
+All 4 skeleton modules + 63 tests verified ancestors of `polish/prod-ready` HEAD as of 2026-05-27. `feature/phase-c-f-skeletons` branch can be deleted at operator convenience.
 
-```bash
-git checkout polish/prod-ready
-git merge --ff-only feature/phase-c-f-skeletons
-make verify    # confirm 36 new tests still green
-git push origin polish/prod-ready
-```
+### ~~8. Once soak clean: promote ADRs~~ ✅ promoted 2026-05-27
 
-If `--ff-only` refuses (polish/prod-ready advanced), do a regular merge and resolve any conflict — the skeleton files are new, so conflicts are unlikely.
-
-### 8. Once soak clean: promote ADRs
-
-`docs/adr/0008-cross-host-comms.md` and `docs/adr/0009-threaded-tasks.md` move from `Status: Proposed` → `Status: Accepted`. One-line edit per ADR.
+ADR-0008 and ADR-0009 now `Status: Accepted` with explicit notes about skeleton-mode (Phase F's `SKELETON_MODE = True`) + Plan-only state (Phase C's Apply/Verify still stubbed). Day-2 work on each is the next code commitment.
 
 ### 9. Deprecate `--no-reset` flag
 
