@@ -1,0 +1,359 @@
+#!/usr/bin/env python3
+"""scripts/vault_cleanup.py — UI audit 2026-05-27 §4 win #3.
+
+Top-level vault folder layout was rated 4/10. Junk visible every vault open:
+six `rs-test-folder-*` directories from a Remotely-Save smoke test, an empty
+`Daily/`, an obsolete `Homelab/` (CRITICAL RULE in CLAUDE.md says no
+``Homelab/`` prefix), `Scripts/`, and several numbered placeholder folders
+(`01_Projects/`, `02_Learning/`, …) that overlap with the canonical
+`10_Active Projects/` / `20_Domains (Life and Work)/` namespaces.
+
+This script:
+
+1. Lists every top-level prefix in the vault bucket.
+2. Classifies each as KEEP / DELETE_EMPTY_CRUFT / ARCHIVE_CONTENT_CRUFT.
+3. In `--apply` mode, archives content-bearing junk to
+   `09_Archives/cruft-<YYYY-MM-DD>/<orig-name>/` (verified-write via
+   tools/s3_verified), then deletes the originals.
+4. Deletes empty folder-markers outright (they're S3 zero-byte
+   key-prefix objects, no data to lose).
+5. Writes a top-level `README.md` that orients the next operator (or
+   Aaron's future self) on where to start.
+
+Inspect-first per Aaron's `feedback_inspect_before_deploy` memory: the
+default mode is `--review-only` (no writes; emits the plan). `--apply`
+flips destructive operations on. Both modes print a JSON summary that can
+be redirected to `99_System/logs/vault-cleanup-<ts>.json`.
+
+Usage::
+
+    set -a && source .env && set +a
+    python3 scripts/vault_cleanup.py                  # review-only (default)
+    python3 scripts/vault_cleanup.py --apply          # destructive
+    python3 scripts/vault_cleanup.py --apply --quiet  # CI-friendly
+
+Exit codes:
+    0 — review-only completed (or --apply succeeded)
+    1 — at least one verified-write failed during --apply
+    2 — bad env / cannot reach MinIO
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import sys
+from dataclasses import asdict, dataclass, field
+from typing import Any
+
+import boto3
+from botocore.client import Config
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, REPO_ROOT)
+
+from tools import s3_verified  # noqa: E402
+
+BUCKET = os.environ.get("MINIO_BUCKET", "obsidian-vault")
+
+# Folders that match these prefixes are CRUFT no matter their content.
+EMPTY_CRUFT_PATTERNS = (
+    "rs-test-folder-",   # Remotely-Save smoke test residue
+    "01_Projects/",
+    "02_Learning/",
+    "03_Resources/",
+    "04_Personal/",
+    "05_Work/",
+    "06_Archive/",       # superseded by 09_Archives/
+    "06_Templates/",     # superseded by 05_Templates/
+    "07_Archive/",       # superseded by 09_Archives/
+    "10_Projects/",      # superseded by 10_Active Projects/
+    "20_Areas/",         # superseded by 20_Domains (Life and Work)/
+    "30_Resources/",     # superseded by 30_Knowledge Library/
+    "Scripts/",
+    "Daily/",
+)
+
+# Content-bearing cruft — archive before delete.
+CONTENT_CRUFT_PATTERNS = (
+    "Homelab/",       # CLAUDE.md CRITICAL RULE — no Homelab/ prefix
+    "! TO DO/",       # superseded by 10_Active Projects/!!! MASTER TASK LIST.md
+)
+
+# Top-level files that are cruft (not folder prefixes).
+TOP_LEVEL_FILE_CRUFT = (
+    "2026-05-10.md",  # 0-byte stale daily note at root
+)
+
+README_BODY = """# Aaron's Obsidian Vault — orientation
+
+This vault is the data layer of the **ObsidianHomeOrchestrator (OHO)** Life
+Operating System. Source repo: <https://github.com/GRsoldier7/My_Obsidian>.
+
+## Start here every morning
+
+Open **[[!!! DAILY COMMAND CENTER]]** in `000_Master Dashboard/`. That note is
+auto-rebuilt by the OHO runner sidecar and is the single morning entry point.
+
+## Top-level layout
+
+| Folder | What lives here |
+|---|---|
+| `000_Master Dashboard/` | Daily Command Center, North Star, dashboards |
+| `00_Inbox/` | brain dumps (input), processed (audit log) |
+| `05_Templates/` | Obsidian + Templater templates |
+| `09_Archives/` | retired notes and one-time cleanups |
+| `10_Active Projects/` | active projects + `!!! MASTER TASK LIST.md` |
+| `20_Domains (Life and Work)/` | the 8 life domains (faith/family/business/consulting/work/health/home/personal) |
+| `30_Knowledge Library/` | long-lived references |
+| `40_Timeline_Weekly/` | daily / weekly notes |
+| `99_System/` | logs, state, extraction receipts (do not hand-edit) |
+
+## What NOT to do
+
+- Never hand-edit anything under `99_System/state/` or `99_System/logs/`
+  — those are the source-of-truth for the integrity layer (ADR-0005).
+- Never re-introduce the `Homelab/` prefix (CRITICAL RULE in CLAUDE.md).
+- Never edit `! README.md` in `00_Inbox/processed/` — it is auto-regenerated.
+
+## Where the system writes
+
+OHO's runner sidecar writes to MinIO from CT-202 (n8n). Every write is
+verified via `tools/s3_verified.put_*`. If you see a half-written file,
+check `99_System/logs/<workflow>-<date>.json` first; ADR-0005 receipts
+mean partial writes are recoverable.
+
+---
+
+_README auto-generated by `scripts/vault_cleanup.py`. Refresh by re-running
+the same command with `--apply`._
+"""
+
+README_KEY = "README.md"
+
+
+@dataclass
+class Item:
+    prefix: str
+    kind: str         # "folder" | "file"
+    classification: str
+    key_count: int = 0
+    bytes: int = 0
+    archived_to: str | None = None
+    deleted: bool = False
+    error: str | None = None
+
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+def s3_client():
+    return boto3.client(
+        "s3",
+        endpoint_url=os.environ["MINIO_ENDPOINT"],
+        aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
+        aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
+        config=Config(signature_version="s3v4"),
+        region_name="us-east-1",
+    )
+
+
+def list_top_level(s3) -> tuple[list[str], list[dict[str, Any]]]:
+    """Return (prefixes, files-at-root)."""
+    r = s3.list_objects_v2(Bucket=BUCKET, Prefix="", Delimiter="/")
+    prefixes = [p["Prefix"] for p in r.get("CommonPrefixes", [])]
+    files = list(r.get("Contents", []))
+    return prefixes, files
+
+
+def folder_inventory(s3, prefix: str) -> tuple[int, int]:
+    """Walk a prefix, return (key_count, total_bytes)."""
+    count = 0
+    total = 0
+    token: str | None = None
+    while True:
+        kwargs = {"Bucket": BUCKET, "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        r = s3.list_objects_v2(**kwargs)
+        for o in r.get("Contents", []):
+            count += 1
+            total += int(o.get("Size", 0))
+        if r.get("IsTruncated"):
+            token = r.get("NextContinuationToken")
+        else:
+            break
+    return count, total
+
+
+def classify_folder(prefix: str, key_count: int) -> str:
+    for p in CONTENT_CRUFT_PATTERNS:
+        if prefix == p or prefix.startswith(p):
+            return "ARCHIVE_CONTENT_CRUFT" if key_count > 0 else "DELETE_EMPTY_CRUFT"
+    for p in EMPTY_CRUFT_PATTERNS:
+        if prefix == p or prefix.startswith(p):
+            return "DELETE_EMPTY_CRUFT" if key_count == 0 else "ARCHIVE_CONTENT_CRUFT"
+    return "KEEP"
+
+
+def classify_file(key: str) -> str:
+    if key in TOP_LEVEL_FILE_CRUFT:
+        return "DELETE_FILE_CRUFT"
+    return "KEEP"
+
+
+def copy_to_archive(s3, src_key: str, archive_root: str) -> str:
+    """Copy a single object to ``archive_root/<orig-key>``. Verified via
+    head_object byte-length match."""
+    dest_key = archive_root.rstrip("/") + "/" + src_key
+    s3.copy_object(
+        Bucket=BUCKET, Key=dest_key,
+        CopySource={"Bucket": BUCKET, "Key": src_key},
+        MetadataDirective="COPY",
+    )
+    src_head = s3.head_object(Bucket=BUCKET, Key=src_key)
+    dest_head = s3.head_object(Bucket=BUCKET, Key=dest_key)
+    if src_head["ContentLength"] != dest_head["ContentLength"]:
+        raise RuntimeError(
+            f"archive verify failed: {src_key} ({src_head['ContentLength']}B) "
+            f"→ {dest_key} ({dest_head['ContentLength']}B)"
+        )
+    return dest_key
+
+
+def delete_under_prefix(s3, prefix: str) -> int:
+    """Delete every object under prefix. Returns count deleted."""
+    deleted = 0
+    token: str | None = None
+    while True:
+        kwargs = {"Bucket": BUCKET, "Prefix": prefix}
+        if token:
+            kwargs["ContinuationToken"] = token
+        r = s3.list_objects_v2(**kwargs)
+        contents = r.get("Contents", [])
+        if not contents:
+            break
+        # delete_objects max 1000 per call
+        for i in range(0, len(contents), 1000):
+            batch = contents[i:i + 1000]
+            s3.delete_objects(
+                Bucket=BUCKET,
+                Delete={"Objects": [{"Key": o["Key"]} for o in batch]},
+            )
+            deleted += len(batch)
+        if not r.get("IsTruncated"):
+            break
+        token = r.get("NextContinuationToken")
+    return deleted
+
+
+# ── main ──────────────────────────────────────────────────────────────────────
+def main() -> int:
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("--apply", action="store_true",
+                   help="Actually perform destructive operations. Default is review-only.")
+    p.add_argument("--quiet", action="store_true",
+                   help="Suppress human-readable progress; print only JSON summary.")
+    p.add_argument("--archive-prefix", default=None,
+                   help="Override archive destination (default: 09_Archives/cruft-<YYYY-MM-DD>/)")
+    args = p.parse_args()
+
+    missing = [v for v in ("MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY")
+               if not os.environ.get(v)]
+    if missing:
+        print(f"ERR: missing env vars: {', '.join(missing)}", file=sys.stderr)
+        return 2
+
+    s3 = s3_client()
+    today = dt.date.today().isoformat()
+    archive_root = args.archive_prefix or f"09_Archives/cruft-{today}"
+
+    log = lambda *m, **k: None if args.quiet else print(*m, **k)
+    log(f"→ Vault cleanup ({'APPLY' if args.apply else 'REVIEW-ONLY'}) — archive={archive_root}/")
+
+    prefixes, files = list_top_level(s3)
+
+    items: list[Item] = []
+    for pref in sorted(prefixes):
+        kc, kb = folder_inventory(s3, pref)
+        cls = classify_folder(pref, kc)
+        items.append(Item(prefix=pref, kind="folder", classification=cls,
+                          key_count=kc, bytes=kb))
+
+    for f in files:
+        key = f["Key"]
+        cls = classify_file(key)
+        items.append(Item(prefix=key, kind="file", classification=cls,
+                          key_count=1, bytes=int(f.get("Size", 0))))
+
+    # Plan summary
+    by_class: dict[str, list[Item]] = {}
+    for it in items:
+        by_class.setdefault(it.classification, []).append(it)
+
+    log("\n── PLAN ──")
+    for cls in sorted(by_class):
+        log(f"  [{cls}]  ({len(by_class[cls])} entries)")
+        for it in by_class[cls]:
+            log(f"    {it.kind:6s}  {it.key_count:5d} keys  {it.bytes:10d}B  {it.prefix}")
+
+    errors = 0
+    if args.apply:
+        log("\n── APPLY ──")
+        for it in items:
+            try:
+                if it.classification == "DELETE_EMPTY_CRUFT" and it.kind == "folder":
+                    n = delete_under_prefix(s3, it.prefix)
+                    it.deleted = True
+                    log(f"  deleted folder marker (0 keys + folder marker key, deleted={n}): {it.prefix}")
+                elif it.classification == "ARCHIVE_CONTENT_CRUFT" and it.kind == "folder":
+                    # Copy every object to archive, then delete the originals.
+                    token: str | None = None
+                    copied = 0
+                    while True:
+                        kwargs = {"Bucket": BUCKET, "Prefix": it.prefix}
+                        if token:
+                            kwargs["ContinuationToken"] = token
+                        r = s3.list_objects_v2(**kwargs)
+                        for o in r.get("Contents", []):
+                            copy_to_archive(s3, o["Key"], archive_root)
+                            copied += 1
+                        if not r.get("IsTruncated"):
+                            break
+                        token = r.get("NextContinuationToken")
+                    n = delete_under_prefix(s3, it.prefix)
+                    it.archived_to = archive_root + "/" + it.prefix
+                    it.deleted = True
+                    log(f"  archived + deleted ({copied} keys → {archive_root}/{it.prefix}, deleted={n})")
+                elif it.classification == "DELETE_FILE_CRUFT":
+                    # 0-byte root cruft — just delete.
+                    s3.delete_object(Bucket=BUCKET, Key=it.prefix)
+                    it.deleted = True
+                    log(f"  deleted file: {it.prefix}")
+            except Exception as exc:
+                it.error = f"{type(exc).__name__}: {exc}"
+                errors += 1
+                log(f"  ERR: {it.prefix}: {it.error}")
+
+        # Write README at root via verified-write.
+        try:
+            s3_verified.put_text_verified(s3, BUCKET, README_KEY, README_BODY,
+                                          content_type="text/markdown; charset=utf-8")
+            log(f"  wrote {README_KEY}")
+        except Exception as exc:
+            errors += 1
+            log(f"  ERR writing README: {type(exc).__name__}: {exc}")
+
+    summary = {
+        "mode": "apply" if args.apply else "review-only",
+        "ts_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "archive_root": archive_root,
+        "items": [asdict(i) for i in items],
+        "by_class": {k: len(v) for k, v in by_class.items()},
+        "errors": errors,
+    }
+    print(json.dumps(summary, indent=2))
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

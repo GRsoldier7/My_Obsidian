@@ -20,7 +20,7 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: setup test e2e integration health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry gcal-status gcal-create gcal-finalize backfill-mtl-review backfill-mtl-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-no-unverified-put-object audit-egress-classifier-wired audit-slo evals audit-all audit-ci hooks-install bootstrap-dev
+.PHONY: setup test e2e integration health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry gcal-status gcal-create gcal-finalize backfill-mtl-review backfill-mtl-apply vault-cleanup-review vault-cleanup-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-no-unverified-put-object audit-egress-classifier-wired audit-slo evals audit-all audit-ci hooks-install bootstrap-dev
 
 PYTHON := python3
 # Always invoke pytest via the same interpreter as PYTHON — avoids the case
@@ -165,6 +165,21 @@ backfill-mtl-review:
 ##  Always run `make backfill-mtl-review` first and triage the report before this target.
 backfill-mtl-apply:
 	$(ENV_PREFIX) $(PYTHON) scripts/backfill_mtl_metadata.py --apply --verbose
+
+# ── Vault cleanup (UI audit 2026-05-27 win #3) ────────────────────────────────
+
+## Vault cleanup — review-only. Lists top-level cruft + writes JSON plan to stdout.
+##   - 6 rs-test-folder-* + Daily/ + Homelab/ + Scripts/ + numbered placeholders → DELETE
+##   - ! TO DO/ (3 keys) → ARCHIVE to 09_Archives/cruft-<date>/
+##   - 0-byte 2026-05-10.md at root → DELETE
+##   No writes. Safe to run anytime.
+vault-cleanup-review:
+	$(ENV_PREFIX) $(PYTHON) scripts/vault_cleanup.py
+
+## Vault cleanup — APPLY. Archives content cruft + deletes empty-folder markers +
+## writes a vault-root README.md (verified). Always review first.
+vault-cleanup-apply:
+	$(ENV_PREFIX) $(PYTHON) scripts/vault_cleanup.py --apply
 
 # ── Soak audit (P0.5 / ADR-0005) ──────────────────────────────────────────────
 
