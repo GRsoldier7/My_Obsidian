@@ -6,6 +6,9 @@ GET  /health               — unauthenticated; reports service state.
 POST /process-brain-dump   — bearer auth; runs ``python3 -u tools/process_brain_dump.py``.
 POST /build-command-center — bearer auth; runs ``python3 -u tools/build_command_center.py``
                              (ADR-0006 — daily command center generator).
+POST /audit-receipts       — bearer auth; runs ``python3 -u scripts/audit_extraction_receipts.py
+                             --json-output`` (NEXT-STEPS item 10 — replaces
+                             vault-health-report's dropped ``executeCommand`` path).
 
 All POST endpoints execute in /opt/oho with env loaded from /opt/oho/.env.
 
@@ -45,6 +48,8 @@ TOKEN = os.environ.get("OHO_RUNNER_TOKEN", "")
 JOBS: dict[str, tuple[str, ...]] = {
     "process-brain-dump":   (PYTHON, "-u", "tools/process_brain_dump.py"),
     "build-command-center": (PYTHON, "-u", "tools/build_command_center.py"),
+    "audit-receipts":       (PYTHON, "-u", "scripts/audit_extraction_receipts.py",
+                             "--json-output"),
 }
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -128,6 +133,16 @@ async def process_brain_dump(authorization: str | None = Header(default=None)) -
 @app.post("/build-command-center")
 async def build_command_center(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     return await _dispatch("build-command-center", authorization)
+
+
+@app.post("/audit-receipts")
+async def audit_receipts(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """Replace vault-health-report's ``executeCommand`` regression (NEXT-STEPS
+    item 10). Runs the same receipt audit n8n used to invoke directly via the
+    n8n-1.x `executeCommand` node, which the n8n 2.x active-workflow
+    registry dropped. Workflow side switches from `executeCommand` to
+    `httpRequest` against this endpoint."""
+    return await _dispatch("audit-receipts", authorization)
 
 
 async def _run(command: tuple[str, ...]) -> dict[str, Any]:

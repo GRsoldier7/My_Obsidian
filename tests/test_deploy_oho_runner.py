@@ -99,6 +99,35 @@ def test_runner_endpoints_are_declared_in_app_py():
     assert '@app.post("/build-command-center")' in app_py
 
 
+def test_audit_receipts_runner_endpoint_declared():
+    """NEXT-STEPS item 10: vault-health-report's dropped `executeCommand`
+    moves to a POST endpoint on services/oho_runner. The endpoint MUST
+    exist and invoke scripts/audit_extraction_receipts.py --json-output
+    (no other argv, no shell, no env interpolation in the route)."""
+    app_py = (REPO_ROOT / "services" / "oho_runner" / "app.py").read_text()
+    # Job tuple registered in JOBS
+    assert '"audit-receipts"' in app_py, (
+        "audit-receipts job missing from JOBS dispatch table"
+    )
+    # Subprocess argv targets the canonical script with --json-output
+    assert 'scripts/audit_extraction_receipts.py' in app_py
+    assert '"--json-output"' in app_py, (
+        "audit-receipts must invoke audit_extraction_receipts.py with --json-output"
+    )
+    # FastAPI route is declared
+    assert '@app.post("/audit-receipts")' in app_py
+
+
+def test_audit_receipts_script_supports_json_output_flag():
+    """The runner endpoint passes --json-output. The script MUST accept it
+    so the runner gets parseable stdout."""
+    src = (REPO_ROOT / "scripts" / "audit_extraction_receipts.py").read_text()
+    # argparse declaration (argparse `add_argument("--json-output", ...)`).
+    assert '"--json-output"' in src
+    # Stdout JSON dump on the json-output path
+    assert "json.dumps" in src
+
+
 def test_workflow_lookup_is_emoji_prefix_tolerant(deploy_module, monkeypatch):
     """Live n8n workflows in this stack carry emoji prefixes that diverge
     from the canonical repo template names (memory:
