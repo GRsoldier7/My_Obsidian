@@ -689,8 +689,42 @@ def openrouter_client() -> Any:
     return OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
 
 
-def _chat_with_fallback(client: Any, prompt: str, max_tokens: int = 600) -> str | None:
-    """Try models in cascade order. Return response text or None if all fail."""
+def _chat_with_fallback(
+    client: Any,
+    prompt: str,
+    max_tokens: int = 600,
+    *,
+    area: str | None = None,
+) -> str | None:
+    """Try models in cascade order. Return response text or None if all fail.
+
+    Every call is gated by the privacy classifier (tools/egress_guard) BEFORE
+    the OpenRouter request goes out. ``area`` is the file_area hint (faith,
+    family, business, …) — used by the classifier's tier-2 area-tag rules
+    to short-circuit on sensitive domains (ADR-0008).
+
+    When the guard denies egress, returns None without making any HTTP call.
+    Callers already handle None as "AI unavailable, fall back to regex" (the
+    regex-first principle from ADR-0001), so no caller change is required.
+    """
+    # Egress gate — runs before any network call.
+    from tools import egress_guard  # local import keeps module-import cheap
+
+    fields: dict[str, Any] = {}
+    if area:
+        fields["area"] = area
+    allowed, verdict = egress_guard.guard_for_peer(
+        peer="to_openrouter",
+        text=prompt,
+        fields=fields,
+    )
+    if not allowed:
+        logging.warning(
+            "openrouter call blocked by privacy classifier: class=%s reasons=%s area=%s",
+            verdict.privacy_class, verdict.reasons, area,
+        )
+        return None
+
     for model in EXTRACT_MODELS:
         try:
             resp = client.chat.completions.create(
@@ -731,7 +765,7 @@ File domain: {file_area} | Today: {today} | Section: {section_header}
 CONTENT:
 {section_body}"""
 
-    text = _chat_with_fallback(client, prompt, max_tokens=600)
+    text = _chat_with_fallback(client, prompt, max_tokens=600, area=file_area)
     if not text or text.strip() == "NONE":
         return []
     return [ln.strip() for ln in text.splitlines() if ln.strip().startswith("- [ ]")]
@@ -751,7 +785,7 @@ File domain: {file_area} | Section: {section_header}
 CONTENT:
 {section_body}"""
 
-    text = _chat_with_fallback(client, prompt, max_tokens=400)
+    text = _chat_with_fallback(client, prompt, max_tokens=400, area=file_area)
     if not text or text.strip() == "NONE":
         return []
     notes = []
@@ -778,7 +812,7 @@ If no URLs found, output: NONE
 CONTENT:
 {section_body}"""
 
-    text = _chat_with_fallback(client, prompt, max_tokens=300)
+    text = _chat_with_fallback(client, prompt, max_tokens=300, area=file_area)
     if not text or text.strip() == "NONE":
         return []
     return [ln.strip() for ln in text.splitlines() if ln.strip().startswith("- [")]
@@ -1203,7 +1237,7 @@ Output ONLY one JSON object (no markdown, no preamble). Fields:
 File domain hint: {file_area} | Today: {today}
 
 LINE: {text}"""
-    raw = _chat_with_fallback(client, prompt, max_tokens=200)
+    raw = _chat_with_fallback(client, prompt, max_tokens=200, area=file_area)
     if not raw:
         return None
     raw = raw.strip()

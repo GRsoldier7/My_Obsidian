@@ -117,12 +117,18 @@ def test_cascade_empty_response_tries_next():
 # ── extract_tasks_from_section ────────────────────────────────────────────────
 
 def test_extract_tasks_returns_valid_format(mock_openrouter_success):
-    """extract_tasks_from_section returns task lines starting with '- [ ]'."""
+    """extract_tasks_from_section returns task lines starting with '- [ ]'.
+
+    Note: file_area changed from "health" to "personal" 2026-05-27 — the
+    ADR-0008 privacy classifier hard-denies `area: health` egress to
+    OpenRouter (sensitive class). The format-validation assertion here is
+    orthogonal to the source-area; using "personal" preserves the test
+    intent without violating the egress contract."""
     tasks = extract_tasks_from_section(
         mock_openrouter_success,
         "✅ To Do's",
         "- Call Dr. Smith about hip MRI",
-        "health",
+        "personal",
         "2026-04-08",
     )
 

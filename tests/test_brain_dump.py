@@ -502,7 +502,14 @@ def test_ai_fallback_explore_autotag():
 
 def test_ai_fallback_auto_adds_explore_when_intent_research():
     """Even if AI omits the [explore:: true] tag, if the description mentions
-    research/investigate/explore the post-processor auto-adds it."""
+    research/investigate/explore the post-processor auto-adds it.
+
+    Note: file_area MUST be non-sensitive (personal/business/etc) so the
+    privacy classifier (ADR-0008) allows the egress to OpenRouter. The
+    extracted task may still have ``[area:: health]`` since the AI is free
+    to reclassify content per its instructions — the gate is on the SOURCE
+    file's area, which is what determines whether the prompt itself is
+    sensitive."""
     body = "Anything"
 
     fake_client = MagicMock()
@@ -512,7 +519,7 @@ def test_ai_fallback_auto_adds_explore_when_intent_research():
     ))]
     fake_client.chat.completions.create.return_value = fake_resp
 
-    tasks = extract_tasks_with_ai_fallback(fake_client, body, "health", "2026-04-25")
+    tasks = extract_tasks_with_ai_fallback(fake_client, body, "personal", "2026-04-25")
     assert len(tasks) >= 1
     assert "[explore:: true]" in tasks[0]
 
