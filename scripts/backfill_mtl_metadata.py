@@ -40,6 +40,12 @@ from typing import Optional
 import boto3
 from botocore.exceptions import ClientError
 
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+from tools.s3_verified import VerificationError, put_json_verified  # noqa: E402
+
 # ── Config ────────────────────────────────────────────────────────────────────
 MTL_KEY = "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
 REPORT_KEY_TPL = "99_System/reports/mtl-backfill-review-{date}.md"
@@ -455,13 +461,8 @@ def _write_log(s3, run_date: str, c: Classification, suggestions: dict, applied:
     }
     log_key = LOG_KEY_TPL.format(date=run_date)
     try:
-        s3.put_object(
-            Bucket=bucket(),
-            Key=log_key,
-            Body=json.dumps(payload, indent=2).encode("utf-8"),
-            ContentType="application/json",
-        )
-    except ClientError as e:
+        put_json_verified(s3, bucket(), log_key, payload)
+    except (ClientError, VerificationError) as e:
         print(f"WARN: could not write run log: {e}", file=sys.stderr)
 
 

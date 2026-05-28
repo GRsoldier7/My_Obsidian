@@ -71,9 +71,11 @@ _KNOWN_VIOLATORS: dict[str, str] = {
         "needs IfMatch wrapper before final migration."
     ),
     "scripts/backfill_mtl_metadata.py": (
-        "backfill helper has its own put_object_verified wrapper + IfMatch "
-        "(line 128) plus an unverified _write_log (line 458). Migrate the log "
-        "writer at item 13."
+        "_write_log migrated to s3_verified.put_json_verified (2026-05-28). "
+        "Remaining put_object is the file's own put_object_verified helper "
+        "(line 128) — duplicates the s3_verified.put_text_if_match_verified "
+        "pattern. Final migration: swap put_object_verified body to call the "
+        "canonical helper, then delete this allowlist entry."
     ),
     "scripts/migrate_brain_dump_frontmatter.py": (
         "frontmatter migration RMW path; needs IfMatch. Item 13."

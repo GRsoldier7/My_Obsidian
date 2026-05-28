@@ -630,3 +630,44 @@ def test_if_node_branches_always_reach_log_write(wf_name):
         "`status: \"skipped\"` log with a canonical `skip_reason`, then into "
         "the existing S3 log-writer."
     )
+
+
+# ── S3 headObject silent-bail regression guard (NEXT-STEPS item 10b) ──
+# n8n 2.x `n8n-nodes-base.s3` headObject succeeds silently without emitting
+# a downstream item when the file exists + continueOnFail=true. That broke
+# system-health-monitor for weeks (zero logs in MinIO; n8n said success).
+# `alwaysOutputData: true` forces an item even on empty success → chain
+# continues. This test prevents the flag from being silently dropped.
+
+_HEAD_OBJECT_WORKFLOWS_REQUIRING_ALWAYS_OUTPUT = {
+    # workflow name : set of node names that MUST carry alwaysOutputData
+    "system-health-monitor.json": {
+        "S3: Check North Star",
+        "S3: Check MTL",
+    },
+}
+
+
+@pytest.mark.parametrize("wf_name", sorted(_HEAD_OBJECT_WORKFLOWS_REQUIRING_ALWAYS_OUTPUT))
+def test_head_object_nodes_use_always_output_data(wf_name):
+    """Per NEXT-STEPS item 10b: any S3 `headObject` node whose downstream is
+    another S3 node (or any node that needs an input item) MUST set
+    ``alwaysOutputData: true``; otherwise a success-with-no-error returns
+    no item and the flow dies silently. Verified empirically against the
+    system-health-monitor execution trace (lastNodeExecuted = first
+    headObject, downstream nodes never fired)."""
+    wf = _load_workflow(wf_name)
+    required = _HEAD_OBJECT_WORKFLOWS_REQUIRING_ALWAYS_OUTPUT[wf_name]
+    by_name = {n["name"]: n for n in wf.get("nodes", [])}
+    missing = []
+    for node_name in sorted(required):
+        node = by_name.get(node_name)
+        if node is None:
+            missing.append(f"{node_name!r} (node missing)")
+            continue
+        if not node.get("alwaysOutputData"):
+            missing.append(f"{node_name!r} (alwaysOutputData not set)")
+    assert not missing, (
+        f"{wf_name}: nodes must declare `alwaysOutputData: true` to avoid "
+        f"silent S3-chain bail: {missing!r}"
+    )
