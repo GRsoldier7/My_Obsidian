@@ -351,7 +351,15 @@ def render_brain_dumps(summary: dict | None, summary_age_h: float | None) -> str
     files_partial = summary.get("files_partial", []) or []
     files_error = summary.get("files_error", []) or []
 
-    callout_kind = "info" if status == "success" and not files_error else "warning"
+    # Callout kind picks green when the run is clean. Empty-but-healthy
+    # (status=success, no errors, n_added=0) is GREEN not grey — Aaron asked
+    # for "pipeline healthy" visibility so an empty inbox reads as "system
+    # is fine, capture more" not "is something broken?" (UI audit
+    # 2026-05-27 §4 win #2).
+    if status == "success" and not files_error:
+        callout_kind = "success"
+    else:
+        callout_kind = "warning"
 
     lines += [
         f"> [!{callout_kind}]+ Last run · `{finished}` · status: `{status}`",
@@ -381,8 +389,14 @@ def render_brain_dumps(summary: dict | None, summary_age_h: float | None) -> str
                 lines.append(f"  - `{prio}` {t.get('desc', '').strip()}")
         lines.append("")
     else:
+        # Empty-inbox or fully-dedup'd run: this is the HEALTHY steady state,
+        # not a failure. Aaron specifically called out the prior italic
+        # disclaimer as ambiguous ("ran but did nothing" vs "broken silently").
+        # A green callout removes that ambiguity (UI audit 2026-05-27 §4 win #2).
         lines += [
-            "_(No new tasks added in the last run — either everything dedup'd or the inbox was empty.)_",
+            "> [!success]+ Pipeline healthy — no new tasks this run",
+            "> Either the inbox was empty or every captured item dedup'd against MTL.",
+            "> Capture something new in `00_Inbox/brain-dumps/` and the next cron tick will pick it up.",
             "",
         ]
 

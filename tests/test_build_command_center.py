@@ -226,6 +226,10 @@ def test_render_brain_dumps_lists_top_added_grouped_by_area():
 
 
 def test_render_brain_dumps_no_added_tasks_states_so():
+    """Empty-but-healthy run renders the positive "Pipeline healthy" banner
+    (UI audit 2026-05-27 §4 win #2) and is presented as a success callout —
+    not an ambiguous italic disclaimer. The banner must explicitly tell
+    Aaron the system is fine + capture hint."""
     summary = {
         "run_finished_at": "2026-05-06T07:00:00+00:00",
         "status": "success",
@@ -236,7 +240,14 @@ def test_render_brain_dumps_no_added_tasks_states_so():
         "top_added_tasks": [],
     }
     out = bcc.render_brain_dumps(summary, summary_age_h=1.0)
-    assert "No new tasks added" in out
+    assert "Pipeline healthy" in out, (
+        "Empty-run banner must use the positive 'Pipeline healthy' phrasing "
+        "(UI audit 2026-05-27 §4 win #2)"
+    )
+    assert "[!success]+ Pipeline healthy" in out, "Must render as a success callout"
+    assert "00_Inbox/brain-dumps/" in out, "Must include the capture hint"
+    # Healthy-run summary callout is success, not info.
+    assert "[!success]+ Last run" in out
 
 
 def test_render_brain_dumps_flags_partial_and_error_files():
