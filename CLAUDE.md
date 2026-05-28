@@ -210,9 +210,13 @@ ID mirrored in [.claude/nlm-notebook-ids.env](.claude/nlm-notebook-ids.env) (`NL
 
 > **Hard numbers live at [docs/CURRENT-STATE.md](docs/CURRENT-STATE.md).** This section gives the narrative; the canonical numbers go stale here fast.
 
-**Branch:** `polish/prod-ready`, **63 commits ahead** of `master`. PR #2 open + MERGEABLE since 2026-05-11. **Soak window** (per [ADR-0007](docs/adr/0007-master-plan-v2.md) Phase A): runs ≥7 days clean before Phase C — earliest exit **2026-05-18** (Day 6/7 as of this refresh).
+**Branch:** `polish/prod-ready`, **95+ commits ahead** of `master`. PR #2 open + MERGEABLE since 2026-05-11. **Soak window** (per [ADR-0007](docs/adr/0007-master-plan-v2.md) Phase A): ✅ **CLEARED 2026-05-18** (Day 7 brain-dump-processor returned `status: success`; receipt audit green Sun + Mon). Phase C / Phase F code work UNBLOCKED as of 2026-05-19.
 
-**Test suite:** **492 pass, 1 skip** (full); 450 pass in `make verify` scope. **7 offline audits green** — see [docs/CURRENT-STATE.md](docs/CURRENT-STATE.md) for the full audit roster.
+**Test suite:** **676+ pass, 7 skip** (`make audit-ci` scope) · **62% coverage** (target ≥80%) · **11 offline audits in `audit-all` gate** (14 audit scripts on disk; 3 awaiting binding — see [docs/CURRENT-STATE.md](docs/CURRENT-STATE.md)).
+
+**ADRs Accepted:** 0001–0006 historical · **0007 (Master Plan v2)** · **0008 (Cross-host comms)** · **0009 (Threaded tasks)** — all promoted 2026-05-27.
+
+**Phase C+F skeletons MERGED** to `polish/prod-ready` via `feature/phase-c-f-skeletons`: `tools/task_id.py` (17 tests) + `tools/privacy_classifier.py` (19 tests, `SKELETON_MODE = True`) + `scripts/migrate_threaded_tasks.py` (Plan IMPLEMENTED, Apply STUB) + `clients/agent_orch_client.py` (skeleton). Day-2 work begins next.
 
 ### What's landed (code complete, deployment pending)
 
@@ -256,7 +260,7 @@ If you prefer to do it by hand: see [docs/runbook-deploy-python-to-lxc.md](docs/
 | **P1** | State machine + receipts + gated reset + truthful run logs | ✅ code-complete (`f3f8325` → `947e507`); deployed; in soak |
 | **P1.5** | n8n→Python boundary moved to HTTP runner sidecar (n8n 2.x compat) | ✅ code-complete (`a1bd438`); deployed; in soak |
 | **ADR-0006** | Single Daily Command Center replaces dashboard sprawl | ✅ code-complete (`097892a`); HTTP wire-in to live-dashboard-updater **deferred until P0.5 deploy verified** |
-| **P0.5** | Deploy + ≥7-day soak (BLOCKING GATE) | ⏳ in flight; earliest exit **2026-05-18** |
+| **P0.5** | Deploy + ≥7-day soak (BLOCKING GATE) | ✅ **CLEARED 2026-05-18** (Day 7 success; receipt audit green) |
 | **P2** | Threaded tasks (stable `task_id`; backing files in `30_Tasks/<area>/`) | 🔒 design-first via [ADR-0009](docs/adr/0009-threaded-tasks.md); spec at `docs/superpowers/specs/2026-05-12-P2-threaded-tasks-spec.md` |
 | **P2.5** | Decision Journal (rides P2 IDs) | 🔒 post-P2 |
 | **P3** | Capture-Everywhere — voice-first | 🔒 post-P2 |

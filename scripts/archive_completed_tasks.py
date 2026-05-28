@@ -15,7 +15,6 @@ Flags:
     --verbose   Print each task being archived
 """
 import argparse
-import json
 import os
 import re
 import sys
@@ -24,6 +23,12 @@ from pathlib import Path
 
 import boto3
 from botocore.exceptions import ClientError
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.s3_verified import put_json_verified  # noqa: E402
 
 # ── Config ────────────────────────────────────────────────────────────────
 MINIO_ENDPOINT  = os.environ["MINIO_ENDPOINT"]
@@ -197,12 +202,7 @@ def main():
 def _write_log(s3, key: str, data: dict, dry_run: bool):
     if dry_run:
         return
-    s3.put_object(
-        Bucket=BUCKET,
-        Key=key,
-        Body=json.dumps(data, indent=2).encode("utf-8"),
-        ContentType="application/json",
-    )
+    put_json_verified(s3, BUCKET, key, data)
 
 
 if __name__ == "__main__":

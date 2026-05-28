@@ -66,7 +66,9 @@ _KNOWN_VIOLATORS: dict[str, str] = {
     "scripts/e2e_test.py": "e2e test harness — synthetic put for test fixtures.",
     # Hygiene scripts.
     "scripts/archive_completed_tasks.py": (
-        "archive script — 2 puts (write_s3 + _write_log); migrate at item 13."
+        "archive script — _write_log migrated to s3_verified.put_json_verified "
+        "(2026-05-27). Remaining put_object is write_s3 (MTL + archive RMW hot path); "
+        "needs IfMatch wrapper before final migration."
     ),
     "scripts/backfill_mtl_metadata.py": (
         "backfill helper has its own put_object_verified wrapper + IfMatch "
