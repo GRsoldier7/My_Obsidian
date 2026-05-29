@@ -37,6 +37,12 @@ from typing import Any
 
 import boto3
 import requests
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.s3_verified import put_text_verified  # noqa: E402
 from botocore.client import Config
 from botocore.exceptions import ClientError
 
@@ -489,13 +495,13 @@ def render_daily_summary(summary: dict, now: datetime) -> str:
 # ── S3 verified write ────────────────────────────────────────────────────────
 
 def s3_put_verified(s3, key: str, body: str) -> dict:
-    s3.put_object(Bucket=MINIO_BUCKET, Key=key,
-                  Body=body.encode("utf-8"), ContentType="text/markdown")
-    head = s3.head_object(Bucket=MINIO_BUCKET, Key=key)
+    result = put_text_verified(
+        s3, MINIO_BUCKET, key, body, content_type="text/markdown"
+    )
     return {
-        "ETag": head["ETag"],
-        "ContentLength": head["ContentLength"],
-        "LastModified": str(head["LastModified"]),
+        "ETag": result.etag,
+        "ContentLength": result.size_bytes,
+        "LastModified": str(result.head["LastModified"]),
     }
 
 
