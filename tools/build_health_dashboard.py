@@ -40,6 +40,14 @@ from typing import Any
 import boto3
 from botocore.client import Config
 
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.s3_verified import put_text_verified  # noqa: E402
+
 LOG_PREFIX = "99_System/logs/"
 DASH_KEY = "99_System/health.md"
 DATE_RE = re.compile(r"-(\d{4}-\d{2}-\d{2})(?:-\d{2})?\.json$")
@@ -207,20 +215,10 @@ def _render(by_wf: dict[str, list[dict]], statuses: dict[str, dict]) -> str:
 
 
 def write_dashboard(s3, bucket: str, content: str) -> None:
-    body = content.encode("utf-8")
-    s3.put_object(
-        Bucket=bucket,
-        Key=DASH_KEY,
-        Body=body,
-        ContentType="text/markdown; charset=utf-8",
+    put_text_verified(
+        s3, bucket, DASH_KEY, content,
+        content_type="text/markdown; charset=utf-8",
     )
-    # Verified-write: read back the ETag to confirm.
-    head = s3.head_object(Bucket=bucket, Key=DASH_KEY)
-    if head.get("ContentLength") != len(body):
-        raise RuntimeError(
-            f"verified-write failed: wrote {len(body)} bytes, head says "
-            f"{head.get('ContentLength')}"
-        )
 
 
 def main() -> int:

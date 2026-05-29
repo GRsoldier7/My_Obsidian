@@ -55,11 +55,6 @@ _KNOWN_VIOLATORS: dict[str, str] = {
     ),
     # MANUAL-ONLY tools per ce8d03a (Aaron's marker commit). Not in cron path,
     # but still write to MinIO. Migrate when item 13 cleans them up.
-    # Wave-X H3 dashboard landed 2026-05-25 by Aaron (commit 2217ab5). New
-    # write site; should migrate to s3_verified.put_text_verified at next pass.
-    "tools/build_health_dashboard.py": (
-        "Wave-X H3 health dashboard (Aaron 2026-05-25). Migrate at item 13."
-    ),
     # Test harness; not production. Allowlist permanent.
     "scripts/e2e_test.py": "e2e test harness — synthetic put for test fixtures.",
     # Hygiene scripts.
