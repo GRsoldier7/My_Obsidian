@@ -56,7 +56,6 @@ _KNOWN_VIOLATORS: dict[str, str] = {
     # MANUAL-ONLY tools per ce8d03a (Aaron's marker commit). Not in cron path,
     # but still write to MinIO. Migrate when item 13 cleans them up.
     "tools/build_pipeline_health.py": "MANUAL-ONLY tool; low priority for item 13.",
-    "tools/write_processed_readme.py": "MANUAL-ONLY tool; low priority for item 13.",
     # Wave-X H3 dashboard landed 2026-05-25 by Aaron (commit 2217ab5). New
     # write site; should migrate to s3_verified.put_text_verified at next pass.
     "tools/build_health_dashboard.py": (

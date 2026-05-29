@@ -19,10 +19,17 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 from datetime import datetime, timezone
 
 import boto3
 from botocore.client import Config
+
+from tools.s3_verified import put_text_verified  # noqa: E402
 
 try:
     from dotenv import load_dotenv
@@ -98,16 +105,13 @@ def main():
     )
 
     body = README_BODY
-    s3.put_object(
-        Bucket=MINIO_BUCKET,
-        Key=README_KEY,
-        Body=body.encode("utf-8"),
-        ContentType="text/markdown",
+    result = put_text_verified(
+        s3, MINIO_BUCKET, README_KEY, body, content_type="text/markdown"
     )
-    head = s3.head_object(Bucket=MINIO_BUCKET, Key=README_KEY)
-    print(f"=== Wrote {README_KEY} ===")
-    print(f"  ETag:          {head['ETag']}")
-    print(f"  ContentLength: {head['ContentLength']}")
+    head = result.head
+    print(f"=== Wrote {result.key} ===")
+    print(f"  ETag:          {result.etag}")
+    print(f"  ContentLength: {result.size_bytes}")
     print(f"  LastModified:  {head['LastModified']}")
     print(f"  built_at:      {datetime.now(timezone.utc).isoformat(timespec='seconds')}")
 
