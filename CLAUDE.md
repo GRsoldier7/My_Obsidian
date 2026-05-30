@@ -3,6 +3,21 @@
 ## What This Is
 The automation and configuration layer for Aaron's Life OS — a comprehensive personal knowledge management and life orchestration system built on Obsidian, powered by n8n automation running on a MiniPC Docker homelab.
 
+## Intent Layer
+
+**Before modifying code in a subdirectory, read its `AGENTS.md` first** to understand local patterns and invariants. This file is the single root context; child nodes carry area-specific contracts.
+
+- **`tools/`** — `tools/AGENTS.md`: Python logic kernel (extraction, integrity, privacy, task-id, dashboards). The highest-invariant area — `bd_integrity.py` purity, `s3_verified.py` write path, `egress_guard.py` gate, SKELETON/MANUAL-ONLY status markers.
+
+### Global Invariants
+
+- NO `Homelab/` prefix — vault keys live at `obsidian-vault` bucket root.
+- Every S3 write is verified (`head_object` / byte-exact readback) — route through `tools/s3_verified.py`.
+- n8n credential family is `s3`, never `aws`; never mix families.
+- Never share a cron minute between two Code-heavy workflows (task-runner stall).
+- Canonical task format is load-bearing: `- [ ] … [area:: x] [priority:: A] [due:: YYYY-MM-DD]`.
+- `AGENTS.md` at repo root is the Codex/OpenAI mirror of this file — keep the two in sync when changing critical rules.
+
 ## Life Domains (8 Canonical Areas)
 - **faith** — Bible study, prayer, outreach, social media ministry, church
 - **family** — Christy, kids, parenting, family decisions

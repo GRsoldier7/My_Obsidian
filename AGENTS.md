@@ -38,6 +38,17 @@ set -a && source .env && set +a && python3 scripts/health_check.py
 - While P1 is open, do not expand capture surfaces, insight/coach workflows, or
   domain UX scope. P1 integrity work comes first.
 
+## Intent Layer
+
+**Before modifying code in a subdirectory, read its `AGENTS.md` first.**
+
+- `tools/AGENTS.md` — Python logic kernel: `bd_integrity.py` stays pure (no I/O),
+  all S3 writes route through `s3_verified.py`, AI egress routes through
+  `egress_guard.py`, honor each module's SKELETON / MANUAL-ONLY status marker.
+
+This file is the Codex/OpenAI mirror of `CLAUDE.md` — keep the two in sync when
+changing critical rules.
+
 ## Current Architecture
 
 - Automation: self-hosted n8n on Proxmox LXC CT-202
