@@ -2,6 +2,10 @@
 .env
 .env.local
 
+# deepsec trial workspace + any throwaway scoped key (see docs/security/deepsec-trial.md)
+.deepsec/
+.deepsec-trial.env
+
 # Superpowers brainstorm sessions
 .superpowers/
 
