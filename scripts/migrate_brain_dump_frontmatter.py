@@ -47,6 +47,7 @@ except ImportError:
     pass
 
 from tools import bd_integrity as bdi
+from tools.s3_verified import VerificationError, put_text_verified
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
@@ -91,9 +92,11 @@ def read(s3, key: str) -> str:
 
 
 def write_verified(s3, key: str, body: str) -> bool:
-    s3.put_object(Bucket=MINIO_BUCKET, Key=key, Body=body.encode("utf-8"))
-    head = s3.head_object(Bucket=MINIO_BUCKET, Key=key)
-    return head["ContentLength"] == len(body.encode("utf-8"))
+    try:
+        put_text_verified(s3, MINIO_BUCKET, key, body)
+        return True
+    except VerificationError:
+        return False
 
 
 def diff_frontmatter(before: dict, after: dict) -> list[str]:

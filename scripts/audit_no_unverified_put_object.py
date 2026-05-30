@@ -70,9 +70,6 @@ _KNOWN_VIOLATORS: dict[str, str] = {
         "pattern. Final migration: swap put_object_verified body to call the "
         "canonical helper, then delete this allowlist entry."
     ),
-    "scripts/migrate_brain_dump_frontmatter.py": (
-        "frontmatter migration RMW path; needs IfMatch. Item 13."
-    ),
 }
 
 
