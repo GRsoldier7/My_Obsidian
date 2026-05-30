@@ -2,7 +2,9 @@
 
 Endpoints
 ---------
-GET  /health               — unauthenticated; reports service state.
+GET  /health               — unauthenticated; minimal liveness only.
+GET  /health/jobs          — bearer auth; verbose per-job diagnostics (command
+                             tuples, script presence, workdir + python paths).
 POST /process-brain-dump   — bearer auth; runs ``python3 -u tools/process_brain_dump.py``.
 POST /build-command-center — bearer auth; runs ``python3 -u tools/build_command_center.py``
                              (ADR-0006 — daily command center generator).
@@ -22,6 +24,10 @@ Hardening
   concurrent jobs would compete for the same MinIO + tooling resources.
 * Subprocess timeout (default 180s); exceeding it returns exit_code=-9.
 * Subprocess uses an argv tuple (not a shell string) — no shell expansion path.
+* Unauthenticated ``/health`` is minimal liveness only — no workdir/python paths,
+  no command tuples, no job names. Those are recon for the authed POST endpoints
+  and now live behind bearer auth at ``/health/jobs`` (deepsec other-info-disclosure,
+  2026-05-30).
 """
 from __future__ import annotations
 
@@ -90,7 +96,36 @@ def _check_auth(authorization: str | None) -> None:
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
+    # Unauthenticated liveness ONLY. Deliberately minimal — no workdir/python
+    # paths, no per-job command tuples or job names. Those are recon for the
+    # authenticated POST endpoints; verbose diagnostics moved to bearer-auth
+    # /health/jobs (deepsec other-info-disclosure, 2026-05-30). The aggregate
+    # all_scripts_present preserves the "is this deploy intact" signal without
+    # leaking names or paths.
     env_path = os.path.join(WORKDIR, ".env")
+    all_scripts_present = all(
+        os.path.isfile(os.path.join(WORKDIR, cmd[2]))
+        for cmd in JOBS.values()
+        if len(cmd) >= 3
+    )
+    return {
+        "status": "ok",
+        "service": "oho-runner",
+        "version": app.version,
+        "workdir_exists": os.path.isdir(WORKDIR),
+        "env_present": os.path.isfile(env_path),
+        "all_scripts_present": all_scripts_present,
+        "lock_held": _run_lock.locked(),
+        "timeout_sec": TIMEOUT_SEC,
+        "token_configured": bool(TOKEN),
+    }
+
+
+@app.get("/health/jobs")
+async def health_jobs(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """Verbose per-job diagnostics — bearer auth only (recon-sensitive: exposes
+    command tuples, script presence, and the workdir + python paths)."""
+    _check_auth(authorization)
     job_status = {}
     for job_name, cmd in JOBS.items():
         # cmd[2] is the script path relative to WORKDIR.
@@ -100,16 +135,8 @@ async def health() -> dict[str, Any]:
             "script_present": bool(script and os.path.isfile(script)),
         }
     return {
-        "status": "ok",
-        "service": "oho-runner",
-        "version": app.version,
         "workdir": WORKDIR,
-        "workdir_exists": os.path.isdir(WORKDIR),
-        "env_present": os.path.isfile(env_path),
-        "lock_held": _run_lock.locked(),
-        "timeout_sec": TIMEOUT_SEC,
         "python": PYTHON,
-        "token_configured": bool(TOKEN),
         "jobs": job_status,
     }
 
