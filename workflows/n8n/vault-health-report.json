@@ -254,7 +254,7 @@
         }
       },
       "id": "run-receipt-audit",
-      "name": "Run: Receipt Audit (via OHO runner)",
+      "name": "Run: Receipt Audit",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
