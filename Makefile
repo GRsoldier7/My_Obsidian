@@ -214,9 +214,10 @@ audit-workflow-email-format:
 	$(PYTHON) scripts/audit_workflow_email_format.py
 
 ## Block n8n-nodes-base.executeCommand regressions (P1.5 / vault-health-report breakage).
-## vault-health-report.json allowlisted until its post-soak migration to httpRequest.
+## As of 2026-05-29 vault-health-report.json migrated to httpRequest against the
+## /audit-receipts runner endpoint; allowlist is empty.
 audit-no-executecommand:
-	$(PYTHON) scripts/audit_no_executecommand.py --allowlist vault-health-report.json
+	$(PYTHON) scripts/audit_no_executecommand.py
 
 ## Block argv-secret-leak regressions (Codex P0 #2). setup-n8n.sh + deploy_oho_runner.py
 ## allowlisted until their post-soak argv-hygiene refactors land.

@@ -238,23 +238,42 @@
     },
     {
       "parameters": {
-        "command": "cd ${OHO_REPO_PATH:-/opt/oho} && set -a && [ -f .env ] && source .env; set +a && python3 -u scripts/audit_extraction_receipts.py --json-output 2>/dev/null || true"
+        "method": "POST",
+        "url": "http://oho-runner:8080/audit-receipts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": false,
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": false
+            }
+          },
+          "timeout": 200000
+        }
       },
       "id": "run-receipt-audit",
-      "name": "Run: Receipt Audit",
-      "type": "n8n-nodes-base.executeCommand",
-      "typeVersion": 1,
+      "name": "Run: Receipt Audit (via OHO runner)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
         660,
         600
       ],
       "retryOnFail": true,
       "maxTries": 3,
-      "waitBetweenTries": 5000
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__OHO_RUNNER_CRED_ID__",
+          "name": "OHO Runner Auth"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "// Parse the audit script's stdout JSON. The shell runs the audit\n// with `|| true` so a non-zero exit (= findings exist) doesn't fail\n// the n8n node — we WANT to surface findings, not abort.\nconst item = $input.first();\nconst stdout = (item.json.stdout || '').trim();\nconst stderr = (item.json.stderr || '').toString();\nconst exitCode = item.json.exitCode != null ? item.json.exitCode : -1;\nlet summary = null;\ntry { summary = JSON.parse(stdout); } catch (e) {}\nif (!summary) {\n  return [{ json: {\n    audit_status: 'parse_error',\n    parse_error: 'audit_stdout_unparseable',\n    exitCode,\n    raw_stderr_tail: stderr.split('\\n').slice(-15).join('\\n'),\n    findings_count: 0,\n    findings: [],\n    findings_by_rule: {},\n  }}];\n}\nreturn [{ json: {\n  audit_status: summary.status,\n  sources_scanned: summary.sources_scanned,\n  receipts_scanned: summary.receipts_scanned,\n  window_days: summary.window_days,\n  findings_count: summary.findings_count,\n  findings: summary.findings || [],\n  findings_by_rule: summary.findings_by_rule || {},\n  exitCode,\n}}];"
+        "jsCode": "// Parse the audit endpoint's response. The runner returns\n// {exit_code, duration_ms, stdout_json, stdout_raw, stderr_tail, timed_out}.\n// When the audit script printed valid JSON to stdout, stdout_json is the\n// already-parsed object; otherwise stdout_raw carries the literal text.\nconst item = $input.first();\nconst exitCode = item.json.exit_code != null ? item.json.exit_code : -1;\nconst stderrTail = (item.json.stderr_tail || '').toString();\nlet summary = item.json.stdout_json;\nif (!summary && item.json.stdout_raw) {\n  try { summary = JSON.parse(item.json.stdout_raw); } catch (e) {}\n}\nif (!summary) {\n  return [{ json: {\n    audit_status: 'parse_error',\n    parse_error: 'audit_stdout_unparseable',\n    exitCode,\n    raw_stderr_tail: stderrTail.split('\\n').slice(-15).join('\\n'),\n    findings_count: 0,\n    findings: [],\n    findings_by_rule: {},\n  }}];\n}\nreturn [{ json: {\n  audit_status: summary.status,\n  sources_scanned: summary.sources_scanned,\n  receipts_scanned: summary.receipts_scanned,\n  window_days: summary.window_days,\n  findings_count: summary.findings_count,\n  findings: summary.findings || [],\n  findings_by_rule: summary.findings_by_rule || {},\n  exitCode,\n}}];\n"
       },
       "id": "parse-audit-output",
       "name": "Parse Audit Output",

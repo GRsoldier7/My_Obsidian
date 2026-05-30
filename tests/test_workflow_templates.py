@@ -69,11 +69,6 @@ _LOG_WRITE_OPTIONAL = {
     # Allowlisted so the test passes; remove from SCHEDULED_WORKFLOWS once
     # the JSON is archived.
     "overdue-task-alert-v2.json",
-    # vault-health-report has a documented dynamic bug (NEXT-STEPS item 10
-    # — executeCommand dropped from n8n 2.x active-workflow registry; node
-    # silently fails before log-write). Static reachability passes once
-    # item 10's runner-endpoint swap lands. Allowlisted until then.
-    "vault-health-report.json",
 }
 
 # NOTE on system-health-monitor.json (REMOVED from allowlist 2026-05-29):

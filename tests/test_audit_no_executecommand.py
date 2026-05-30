@@ -67,20 +67,16 @@ def test_workflow_files_excludes_quarantine_and_archive():
 
 # ── Real repo state ───────────────────────────────────────────────────────────
 def test_real_active_workflows_post_remediation():
-    """As of the 2026-05-16 commit landing this audit, vault-health-report still
-    contains the executeCommand node — it's the known-broken workflow tracked
-    in NEXT-STEPS.md for post-soak fix.
-
-    This test pins the EXPECTED leaky filename so a future remediation will
-    update this test by removing it from the expected set — at which point the
-    audit MUST be clean.
-    """
-    expected_leaky = {"vault-health-report.json"}
+    """Post-remediation (2026-05-29, commit migrating vault-health-report from
+    executeCommand → httpRequest POST /audit-receipts): zero active workflows
+    should contain n8n-nodes-base.executeCommand. If a new workflow drifts
+    into using executeCommand, this test catches it BEFORE merge."""
     actual_leaky = set()
     for f in ane.workflow_files():
         if ane.find_executecommand_nodes(f):
             actual_leaky.add(f.name)
-    assert actual_leaky == expected_leaky, (
-        f"Expected exactly {expected_leaky} to contain executeCommand; got {actual_leaky}. "
-        f"If you fixed vault-health-report.json: also update this test to assert empty."
+    assert actual_leaky == set(), (
+        f"Unexpected executeCommand nodes in active workflows: {actual_leaky}. "
+        f"executeCommand was dropped by the n8n 2.x active-workflow registry; "
+        f"replace with httpRequest against the OHO runner sidecar."
     )
