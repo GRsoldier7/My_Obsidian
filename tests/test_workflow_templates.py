@@ -69,14 +69,32 @@ _LOG_WRITE_OPTIONAL = {
     # Allowlisted so the test passes; remove from SCHEDULED_WORKFLOWS once
     # the JSON is archived.
     "overdue-task-alert-v2.json",
-    # system-health-monitor + vault-health-report have IF branches with
-    # empty terminal arrays — same class of bug as daily-note-creator-v2.
-    # Tracked as P2 followup; need a Build Noop Log node on the false
-    # branches. Allowlisted to keep the test green so it catches NEW
-    # regressions; remove from this set as each is fixed.
-    "system-health-monitor.json",
+    # vault-health-report has a documented dynamic bug (NEXT-STEPS item 10
+    # — executeCommand dropped from n8n 2.x active-workflow registry; node
+    # silently fails before log-write). Static reachability passes once
+    # item 10's runner-endpoint swap lands. Allowlisted until then.
     "vault-health-report.json",
 }
+
+# NOTE on system-health-monitor.json (REMOVED from allowlist 2026-05-29):
+# This workflow was misclassified as having an IF-false-branch silent-log
+# bug. The connections graph is:
+#
+#   Every 6 Hours (trigger)
+#     → Init Checks
+#     → S3: Check North Star
+#     → S3: Check MTL
+#     → Evaluate Results
+#         ├──→ Any Failures? (IF; gates email only)
+#         │       ├──→ Email: Health Alert   (TRUE branch)
+#         │       └──→ []                    (FALSE branch — correct)
+#         └──→ Convert Log to Binary → S3: Write Log   (parallel; always)
+#
+# `Any Failures?` only routes the email; log-writing happens on a parallel
+# chain from `Evaluate Results`. The refined detection algorithm in
+# `_every_if_branch_yields_log_write` now correctly tolerates this
+# pattern. The historical "silent" symptom was the S3 headObject silent-
+# bail (fixed 3560896 via `alwaysOutputData: true`), not the IF.
 
 _LOG_WRITE_NODE_HINTS = (
     "write log",
@@ -567,6 +585,27 @@ def _reachable_from(wf: dict, start: str) -> set[str]:
     return seen
 
 
+def _reachable_from_skipping(wf: dict, start: str, *, skip: str) -> set[str]:
+    """BFS that refuses to traverse THROUGH a named node. Used to decide
+    whether a log-write is reachable via a path that bypasses a given IF.
+    A workflow can correctly leave an IF's false branch as ``[]`` when the
+    IF only gates a side-effect (e.g. email) while log-writing lives on a
+    parallel chain — see system-health-monitor: `Evaluate Results` fans
+    out to BOTH `Any Failures?` (IF; gates email) AND `Convert Log to
+    Binary` → `S3: Write Log` (always-runs)."""
+    conns = wf.get("connections") or {}
+    seen: set[str] = set()
+    stack = [start]
+    while stack:
+        cur = stack.pop()
+        if cur in seen or cur == skip:
+            continue
+        seen.add(cur)
+        for tgt in iter_targets(conns.get(cur) or {}):
+            stack.append(tgt)
+    return seen
+
+
 def _trigger_node_names(wf: dict) -> list[str]:
     """Trigger nodes are roots of the graph; any node whose type ends in
     Trigger OR is a webhook entry."""
@@ -580,26 +619,50 @@ def _trigger_node_names(wf: dict) -> list[str]:
 
 def _every_if_branch_yields_log_write(wf: dict, log_nodes: set[str]) -> list[str]:
     """Return list of `(if_node, branch_index)` strings whose downstream
-    reachable set does not include any log-write node. Empty list = OK."""
+    reachable set does not include any log-write node AND for which no
+    parallel-chain path from a trigger reaches a log-write while
+    bypassing this IF.
+
+    Refined 2026-05-29 after the system-health-monitor misclassification:
+    the original algorithm flagged any IF whose false branch was
+    terminal `[]`. That is over-strict — an IF whose only role is to
+    gate a side-effect (email, notification) is correctly terminal on
+    its non-firing branch as long as log-writing is on a parallel
+    branch that does not depend on the IF firing. The refined check
+    keeps the original tight invariant for IFs that are the ONLY path
+    to log-write (the daily-note-creator-v2 + link-enricher case), but
+    tolerates IFs whose absence still leaves a log-write reachable from
+    a trigger.
+    """
     conns = wf.get("connections") or {}
     by_name = {n["name"]: n for n in wf.get("nodes", [])}
+    trigger_names = _trigger_node_names(wf)
     bad = []
     for node_name, node in by_name.items():
         if str(node.get("type", "")) != "n8n-nodes-base.if":
             continue
         branches = (conns.get(node_name) or {}).get("main") or []
         for idx, branch in enumerate(branches):
-            if not branch:
-                # Empty terminal branch — log node can't be reached.
-                bad.append(f"{node_name}[{idx}]")
-                continue
-            # Walk the subgraph starting from each immediate target.
-            reached: set[str] = set()
+            # 1. Branch itself reaches log-write — OK
+            reached_via_branch: set[str] = set()
             for item in branch:
                 if isinstance(item, dict) and item.get("node"):
-                    reached |= _reachable_from(wf, item["node"])
-            if not (reached & log_nodes):
-                bad.append(f"{node_name}[{idx}]")
+                    reached_via_branch |= _reachable_from(wf, item["node"])
+            if reached_via_branch & log_nodes:
+                continue
+
+            # 2. A parallel chain from a trigger reaches log-write even
+            #    if this IF is removed — also OK (the IF only gates a
+            #    side-effect like email; log-write is unconditional).
+            bypassed: set[str] = set()
+            for trig in trigger_names:
+                bypassed |= _reachable_from_skipping(wf, trig, skip=node_name)
+            if bypassed & log_nodes:
+                continue
+
+            # Otherwise: the workflow relies on this IF firing to write a
+            # log, and this branch fails to do so. Real silent-log bug.
+            bad.append(f"{node_name}[{idx}]")
     return bad
 
 
