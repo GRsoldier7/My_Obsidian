@@ -44,7 +44,13 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from tools.s3_verified import VerificationError, put_json_verified  # noqa: E402
+from tools.s3_verified import (  # noqa: E402
+    PreconditionFailedError,
+    VerificationError,
+    put_json_verified,
+    put_text_if_match_verified,
+    put_text_verified,
+)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 MTL_KEY = "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
@@ -123,17 +129,17 @@ def get_object(s3, key: str) -> tuple[str, dict]:
 
 
 def put_object_verified(s3, key: str, body: str, if_match: Optional[str] = None) -> int:
-    kwargs = dict(
-        Bucket=bucket(),
-        Key=key,
-        Body=body.encode("utf-8"),
-        ContentType="text/markdown; charset=utf-8",
-    )
     if if_match:
-        kwargs["IfMatch"] = if_match
-    s3.put_object(**kwargs)
-    head = s3.head_object(Bucket=bucket(), Key=key)
-    return head["ContentLength"]
+        result = put_text_if_match_verified(
+            s3, bucket(), key, body, if_match,
+            content_type="text/markdown; charset=utf-8",
+        )
+    else:
+        result = put_text_verified(
+            s3, bucket(), key, body,
+            content_type="text/markdown; charset=utf-8",
+        )
+    return result.size_bytes
 
 
 # ── Parsing ──────────────────────────────────────────────────────────────────
@@ -431,12 +437,9 @@ def run(args: argparse.Namespace) -> int:
     print(f"Writing MTL ({modified} TODO marker(s) added) with If-Match guard …")
     try:
         put_object_verified(s3, MTL_KEY, new_mtl, if_match=meta["ETag"])
-    except ClientError as e:
-        code = e.response["Error"].get("Code", "")
-        if code == "PreconditionFailed":
-            print("ABORT: MTL ETag changed between read and write. Concurrent edit detected.", file=sys.stderr)
-            return 4
-        raise
+    except PreconditionFailedError:
+        print("ABORT: MTL ETag changed between read and write. Concurrent edit detected.", file=sys.stderr)
+        return 4
 
     print(f"  ✓ MTL updated. Backup preserved at {backup_key}.")
     _write_log(s3, run_date, classification, suggestions, applied=True, modified_lines=modified)

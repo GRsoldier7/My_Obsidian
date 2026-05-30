@@ -158,6 +158,11 @@ def test_hallucination_guard_no_fabricated_dates():
 
 # ── Dry-run safety (mocked S3) ───────────────────────────────────────────────
 def _mock_s3_with_mtl(mtl: str, *, last_modified: datetime | None = None):
+    """Build a mock S3 that tracks per-key body sizes so head_object responses
+    line up with whatever put_object last wrote. Required because
+    tools.s3_verified.put_text_verified compares head_object ContentLength
+    against body length; a single-static head_object mock would explode every
+    non-MTL-sized write (backup, report, etc.)."""
     last_modified = last_modified or (datetime.now(timezone.utc) - timedelta(minutes=10))
     body = MagicMock()
     body.read.return_value = mtl.encode("utf-8")
@@ -167,7 +172,23 @@ def _mock_s3_with_mtl(mtl: str, *, last_modified: datetime | None = None):
         "ETag": '"abc123"',
         "LastModified": last_modified,
     }
-    s3.head_object.return_value = {"ContentLength": len(mtl.encode("utf-8"))}
+    # Pre-seed the MTL key size so fetch_mtl_last_modified + the read path
+    # see consistent ContentLength even before any writes.
+    sizes_by_key: dict[str, int] = {bf.MTL_KEY: len(mtl.encode("utf-8"))}
+
+    def _put_object_side_effect(**kwargs):
+        sizes_by_key[kwargs["Key"]] = len(kwargs["Body"])
+        return {"ETag": '"new-etag"'}
+
+    def _head_object_side_effect(**kwargs):
+        return {
+            "ContentLength": sizes_by_key.get(kwargs["Key"], 0),
+            "ETag": '"abc123"',
+            "LastModified": last_modified,
+        }
+
+    s3.put_object.side_effect = _put_object_side_effect
+    s3.head_object.side_effect = _head_object_side_effect
     s3.get_paginator.return_value.paginate.return_value = iter([])  # no versions
     return s3
 

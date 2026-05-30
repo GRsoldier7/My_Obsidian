@@ -63,13 +63,6 @@ _KNOWN_VIOLATORS: dict[str, str] = {
         "(2026-05-27). Remaining put_object is write_s3 (MTL + archive RMW hot path); "
         "needs IfMatch wrapper before final migration."
     ),
-    "scripts/backfill_mtl_metadata.py": (
-        "_write_log migrated to s3_verified.put_json_verified (2026-05-28). "
-        "Remaining put_object is the file's own put_object_verified helper "
-        "(line 128) — duplicates the s3_verified.put_text_if_match_verified "
-        "pattern. Final migration: swap put_object_verified body to call the "
-        "canonical helper, then delete this allowlist entry."
-    ),
 }
 
 
