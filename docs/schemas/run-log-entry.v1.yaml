@@ -1,0 +1,65 @@
+# Run-log entry schema v1 — top-down-plan §5 A4 (SinkInputContract).
+#
+# Common base shape for every 99_System/logs/<workflow>-<YYYY-MM-DD>.json entry.
+# Producers MAY extend with workflow-specific fields (RunLogEntry.extras).
+# Consumed by:
+#   - scripts/audit_workflow_runlogs (skip_reason enum)
+#   - tools/build_health_dashboard (rollups)
+#   - scripts/audit_extraction_receipts (brain-dump-processor specifically)
+#
+# Lock contract:
+#   - Schema is FROZEN at v1. Additive changes only.
+#   - skip_reason enum lives in tests/test_workflow_templates.ALLOWED_SKIP_REASONS;
+#     this schema mirrors it. Adding a new skip_reason requires updating both.
+
+schema_version: 1
+schema: oho.run-log-entry.v1
+
+required_fields:
+  workflow:
+    type: string
+    description: Stable identifier; matches the n8n JSON filename stem.
+  run_date:
+    type: string
+    format: yyyy-mm-dd
+  started_at:
+    type: string
+    format: iso-8601-utc
+  finished_at:
+    type: string
+    format: iso-8601-utc
+  duration_ms:
+    type: integer
+    minimum: 0
+  status:
+    type: string
+    enum: [success, skipped, error]
+
+conditional_fields:
+  skip_reason:
+    type: string
+    enum:
+      - minio_auth_error
+      - minio_list_failed
+      - empty_inbox
+      - no_active_files
+      - missing_credential
+      - fetch_failure
+      - already_processed_today
+      - ai_unavailable
+      - rate_limited
+      - dry_run
+    required_when: status == "skipped"
+
+optional_fields:
+  # Forward-compat zone. Workflow-specific fields land under extras at the
+  # Python layer; in JSON they appear as top-level keys alongside the required
+  # set. Consumers tolerate unknown keys.
+
+invariants:
+  - id: chronological
+    rule: finished_at >= started_at
+  - id: duration_matches_clock
+    rule: abs(duration_ms - int((finished_at - started_at).total_seconds() * 1000)) <= 50
+  - id: skipped_carries_reason
+    rule: when status == "skipped", skip_reason MUST be present and in the enum
