@@ -44,6 +44,21 @@ if str(_REPO_ROOT) not in sys.path:
 # P1 integrity layer (ADR-0005). Pure functions — no I/O.
 from tools import bd_integrity as bdi
 
+# A4 SinkInputContract — typed dataclasses for at-rest JSON (additive: adds
+# schema_version + schema; all existing field names preserved at top level).
+from tools.sink_contracts import (
+    SCHEMA_NAME_RUNLOG,
+    SCHEMA_NAME_SUMMARY,
+    SCHEMA_VERSION_RUNLOG,
+    SCHEMA_VERSION_SUMMARY,
+    BrainDumpSummary,
+    FileError,
+    FilePartial,
+    RunLogEntry,
+    TopAddedTask,
+)
+from tools.s3_verified import put_text_verified
+
 # ── Configuration ────────────────────────────────────────────────────────────
 
 MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://192.168.1.240:9000")
@@ -143,6 +158,9 @@ class RunLog:
     finished_at: str = ""
     duration_ms: int = 0
     status: str = "success"
+    # Optional skip_reason — populated when status="skipped". Surfaced at the
+    # top level of the run-log JSON via RunLogEntry (A4 SinkInputContract).
+    skip_reason: str | None = None
     files_discovered: int = 0
     files_with_content: int = 0
     items_extracted: int = 0
@@ -1015,21 +1033,51 @@ def reset_to_template(content: str, extracted_headers: list[str], today: str) ->
 
 
 def write_run_log(s3, log: RunLog, dry_run: bool):
-    """Write JSON run log to 99_System/logs/."""
+    """Write JSON run log to 99_System/logs/.
+
+    Routes through RunLogEntry (A4 SinkInputContract). Common fields
+    (workflow, run_date, started_at, finished_at, duration_ms, status,
+    skip_reason) sit at the top level; everything else on RunLog rides
+    under `extras` and is flattened back to top-level on serialise — so
+    n8n Code-node consumers that grep for `tasks_written` / `articles_queued`
+    continue to work unchanged.
+    """
     if dry_run:
         return
     key = f"{LOGS_PREFIX}brain-dump-processor-{log.run_date}.json"
-    log_dict = asdict(log)
-    s3_put_verified(s3, key, json.dumps(log_dict, indent=2), dry_run)
+
+    common = {
+        "schema_version": SCHEMA_VERSION_RUNLOG,
+        "schema": SCHEMA_NAME_RUNLOG,
+        "workflow": log.workflow,
+        "run_date": log.run_date,
+        "started_at": log.started_at,
+        "finished_at": log.finished_at,
+        "duration_ms": log.duration_ms,
+        "status": log.status,
+    }
+    if getattr(log, "skip_reason", None):
+        common["skip_reason"] = log.skip_reason
+
+    extras = asdict(log)
+    for k in list(common.keys()):
+        extras.pop(k, None)
+    # Defensive: drop schema_version / schema if they ever leaked into RunLog.
+    extras.pop("schema_version", None)
+    extras.pop("schema", None)
+
+    entry = RunLogEntry.from_dict({**common, **extras})
+    body = json.dumps(entry.to_dict(), indent=2)
+    put_text_verified(s3, MINIO_BUCKET, key, body, content_type="application/json")
 
 
-def build_operator_summary(log: RunLog, *, top_n: int = 10) -> dict:
+def build_operator_summary(log: RunLog, *, top_n: int = 10) -> BrainDumpSummary:
     """Build the operator-summary payload for the daily command center.
 
     Pure function — no I/O. Reads the captured `new_tasks_added` lines and
-    parses each into {area, priority, desc} for the home page's "🧠 New From
-    Brain Dumps" section. Sort key: priority A → B → C → none, then insertion
-    order. ADR-0006.
+    parses each into TopAddedTask(area, priority, desc) for the home page's
+    "🧠 New From Brain Dumps" section. Sort key: priority A → B → C → none,
+    then insertion order. ADR-0006 + A4 SinkInputContract.
     """
     parsed: list[dict] = []
     for line in log.new_tasks_added:
@@ -1049,34 +1097,51 @@ def build_operator_summary(log: RunLog, *, top_n: int = 10) -> dict:
     rank = {"A": 0, "B": 1, "C": 2, None: 3}
     parsed_sorted = sorted(parsed, key=lambda t: rank.get(t["priority"], 3))
 
-    return {
-        "run_finished_at": log.finished_at,
-        "run_started_at": log.started_at,
-        "status": log.status,
-        "tasks_written": log.tasks_written,
-        "review_added": log.items_routed.get("review_queue", 0),
-        "articles_queued": log.articles_queued,
-        "files_extracted": list(log.files_extracted),
-        "files_partial": list(log.files_partial),
-        "files_error": list(log.files_error),
-        "files_by_state": dict(log.files_by_state),
-        "reset_summary": dict(log.reset_summary),
-        "top_added_tasks": parsed_sorted[:top_n],
-        "total_added_tasks": len(parsed),
-    }
+    top_added = [
+        TopAddedTask(area=t["area"], priority=t["priority"], desc=t["desc"])
+        for t in parsed_sorted[:top_n]
+    ]
+
+    files_partial = [
+        FilePartial(file=fp.get("file", ""), reasons=list(fp.get("reasons", [])))
+        for fp in log.files_partial
+    ]
+    files_error = [
+        FileError(file=fe.get("file", ""), error=fe.get("error", ""))
+        for fe in log.files_error
+    ]
+
+    return BrainDumpSummary(
+        schema_version=SCHEMA_VERSION_SUMMARY,
+        schema=SCHEMA_NAME_SUMMARY,
+        run_finished_at=log.finished_at,
+        run_started_at=log.started_at,
+        status=log.status,
+        tasks_written=log.tasks_written,
+        review_added=log.items_routed.get("review_queue", 0),
+        articles_queued=log.articles_queued,
+        files_extracted=list(log.files_extracted),
+        files_partial=files_partial,
+        files_error=files_error,
+        files_by_state=dict(log.files_by_state),
+        reset_summary=dict(log.reset_summary),
+        top_added_tasks=top_added,
+        total_added_tasks=len(parsed),
+    )
 
 
 def write_operator_summary(s3, log: RunLog, dry_run: bool):
     """Persist the operator-summary state file (ADR-0006).
 
     Decoupled from run-log schema so build_command_center.py reads a stable
-    contract. Idempotent — overwrites prior summary every run.
+    contract. Idempotent — overwrites prior summary every run. Serialises
+    through BrainDumpSummary.to_dict() (A4 SinkInputContract).
     """
     if dry_run:
         return
     summary = build_operator_summary(log)
-    body = json.dumps(summary, indent=2, ensure_ascii=False)
-    s3_put_verified(s3, OPERATOR_SUMMARY_KEY, body, dry_run)
+    body = json.dumps(summary.to_dict(), indent=2, ensure_ascii=False)
+    put_text_verified(s3, MINIO_BUCKET, OPERATOR_SUMMARY_KEY, body, content_type="application/json")
 
 
 # ── Layer 3: Intent classification + routing ─────────────────────────────────
