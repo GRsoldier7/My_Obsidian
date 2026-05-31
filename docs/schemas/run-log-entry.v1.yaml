@@ -51,10 +51,10 @@ conditional_fields:
       - dry_run
     required_when: status == "skipped"
 
-optional_fields:
-  # Forward-compat zone. Workflow-specific fields land under extras at the
-  # Python layer; in JSON they appear as top-level keys alongside the required
-  # set. Consumers tolerate unknown keys.
+# Forward-compat zone. Workflow-specific fields land under extras at the
+# Python layer; in JSON they appear as top-level keys alongside the required
+# set. Consumers tolerate unknown keys.
+optional_fields: {}
 
 invariants:
   - id: chronological

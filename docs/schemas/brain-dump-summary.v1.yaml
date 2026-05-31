@@ -89,9 +89,9 @@ required_fields:
     type: integer
     minimum: 0
 
-optional_fields:
-  # Forward-compat zone (ADR-0008). Producers MAY add fields here without bumping
-  # the schema version. Consumers MUST ignore unknown keys.
+# Forward-compat zone (ADR-0008). Producers MAY add fields here without bumping
+# the schema version. Consumers MUST ignore unknown keys.
+optional_fields: {}
 
 invariants:
   - id: status_skipped_requires_reason
