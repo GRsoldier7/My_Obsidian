@@ -20,7 +20,7 @@
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-.PHONY: setup test e2e integration health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry gcal-status gcal-create gcal-finalize backfill-mtl-review backfill-mtl-apply vault-cleanup-review vault-cleanup-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-no-unverified-put-object audit-egress-classifier-wired audit-slo evals audit-all audit-ci hooks-install bootstrap-dev
+.PHONY: setup test e2e integration health validate-env coverage deploy verify lint-workflows audit-workflows audit-ai-tooling logs help build-home processed-readme deploy-runner deploy-runner-dry gcal-status gcal-create gcal-finalize backfill-mtl-review backfill-mtl-apply vault-cleanup-review vault-cleanup-apply audit-extraction-receipts audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-no-unverified-put-object audit-egress-classifier-wired audit-sink-contracts audit-slo evals audit-all audit-ci hooks-install bootstrap-dev
 
 PYTHON := python3
 # Always invoke pytest via the same interpreter as PYTHON — avoids the case
@@ -234,6 +234,12 @@ audit-no-argv-secrets:
 audit-egress-classifier-wired:
 	$(PYTHON) scripts/audit_egress_classifier_wired.py
 
+## A4 SinkInputContract at-rest validator (top-down-plan §5 A4).
+## Walks MinIO 99_System/state/ + 99_System/logs/ and validates against
+## tools/sink_contracts.{BrainDumpSummary,RunLogEntry}. Self-test mode for CI.
+audit-sink-contracts:
+	$(PYTHON) scripts/audit_sink_contracts.py --self-test
+
 ## Wave-X H3 SLO conformance skeleton (post-soak: --apply turns on MinIO read).
 audit-slo:
 	$(PYTHON) scripts/audit_slo_conformance.py
@@ -245,7 +251,7 @@ evals:
 ## Run every offline audit in one shot (use as a pre-merge gate).
 ## `audit-extraction-receipts` deliberately NOT included — it needs live MinIO
 ## and runs as a separate daily soak signal, not on every PR.
-audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-no-unverified-put-object audit-egress-classifier-wired audit-slo
+audit-all: audit-workflows audit-ai-tooling audit-data-classes audit-secrets audit-planning-docs audit-workflow-secrets audit-workflow-runlogs audit-workflow-email-format audit-no-executecommand audit-no-argv-secrets audit-no-unverified-put-object audit-egress-classifier-wired audit-sink-contracts audit-slo
 	@echo "✓ All offline audits passed."
 
 ## Pre-PR gate (local): every offline audit + unit tests. ≤30s on a warm cache.

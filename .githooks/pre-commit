@@ -51,6 +51,10 @@ echo "[pre-commit] egress-classifier-wired audit …"
 # egress_guard.guard_for_peer.
 python3 scripts/audit_egress_classifier_wired.py
 
+echo "[pre-commit] sink-contracts audit …"
+# A4 SinkInputContract enforcement (self-test in CI; --live needs MinIO env).
+python3 scripts/audit_sink_contracts.py --self-test
+
 echo "[pre-commit] unit tests …"
 python3 -m pytest tests/ -q --tb=line \
   --ignore=tests/test_process_brain_dump_e2e.py \

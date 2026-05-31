@@ -17,7 +17,7 @@ Last refresh: 2026-05-27 (auto-regenerable from `make audit-all` + `git rev-list
 |---|---|---|
 | Commits ahead of `master` (polish/prod-ready) | **94** | `git rev-list --left-right --count master...HEAD` |
 | Test suite (`make verify` scope) | **676 pass + 7 skip** | `make verify` |
-| Offline audits | **11 green** | see below |
+| Offline audits | **12 green** | see below |
 | Active n8n workflows | **14** | `workflows/n8n/*.json` (job-search quarantined) |
 | ADRs | **9** (0001-0006 historical; 0007/0008/0009 Accepted) | `docs/adr/` |
 | Eval fixtures | **35 / 200 target** | `evals/comms_privacy/` |
@@ -42,6 +42,7 @@ Last refresh: 2026-05-27 (auto-regenerable from `make audit-all` + `git rev-list
 11. `audit_no_argv_secrets.py` — blocks `curl -H "Bearer $VAR"` argv leaks (Codex P0 #2); `setup-n8n.sh` + `deploy_oho_runner.py` allowlisted until post-soak refactor
 12. `audit_no_unverified_put_object.py` — AST-walk blocks new `s3.put_object(...)` outside `tools/s3_verified.py` (Codex P1 / NEXT-STEPS item 13); 9 files allowlisted with rationale + migration pointer
 13. `audit_slo_conformance.py` — Wave-X H3 skeleton; parses `docs/SLO-life-os.md` (8 workflow targets); MinIO log walk lands post-soak
+14. `audit_sink_contracts.py` — A4 SinkInputContract validator; self-test mode in CI, `--live` walks MinIO for at-rest payloads against `tools/sink_contracts.{BrainDumpSummary,RunLogEntry}`
 
 Run all in one shot: `make audit-all`. Pre-PR gate: `make verify` (audit-all + unit tests).
 
