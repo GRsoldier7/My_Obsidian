@@ -90,11 +90,20 @@ class BrainDumpSummary:
             review_added=d["review_added"],
             articles_queued=d["articles_queued"],
             files_extracted=list(d["files_extracted"]),
-            files_partial=[FilePartial(**fp) for fp in d["files_partial"]],
-            files_error=[FileError(**fe) for fe in d["files_error"]],
+            files_partial=[
+                FilePartial(file=fp["file"], reasons=list(fp["reasons"]))
+                for fp in d["files_partial"]
+            ],
+            files_error=[
+                FileError(file=fe["file"], error=fe["error"])
+                for fe in d["files_error"]
+            ],
             files_by_state=dict(d["files_by_state"]),
             reset_summary=dict(d["reset_summary"]),
-            top_added_tasks=[TopAddedTask(**t) for t in d["top_added_tasks"]],
+            top_added_tasks=[
+                TopAddedTask(area=t["area"], priority=t["priority"], desc=t["desc"])
+                for t in d["top_added_tasks"]
+            ],
             total_added_tasks=d["total_added_tasks"],
         )
 

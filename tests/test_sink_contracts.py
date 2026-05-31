@@ -106,6 +106,30 @@ def test_brain_dump_summary_files_partial_error_parsed_as_dataclasses():
     assert isinstance(obj.files_error[0], FileError)
 
 
+def test_brain_dump_summary_tolerates_unknown_keys_in_nested_types():
+    """ADR-0008 forward-compat applies at every level. A producer adding a new
+    field to a files_partial entry MUST NOT crash existing consumers."""
+    d = _canonical_summary_dict()
+    d["files_partial"] = [
+        {"file": "noisy.md", "reasons": ["pre_extraction_failure"], "first_seen_at": "2026-05-30T00:00:00Z"},
+    ]
+    d["files_error"] = [
+        {"file": "broken.md", "error": "yaml parse", "stack_trace": "irrelevant"},
+    ]
+    d["top_added_tasks"] = [
+        {"area": "faith", "priority": "A", "desc": "x", "tag": "future-extension"},
+    ]
+    obj = BrainDumpSummary.from_dict(d)  # must not raise
+    assert obj.files_partial[0].file == "noisy.md"
+    assert obj.files_error[0].error == "yaml parse"
+    assert obj.top_added_tasks[0].desc == "x"
+    # to_dict should NOT carry the unknown nested keys (they were dropped by from_dict)
+    out = obj.to_dict()
+    assert "first_seen_at" not in out["files_partial"][0]
+    assert "stack_trace" not in out["files_error"][0]
+    assert "tag" not in out["top_added_tasks"][0]
+
+
 # ── RunLogEntry ───────────────────────────────────────────────────────────────
 
 def test_run_log_entry_round_trip_identity():
@@ -134,6 +158,20 @@ def test_run_log_entry_skipped_carries_reason():
     d["skip_reason"] = "empty_inbox"
     obj = RunLogEntry.from_dict(d)
     assert obj.skip_reason == "empty_inbox"
+
+
+def test_run_log_entry_skip_reason_and_extras_combined_round_trip():
+    """Round-trip identity when status=skipped (skip_reason set) AND producer-
+    specific fields (extras) are present simultaneously."""
+    d = _canonical_runlog_dict()
+    d["status"] = "skipped"
+    d["skip_reason"] = "empty_inbox"
+    d["tasks_written"] = 0
+    d["articles_queued"] = 0
+    obj = RunLogEntry.from_dict(d)
+    assert obj.skip_reason == "empty_inbox"
+    assert obj.extras == {"tasks_written": 0, "articles_queued": 0}
+    assert obj.to_dict() == d
 
 
 def test_run_log_entry_missing_required_raises_keyerror():
