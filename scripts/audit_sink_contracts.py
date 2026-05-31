@@ -24,8 +24,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 from tools.sink_contracts import (  # noqa: E402
     SCHEMA_NAME_RUNLOG,
@@ -36,16 +39,16 @@ from tools.sink_contracts import (  # noqa: E402
     RunLogEntry,
 )
 
+# Skip-reason enum: canonical source of truth lives in audit_workflow_runlogs.
+# Importing here keeps the two audits in lockstep — adding a new skip_reason
+# means ONE update + a YAML schema doc bump, not three.
+from audit_workflow_runlogs import ALLOWED_SKIP_REASONS as _SKIP_REASONS  # noqa: E402
 
-_SKIP_REASONS = {
-    "minio_auth_error", "minio_list_failed",
-    "empty_inbox", "no_active_files",
-    "missing_credential", "fetch_failure",
-    "already_processed_today", "ai_unavailable",
-    "rate_limited", "dry_run",
-}
+# Canonical 8-area enum lives in process_brain_dump.VALID_AREAS. Importing
+# here prevents a third copy from drifting (the schema YAML enum is a doc
+# mirror; producer + this audit share the runtime authority).
+from tools.process_brain_dump import VALID_AREAS as _VALID_AREAS  # noqa: E402
 
-_VALID_AREAS = {"faith", "family", "business", "consulting", "work", "health", "home", "personal"}
 _VALID_PRIORITIES = {"A", "B", "C"}
 
 
