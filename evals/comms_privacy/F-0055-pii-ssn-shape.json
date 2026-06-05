@@ -1,0 +1,20 @@
+{
+  "id": "F-0055",
+  "class": "private",
+  "category": "pii-ssn-shape",
+  "payload": {
+    "text": "Tax-prep checklist: bring 123-45-6789 SSN reference, W2s, prior-year return.",
+    "fields": {"area": "home", "priority": "B"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["pii:ssn-shape"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "require_explicit_allow_egress_to_vps",
+    "to_broker": "require_explicit_allow_egress_to_broker",
+    "to_openrouter": "require_explicit_allow_egress_to_openrouter"
+  }
+}

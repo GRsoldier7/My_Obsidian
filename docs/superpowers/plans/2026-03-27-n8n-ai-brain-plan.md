@@ -32,15 +32,15 @@
 These values are referenced throughout the plan. Do not change them.
 
 ```
-MinIO S3 Credential ID:   jscahbrUH2TCnnSx
+MinIO S3 Credential ID:   [OLD_MINIO_CRED_ID]
 MinIO S3 Credential Name: MinIO S3
-Gmail SMTP Credential ID: lWGOwsktldwb3iEj
+Gmail SMTP Credential ID: [SMTP_CRED_ID]
 Gmail SMTP Credential Name: Gmail SMTP (Aaron)
 
 S3 Bucket: obsidian-vault
 Vault Prefix: Homelab
 Timezone: America/Chicago
-Email: aaron.deyoung@gmail.com
+Email: [USER_EMAIL]
 
 Brain Dumps:      Homelab/00_Inbox/brain-dumps/BrainDump — {Domain}.md
 Master Task List: Homelab/10_Active Projects/Active Personal/!!! MASTER TASK LIST.md
@@ -742,7 +742,7 @@ Add these nodes to the `nodes` array:
   "position": [900, 540],
   "credentials": {
     "aws": {
-      "id": "jscahbrUH2TCnnSx",
+      "id": "[OLD_MINIO_CRED_ID]",
       "name": "MinIO S3"
     }
   },
@@ -902,7 +902,7 @@ Add to `nodes` array after `define-scan-targets`:
   "typeVersion": 2,
   "position": [680, 480],
   "credentials": {
-    "aws": { "id": "jscahbrUH2TCnnSx", "name": "MinIO S3" }
+    "aws": { "id": "[OLD_MINIO_CRED_ID]", "name": "MinIO S3" }
   },
   "continueOnFail": true
 }

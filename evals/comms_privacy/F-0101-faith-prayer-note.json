@@ -1,0 +1,21 @@
+{
+  "id": "F-0101",
+  "class": "sensitive",
+  "category": "area-tag",
+  "payload": {
+    "text": "Sermon prep notes: pull Romans 12:2 thread on renewal of the mind; cross-ref Ephesians 4:23.",
+    "fields": {"area": "faith", "priority": "A"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["area:faith", "faith-term:sermon", "faith-term:Romans 12:2", "faith-term:Ephesians 4:23"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  },
+  "notes": "Multi-tier hit: area-faith (tier 2) catches first, but the scripture refs + sermon term provide reason-list redundancy. Hard-denies to VPS / OpenRouter cloud routes."
+}

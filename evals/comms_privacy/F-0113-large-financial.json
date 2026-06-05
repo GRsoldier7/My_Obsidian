@@ -1,0 +1,18 @@
+{
+  "id": "F-0113",
+  "class": "sensitive",
+  "category": "financial",
+  "payload": {
+    "text": "Echelon Seven Q3 runway: $185,000 cash, monthly burn $42,000, ~4.4 months.",
+    "fields": {"area": "business", "priority": "A"}
+  },
+  "hints": {"caller_asserted_class": null},
+  "expected_reasons": ["financial:$185,000", "financial:$42,000"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  }
+}

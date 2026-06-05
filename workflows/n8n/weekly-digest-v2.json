@@ -3,13 +3,23 @@
   "nodes": [
     {
       "parameters": {
-        "rule": { "interval": [{ "field": "cronExpression", "expression": "0 23 * * 0" }] }
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * 0"
+            }
+          ]
+        }
       },
       "id": "trigger",
       "name": "Sunday 6PM CDT",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
-      "position": [220, 300]
+      "position": [
+        220,
+        300
+      ]
     },
     {
       "parameters": {
@@ -21,8 +31,16 @@
       "name": "S3: Read North Star",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [440, 200],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "position": [
+        440,
+        200
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
       "continueOnFail": true
     },
     {
@@ -35,33 +53,58 @@
       "name": "S3: Read MTL",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [440, 400],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } },
+      "position": [
+        440,
+        400
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
       "continueOnFail": true
     },
     {
       "parameters": {
-        "jsCode": "const today = new Date().toISOString().split('T')[0];\nconst weekAgo = new Date(Date.now() - 7*86400000).toISOString().split('T')[0];\n\nlet mtl = '';\ntry { const b = $('S3: Read MTL').first().binary?.data; if(b) mtl = Buffer.from(b.data,'base64').toString('utf-8'); } catch(e) {}\n\n// Count tasks by area and status\nconst areas = ['faith','family','business','consulting','work','health','home','personal'];\nconst stats = {};\nfor (const a of areas) stats[a] = { total: 0, completed: 0, overdue: 0, dueThisWeek: 0 };\n\nconst nextWeek = new Date(Date.now() + 7*86400000).toISOString().split('T')[0];\n\n// Open tasks\nconst openRe = /- \\[ \\] .+?\\[area:: (\\w+)\\].*?(?:\\[due:: (\\d{4}-\\d{2}-\\d{2})\\])?/g;\nlet m;\nwhile ((m = openRe.exec(mtl)) !== null) {\n  const area = m[1]; const due = m[2];\n  if (stats[area]) {\n    stats[area].total++;\n    if (due && due < today) stats[area].overdue++;\n    if (due && due >= today && due <= nextWeek) stats[area].dueThisWeek++;\n  }\n}\n\n// Completed tasks (- [x])\nconst doneRe = /- \\[x\\] .+?\\[area:: (\\w+)\\]/g;\nwhile ((m = doneRe.exec(mtl)) !== null) {\n  if (stats[m[1]]) stats[m[1]].completed++;\n}\n\n// Q2 Rocks\nconst rocks = [\n  { area: 'faith', rock: 'Launch social media Bible study (4 sessions)' },\n  { area: 'family', rock: 'Marriage Alignment Questionnaire + bi-weekly check-in' },\n  { area: 'business', rock: 'Ship MVP — website, offer, 3 outreach (Echelon Seven)' },\n  { area: 'work', rock: 'Deliver Union project + position for exit' },\n  { area: 'health', rock: 'Hip decision + 3x/week gym for 8 weeks' }\n];\n\n// Build HTML digest\nlet html = `<h1>Weekly Needle Mover Digest</h1><p>Week ending ${today}</p>`;\nhtml += '<h2>Q2 Rock Progress</h2><table border=\"1\" cellpadding=\"5\"><tr><th>Rock</th><th>Open</th><th>Done</th><th>Overdue</th></tr>';\nfor (const r of rocks) {\n  const s = stats[r.area] || { total:0, completed:0, overdue:0 };\n  html += `<tr><td><strong>${r.area}</strong>: ${r.rock}</td><td>${s.total}</td><td>${s.completed}</td><td>${s.overdue > 0 ? '<span style=\"color:red\">' + s.overdue + '</span>' : '0'}</td></tr>`;\n}\nhtml += '</table>';\n\nhtml += '<h2>All Areas</h2><table border=\"1\" cellpadding=\"5\"><tr><th>Area</th><th>Open</th><th>Done</th><th>Due This Week</th><th>Overdue</th></tr>';\nfor (const [area, s] of Object.entries(stats)) {\n  if (s.total + s.completed === 0) continue;\n  html += `<tr><td>${area}</td><td>${s.total}</td><td>${s.completed}</td><td>${s.dueThisWeek}</td><td>${s.overdue}</td></tr>`;\n}\nhtml += '</table>';\n\nconst log = JSON.stringify({ workflow: 'weekly-digest', run_date: today, finished_at: new Date().toISOString(), status: 'success' }, null, 2);\n\nreturn [{ json: { html, today, logKey: `99_System/logs/weekly-digest-${today}.json`, logContent: log } }];"
+        "jsCode": "const today = new Date().toISOString().split('T')[0];\nconst todayDate = new Date();\nconst nextWeek = new Date(Date.now() + 7*86400000).toISOString().split('T')[0];\nconst dayOfWeek = todayDate.getDay();\nconst daysToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;\nconst monday = new Date(todayDate.getTime() - daysToMonday * 86400000);\nconst weekOf = monday.toISOString().split('T')[0];\n\nlet mtl = '';\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  mtl = buf.toString('utf-8');\n} catch(e) {}\n\nconst areas = ['faith','family','business','consulting','work','health','home','personal'];\nconst areaEmoji = { faith:'🙏', family:'👨‍👩‍👧', business:'🚀', consulting:'💼', work:'🏥', health:'💪', home:'🏠', personal:'🎯' };\n\nconst stats = {};\nfor (const a of areas) stats[a] = { total: 0, completed: 0, overdue: 0, dueThisWeek: 0, noDue: 0, priorityA: 0, priorityADone: 0, priorityAOpen: 0 };\n\nconst overdueTasks = [];\nconst undatedARocks = [];\n\nconst openRe = /^- \\[ \\] (.+?)\\[area:: (\\w+)\\].*?\\[priority:: ([ABC])\\](?:.*?\\[due:: (\\d{4}-\\d{2}-\\d{2})\\])?/gm;\nlet m;\nwhile ((m = openRe.exec(mtl)) !== null) {\n  const [, descRaw, area, priority, due] = m;\n  if (!stats[area]) continue;\n  const desc = descRaw.trim();\n  stats[area].total++;\n  if (priority === 'A') {\n    stats[area].priorityA++;\n    stats[area].priorityAOpen++;\n    if (!due) undatedARocks.push({ desc, area });\n  }\n  if (!due) {\n    stats[area].noDue++;\n  } else {\n    if (due < today) {\n      const daysOverdue = Math.floor((new Date(today) - new Date(due)) / 86400000);\n      stats[area].overdue++;\n      overdueTasks.push({ desc, area, priority, due, daysOverdue });\n    }\n    if (due >= today && due <= nextWeek) stats[area].dueThisWeek++;\n  }\n}\n\nconst doneRe = /^- \\[x\\] (.+?)\\[area:: (\\w+)\\].*?\\[priority:: ([ABC])\\]/gm;\nwhile ((m = doneRe.exec(mtl)) !== null) {\n  const [, , area, priority] = m;\n  if (!stats[area]) continue;\n  stats[area].completed++;\n  if (priority === 'A') stats[area].priorityADone++;\n}\n\n// Tier overdue\nconst critical = overdueTasks.filter(t => t.daysOverdue >= 8);\nconst high = overdueTasks.filter(t => t.daysOverdue >= 4 && t.daysOverdue < 8);\nconst medium = overdueTasks.filter(t => t.daysOverdue < 4);\n\n// Q2 rocks — dynamic, hide rocks with total === 0\nconst ROCKS = [\n  { area:'faith', label:'Social media Bible study (4 sessions)' },\n  { area:'family', label:'Marriage Alignment + bi-weekly check-in' },\n  { area:'business', label:'MVP — website, offer, 3 outreach (Echelon Seven)' },\n  { area:'work', label:'Deliver Union project + position for exit' },\n  { area:'health', label:'Hip decision + 3x/week gym ×8 weeks' },\n];\nconst liveRocks = ROCKS.map(r => {\n  const done = stats[r.area].priorityADone;\n  const open = stats[r.area].priorityAOpen;\n  const total = done + open;\n  const pct = total > 0 ? Math.round((done / total) * 100) : 0;\n  return Object.assign({}, r, { done, open, total, pct });\n}).filter(r => r.total > 0);\n\n// === Subject spoiler ===\nlet subject;\nif (undatedARocks.length > 0) {\n  subject = `📊 Weekly Review — ${undatedARocks.length} Priority A rock${undatedARocks.length > 1 ? 's need' : ' needs'} dates · ${overdueTasks.length} overdue`;\n} else if (critical.length > 0) {\n  subject = `🔥 Weekly Review — ${critical.length} CRITICAL overdue (8d+) · need to triage now`;\n} else if (overdueTasks.length > 0) {\n  subject = `📊 Weekly Review — ${overdueTasks.length} overdue · ${liveRocks.length} rocks in flight`;\n} else {\n  const totalDone = areas.reduce((s, a) => s + stats[a].completed, 0);\n  subject = `✅ Weekly Review — All clear · ${totalDone} done in MTL · Week of ${weekOf}`;\n}\n\n// === HTML build ===\nfunction priorityBadge(p) {\n  const colors = { A:'#dc2626', B:'#d97706', C:'#6b7280' };\n  return '<span style=\"display:inline-block;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:bold;background:' + colors[p] + ';color:white\">' + p + '</span>';\n}\n\nfunction progressBar(pct, color) {\n  const c = color || (pct >= 75 ? '#16a34a' : pct >= 40 ? '#d97706' : '#dc2626');\n  return '<div style=\"background:#e5e7eb;border-radius:4px;height:6px;margin-top:4px\"><div style=\"background:' + c + ';width:' + pct + '%;height:6px;border-radius:4px\"></div></div>';\n}\n\nlet html = '<div style=\"font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',Arial,sans-serif;max-width:680px;margin:0 auto;background:#f5f5f5;padding:0;color:#1a1a1a;line-height:1.5\">';\n\n// Apple Watch / accessibility preview\nconst previewLine = `Week of ${weekOf} · ${overdueTasks.length} overdue · ${undatedARocks.length} A rocks need dates · ${liveRocks.length} rocks tracked`;\nhtml += '<noscript style=\"display:block;padding:8px 16px;background:#f3f4f6;color:#1f2937;font-size:12px\">' + previewLine + '</noscript>';\n\n// Header\nhtml += '<div style=\"background:#1a1a2e;color:white;padding:22px 20px;border-radius:8px 8px 0 0\">';\nhtml += '<h1 style=\"margin:0;font-size:20px;font-weight:700\">📊 Weekly Life OS Review</h1>';\nhtml += '<p style=\"margin:6px 0 0;font-size:13px;opacity:0.85\">Week of ' + weekOf + ' · ' + today + '</p>';\nhtml += '</div>';\n\n// === FOCUS — the only true CTA ===\nhtml += '<div style=\"background:#7c3aed;color:white;padding:14px 20px;margin:2px 0\">';\nhtml += '<p style=\"margin:0;font-size:10px;text-transform:uppercase;letter-spacing:1.5px;opacity:0.85\">🎯 FOCUS FOR THIS WEEK</p>';\nif (undatedARocks.length === 0) {\n  html += '<p style=\"margin:6px 0 0;font-size:14px;font-weight:600\">All Priority A rocks have dates scheduled. ✅</p>';\n} else {\n  html += '<p style=\"margin:6px 0 4px;font-size:14px;font-weight:600\">Schedule a due date for these ' + undatedARocks.length + ' Priority A rock' + (undatedARocks.length > 1 ? 's' : '') + ':</p>';\n}\nhtml += '</div>';\n\nif (undatedARocks.length > 0) {\n  html += '<div style=\"padding:14px 20px;background:white\">';\n  for (const r of undatedARocks.slice(0, 8)) {\n    const emoji = areaEmoji[r.area] || '📌';\n    html += '<div style=\"border-left:4px solid #7c3aed;background:#f5f3ff;padding:10px 14px;margin:6px 0;border-radius:0 4px 4px 0\">';\n    html += priorityBadge('A') + ' <span style=\"font-size:13px;font-weight:500;margin-left:6px\">' + emoji + ' ' + r.desc + '</span>';\n    html += '<div style=\"font-size:11px;color:#6b21a8;margin-top:4px;text-transform:capitalize\">' + r.area + ' · needs due date</div>';\n    html += '</div>';\n  }\n  if (undatedARocks.length > 8) {\n    html += '<p style=\"margin:8px 0 0;font-size:11px;color:#6b7280\">…and ' + (undatedARocks.length - 8) + ' more in MTL.</p>';\n  }\n  html += '</div>';\n}\n\n// === HEALTH ALERT — tiered, tight ===\nhtml += '<div style=\"padding:14px 20px;background:#fff8f8;margin-top:2px\">';\nhtml += '<h2 style=\"margin:0 0 10px;font-size:14px;color:#dc2626;font-weight:700;text-transform:uppercase;letter-spacing:1.5px\">🔥 Overdue Health</h2>';\nif (overdueTasks.length === 0) {\n  html += '<div style=\"background:#f0fdf4;border:1px solid #86efac;border-radius:4px;padding:12px;text-align:center\"><span style=\"color:#14532d;font-weight:600\">✅ Zero overdue tasks. Caught up!</span></div>';\n} else {\n  html += '<table style=\"width:100%;border-collapse:collapse;font-size:13px\">';\n  html += '<tr><td style=\"padding:8px 12px;background:#fef2f2;border-left:4px solid #dc2626\"><strong style=\"color:#991b1b\">🔴 CRITICAL (8+ days)</strong></td><td style=\"padding:8px 12px;text-align:right;background:#fef2f2\"><strong style=\"font-size:18px;color:#991b1b\">' + critical.length + '</strong></td></tr>';\n  html += '<tr><td style=\"padding:8px 12px;background:#fff7ed;border-left:4px solid #ea580c\"><strong style=\"color:#9a3412\">🟠 HIGH (4-7 days)</strong></td><td style=\"padding:8px 12px;text-align:right;background:#fff7ed\"><strong style=\"font-size:18px;color:#9a3412\">' + high.length + '</strong></td></tr>';\n  html += '<tr><td style=\"padding:8px 12px;background:#fffbeb;border-left:4px solid #d97706\"><strong style=\"color:#92400e\">🟡 MEDIUM (1-3 days)</strong></td><td style=\"padding:8px 12px;text-align:right;background:#fffbeb\"><strong style=\"font-size:18px;color:#92400e\">' + medium.length + '</strong></td></tr>';\n  html += '</table>';\n\n  // Show critical task list inline (if any) — these need triage NOW\n  if (critical.length > 0) {\n    html += '<p style=\"margin:12px 0 4px;font-size:12px;font-weight:600;color:#991b1b\">Critical tasks (8+ days overdue):</p>';\n    for (const t of critical.slice(0, 5)) {\n      const emoji = areaEmoji[t.area] || '📌';\n      html += '<div style=\"border-left:3px solid #dc2626;background:#fef2f2;padding:8px 12px;margin:4px 0;font-size:12px\">';\n      html += priorityBadge(t.priority) + ' <strong>' + t.daysOverdue + 'd</strong> · ' + emoji + ' ' + t.desc;\n      html += '</div>';\n    }\n    if (critical.length > 5) html += '<p style=\"margin:6px 0 0;font-size:11px;color:#9b1c1c\">…and ' + (critical.length - 5) + ' more critical tasks.</p>';\n  }\n}\nhtml += '</div>';\n\n// === Q2 ROCKS — dynamic ===\nif (liveRocks.length > 0) {\n  html += '<div style=\"padding:16px 20px;background:#f9fafb;margin-top:2px\">';\n  html += '<h2 style=\"margin:0 0 12px;font-size:14px;color:#374151;font-weight:700;text-transform:uppercase;letter-spacing:1.5px\">🪨 Q2 Rocks — Live Progress</h2>';\n  for (const rock of liveRocks) {\n    const emoji = areaEmoji[rock.area] || '📌';\n    html += '<div style=\"margin-bottom:12px\">';\n    html += '<div style=\"display:flex;justify-content:space-between;align-items:center\">';\n    html += '<span style=\"font-size:12px;font-weight:600\">' + emoji + ' ' + rock.label + '</span>';\n    html += '<span style=\"font-size:11px;color:#6b7280;margin-left:8px;white-space:nowrap\">' + rock.done + '/' + rock.total + ' · ' + rock.pct + '%</span>';\n    html += '</div>';\n    html += progressBar(rock.pct);\n    html += '</div>';\n  }\n  html += '</div>';\n}\n\n// === AREA HEALTH — collapsed ===\nhtml += '<div style=\"padding:14px 20px;background:white;margin-top:2px\">';\nhtml += '<details><summary style=\"cursor:pointer;font-size:13px;font-weight:600;color:#374151;padding:6px 0\">📊 Area health summary (open / done / overdue per domain)</summary>';\nhtml += '<table style=\"width:100%;border-collapse:collapse;font-size:12px;margin-top:10px\">';\nhtml += '<thead><tr style=\"background:#f3f4f6\"><th style=\"padding:6px;text-align:left\">Area</th><th style=\"padding:6px;text-align:center\">Open</th><th style=\"padding:6px;text-align:center\">Done</th><th style=\"padding:6px;text-align:center\">A</th><th style=\"padding:6px;text-align:center\">Due 7d</th><th style=\"padding:6px;text-align:center\">Overdue</th></tr></thead><tbody>';\nfor (const area of areas) {\n  const s = stats[area];\n  if (s.total + s.completed === 0) continue;\n  const overdueCell = s.overdue > 0\n    ? '<span style=\"color:' + (s.overdue >= 3 ? '#dc2626' : '#ea580c') + ';font-weight:600\">' + s.overdue + '</span>'\n    : '<span style=\"color:#16a34a\">—</span>';\n  const emoji = areaEmoji[area] || '📌';\n  html += '<tr style=\"border-bottom:1px solid #f3f4f6\">';\n  html += '<td style=\"padding:6px;text-transform:capitalize\">' + emoji + ' ' + area + '</td>';\n  html += '<td style=\"padding:6px;text-align:center\">' + s.total + '</td>';\n  html += '<td style=\"padding:6px;text-align:center;color:#16a34a\">' + s.completed + '</td>';\n  html += '<td style=\"padding:6px;text-align:center\">' + s.priorityA + '</td>';\n  html += '<td style=\"padding:6px;text-align:center\">' + s.dueThisWeek + '</td>';\n  html += '<td style=\"padding:6px;text-align:center\">' + overdueCell + '</td>';\n  html += '</tr>';\n}\nhtml += '</tbody></table>';\nhtml += '</details>';\nhtml += '</div>';\n\n// Footer\nhtml += '<div style=\"background:#1a1a2e;color:#9ca3af;padding:14px 20px;border-radius:0 0 8px 8px;text-align:center;font-size:11px\">';\nhtml += 'Life OS Weekly Review · ' + today + ' · Powered by ObsidianHomeOrchestrator';\nhtml += '</div>';\nhtml += '</div>';\n\nconst totalDone = areas.reduce((s, a) => s + stats[a].completed, 0);\n\nreturn [{ json: {\n  html, subject, today, weekOf,\n  overdueCount: overdueTasks.length,\n  criticalCount: critical.length,\n  undatedARocksCount: undatedARocks.length,\n  liveRocksCount: liveRocks.length,\n  totalDone,\n  bodyLength: html.length\n} }];\n"
       },
       "id": "build-digest",
       "name": "Build Weekly Digest",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [770, 300]
+      "position": [
+        770,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     },
     {
       "parameters": {
-        "fromEmail": "aaron.deyoung@gmail.com",
-        "toEmail": "aaron.deyoung@gmail.com",
-        "subject": "=📊 Weekly Needle Mover Digest — Week of {{ $json.today }}",
-        "html": "={{ $json.html }}"
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
+        "subject": "={{ $json.subject }}",
+        "html": "={{ $json.html }}",
+        "options": {},
+        "emailFormat": "html"
       },
       "id": "email",
       "name": "Email: Weekly Digest",
       "type": "n8n-nodes-base.emailSend",
       "typeVersion": 2,
-      "position": [990, 300],
-      "credentials": { "smtp": { "id": "lWGOwsktldwb3iEj", "name": "Gmail SMTP (Aaron)" } }
+      "position": [
+        990,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "__SMTP_CRED_ID__",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      },
+      "continueOnFail": true
     },
     {
       "parameters": {
@@ -75,16 +118,128 @@
       "name": "S3: Write Log",
       "type": "n8n-nodes-base.s3",
       "typeVersion": 1,
-      "position": [1210, 300],
-      "credentials": { "s3": { "id": "z9qTyG2NVVbhHkg0", "name": "MinIO S3" } }
+      "position": [
+        1650,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const today = new Date().toISOString().split('T')[0];\nconst log = JSON.stringify({\n  workflow: 'weekly-digest-v2',\n  run_date: today,\n  status: 'success',\n  generated_at: new Date().toISOString()\n}, null, 2);\nreturn [{ json: { logKey: `99_System/logs/weekly-digest-${today}.json`, logContent: log } }];"
+      },
+      "id": "build-log",
+      "name": "Build Run Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1210,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const content = $json.logContent;\nconst key = $json.logKey;\nconst buf = Buffer.from(content, 'utf-8');\nreturn [{ json: $json, binary: { data: { data: buf.toString('base64'), mimeType: 'application/json', fileName: key.split('/').pop(), fileExtension: 'json', fileSize: buf.length } } }];"
+      },
+      "id": "convert-log-binary",
+      "name": "Convert Log to Binary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1430,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
     }
   ],
   "connections": {
-    "Sunday 6PM CDT": { "main": [[{ "node": "S3: Read North Star", "type": "main", "index": 0 }, { "node": "S3: Read MTL", "type": "main", "index": 0 }]] },
-    "S3: Read North Star": { "main": [[{ "node": "Build Weekly Digest", "type": "main", "index": 0 }]] },
-    "S3: Read MTL": { "main": [[{ "node": "Build Weekly Digest", "type": "main", "index": 0 }]] },
-    "Build Weekly Digest": { "main": [[{ "node": "Email: Weekly Digest", "type": "main", "index": 0 }]] },
-    "Email: Weekly Digest": { "main": [[{ "node": "S3: Write Log", "type": "main", "index": 0 }]] }
+    "Sunday 6PM CDT": {
+      "main": [
+        [
+          {
+            "node": "S3: Read North Star",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read North Star": {
+      "main": [
+        [
+          {
+            "node": "S3: Read MTL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read MTL": {
+      "main": [
+        [
+          {
+            "node": "Build Weekly Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Weekly Digest": {
+      "main": [
+        [
+          {
+            "node": "Email: Weekly Digest",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Run Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Run Log": {
+      "main": [
+        [
+          {
+            "node": "Convert Log to Binary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert Log to Binary": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   },
-  "settings": { "executionOrder": "v1" }
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Chicago",
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "jIOFmhr37mXEhlHz"
+  }
 }

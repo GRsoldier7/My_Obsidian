@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — local audit gate.
+#
+# Install once per clone:
+#   git config core.hooksPath .githooks
+#
+# Bypass for an individual commit (use sparingly):
+#   git commit --no-verify
+#
+# What it runs (must stay fast — under 5s on a warm machine):
+#   1. Planning-doc audit (allow orphans during rollout)
+#   2. Data-classes contract audit (ADR-0008)
+#   3. Secrets-rotation audit (warn + overdue surfacing)
+#   4. Unit-test suite excluding e2e + integration markers
+#
+# Network audits (workflow-credentials etc.) are NOT run here — they need
+# .env credentials and would slow every commit. Those land in CI.
+
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+echo "[pre-commit] planning-doc audit …"
+python3 scripts/audit_planning_docs.py --allow-orphans
+
+echo "[pre-commit] data-classes audit …"
+python3 scripts/audit_data_classes.py --strict
+
+echo "[pre-commit] secrets-rotation audit …"
+python3 scripts/audit_secrets_rotation.py >/dev/null
+
+echo "[pre-commit] workflow-secrets audit …"
+python3 scripts/audit_workflow_secrets.py
+
+echo "[pre-commit] no-executecommand audit …"
+# As of 2026-05-29 vault-health-report migrated to httpRequest against the
+# /audit-receipts runner endpoint. Allowlist now empty; any new
+# executeCommand node fails the audit.
+python3 scripts/audit_no_executecommand.py
+
+echo "[pre-commit] no-argv-secrets audit …"
+# setup-n8n.sh + deploy_oho_runner.py are Codex P0 #2 known-pending until
+# the post-soak argv-hygiene refactor lands.
+python3 scripts/audit_no_argv_secrets.py --allowlist setup-n8n.sh --allowlist deploy_oho_runner.py
+
+python3 scripts/audit_no_unverified_put_object.py
+
+echo "[pre-commit] egress-classifier-wired audit …"
+# ADR-0008 regression guard: every OpenRouter call must be preceded by
+# egress_guard.guard_for_peer.
+python3 scripts/audit_egress_classifier_wired.py
+
+echo "[pre-commit] sink-contracts audit …"
+# A4 SinkInputContract enforcement (self-test in CI; --live needs MinIO env).
+python3 scripts/audit_sink_contracts.py --self-test
+
+echo "[pre-commit] unit tests …"
+python3 -m pytest tests/ -q --tb=line \
+  --ignore=tests/test_process_brain_dump_e2e.py \
+  -k "not integration"
+
+echo "[pre-commit] OK — all gates passed."

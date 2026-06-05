@@ -218,7 +218,7 @@ MinIO bucket: obsidian-vault @ 192.168.1.240:9000
         ↕ S3 API
 n8n CT-202 @ 192.168.1.121:5678
         ↓ SMTP
-Gmail → aaron.deyoung@gmail.com
+Gmail → [USER_EMAIL]
 ```
 
 The vault on your Mac and the MinIO bucket must stay in sync via the **Remotely Save** plugin (already installed). n8n reads from MinIO and writes back to MinIO. The next time Remotely Save syncs, your Mac picks up the updated files — meaning the Master Task List additions and the cleared brain dumps appear in Obsidian on your Mac automatically.
@@ -453,13 +453,13 @@ Builds a full HTML digest email. Structure:
 |Review — Organize|Same|
 |Footer|"Brain dumps cleared and ready for tomorrow" + timestamp|
 
-**Subject line:** `🧠 Brain Dump Processed — X new tasks · YYYY-MM-DD` **To:** `aaron.deyoung@gmail.com`
+**Subject line:** `🧠 Brain Dump Processed — X new tasks · YYYY-MM-DD` **To:** `[USER_EMAIL]`
 
 ---
 
 ### Node 18 — Send Brain Dump Digest
 
-**Type:** `n8n-nodes-base.emailSend` **From:** `aaron.deyoung@gmail.com` **SMTP:** Gmail (`smtp.gmail.com:587`) using an App Password
+**Type:** `n8n-nodes-base.emailSend` **From:** `[USER_EMAIL]` **SMTP:** Gmail (`smtp.gmail.com:587`) using an App Password
 
 Sends the HTML digest. Uses the standard `emailSend` node (SMTP) rather than Gmail OAuth2 — simpler to configure and more stable for automation.
 
@@ -557,7 +557,7 @@ After creating this credential, open the deployed workflow in n8n and assign it 
 |Type|SMTP|
 |Host|`smtp.gmail.com`|
 |Port|`587`|
-|User|`aaron.deyoung@gmail.com`|
+|User|`[USER_EMAIL]`|
 |Password|Gmail App Password (Google Account → Security → 2-Step Verification → App Passwords → generate for "Mail")|
 |SSL/TLS|STARTTLS|
 
@@ -774,7 +774,7 @@ The brain dump processor is the **intake engine** of your personal OS. The core 
 
 **Node 17 (Build Summary Email)** — triggered when the loop exhausts. Builds a full HTML digest: stats (domains processed, A/B counts, review item count), Priority A task cards (domain emoji, task text, rock name as yellow badge, due date if set), Priority B cards, four review sections as bulleted lists, footer confirming brain dumps are cleared.
 
-**Node 18 (Send Brain Dump Digest)** — SMTP emailSend to `aaron.deyoung@gmail.com` via Gmail SMTP with an App Password.
+**Node 18 (Send Brain Dump Digest)** — SMTP emailSend to `[USER_EMAIL]` via Gmail SMTP with an App Password.
 
 ---
 

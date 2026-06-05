@@ -1,0 +1,350 @@
+{
+  "name": "📊 Weekly Needle Mover Digest — Sunday 6PM",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📊 Weekly Strategic Review\n\n**Schedule:** Every Sunday at 6:00 PM CT\n**Source:** Reads North Star.md + Master Task List from MinIO\n**Output:** AI-powered strategic review email with domain balance, needle-mover scorecard, wins, and an honest question\n\n### Setup\n- Credential `MinIO — obsidian-vault` must exist\n- Credential `Gmail SMTP` must exist\n- Credential `OpenRouter API` must exist (free tier at openrouter.ai)\n- North Star.md should contain quarterly rocks and goals\n\n### Test\nRun manually any time to preview the email.",
+        "height": 500,
+        "width": 400,
+        "color": 5
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 18 * * 0"
+            }
+          ]
+        }
+      },
+      "id": "schedule-sunday",
+      "name": "Every Sunday at 6PM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        380,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "Homelab/000_Master Dashboard/North Star.md",
+        "options": {}
+      },
+      "id": "get-north-star",
+      "name": "S3: Get North Star",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        620,
+        360
+      ],
+      "credentials": {
+        "aws": {
+          "id": "__OLD_MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "Homelab/10_Active Projects/Active Personal/!!! MASTER TASK LIST.md",
+        "options": {}
+      },
+      "id": "get-master-list",
+      "name": "S3: Get Master Task List",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        620,
+        560
+      ],
+      "credentials": {
+        "aws": {
+          "id": "__OLD_MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      },
+      "id": "merge-downloads",
+      "name": "Merge Downloads",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        750,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ════════════════════════════════════════════════════════\n// PARSE NORTH STAR + MASTER TASK LIST\n// Extracts north star content, completed tasks this week,\n// open needle-movers, and domain counts\n// ════════════════════════════════════════════════════════\n\nconst nsBinary = $('S3: Get North Star').first().binary;\nconst mtlBinary = $('S3: Get Master Task List').first().binary;\n\nfunction extractText(binaryObj) {\n  const key = Object.keys(binaryObj || {})[0];\n  if (!key || !binaryObj[key]?.data) return '';\n  return Buffer.from(binaryObj[key].data, 'base64').toString('utf-8');\n}\n\nconst nsContent = extractText(nsBinary);\nconst mtlContent = extractText(mtlBinary);\n\nconst AREA_EMOJI = { faith:'🙏', family:'💒', business:'🚀', consulting:'💼', work:'🏥', health:'💪', home:'🏠', personal:'🤖' };\n\n// Compute date range for this week (last 7 days)\nconst TZ = 'America/Chicago';\nconst now = new Date();\nconst fmt = (opts) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...opts });\nconst y = parseInt(fmt({ year: 'numeric' }).format(now));\nconst mo = fmt({ month: '2-digit' }).format(now);\nconst d = fmt({ day: '2-digit' }).format(now);\nconst todayStr = `${y}-${mo}-${d}`;\nconst weekAgo = new Date(now.getTime() - 7 * 86400000);\nconst weekAgoStr = weekAgo.toISOString().split('T')[0];\n\n// Parse open Priority A tasks (needle-movers)\nconst openTaskRx = /^\\s*- \\[ \\]\\s+(.+)$/gm;\nconst areaRx = /\\[area::\\s*(\\w+)\\s*\\]/;\nconst priorityRx = /\\[priority::\\s*A\\s*\\]/i;\nconst dueRx = /\\[due::\\s*(\\d{4}-\\d{2}-\\d{2})\\s*\\]/;\n\nconst openNeedleMovers = [];\nconst domainCounts = { faith:0, family:0, business:0, consulting:0, work:0, health:0, home:0, personal:0 };\nlet taskMatch;\nopenTaskRx.lastIndex = 0;\n\nwhile ((taskMatch = openTaskRx.exec(mtlContent)) !== null) {\n  const line = taskMatch[1];\n  const areaMatch = line.match(areaRx);\n  const area = areaMatch ? areaMatch[1] : 'personal';\n  if (domainCounts[area] !== undefined) domainCounts[area]++;\n  \n  if (priorityRx.test(line)) {\n    const dueMatch = line.match(dueRx);\n    const cleanTitle = line.replace(/\\[[^\\]]+::[^\\]]+\\]/g, '').trim();\n    openNeedleMovers.push({ task: cleanTitle, area, due: dueMatch ? dueMatch[1] : null });\n  }\n}\n\n// Parse completed tasks this week (- [x] tasks)\nconst completedRx = /^\\s*- \\[x\\]\\s+(.+)$/gmi;\nconst completedThisWeekArr = [];\ncompletedRx.lastIndex = 0;\nwhile ((taskMatch = completedRx.exec(mtlContent)) !== null) {\n  const line = taskMatch[1];\n  const areaMatch = line.match(areaRx);\n  const area = areaMatch ? areaMatch[1] : 'personal';\n  const cleanTitle = line.replace(/\\[[^\\]]+::[^\\]]+\\]/g, '').trim();\n  completedThisWeekArr.push({ task: cleanTitle, area });\n}\n\nconst nmStr = openNeedleMovers.map(t => `- ${t.task} (${t.area}${t.due ? ', due ' + t.due : ''})`).join('\\n') || 'None';\nconst completedStr = completedThisWeekArr.map(t => `- ${t.task} (${t.area})`).join('\\n') || 'None';\n\nreturn [{ json: {\n  northStarContent: nsContent,\n  openNeedleMovers: nmStr,\n  completedThisWeek: completedStr,\n  domainCounts,\n  todayStr,\n  openNeedleMoverCount: openNeedleMovers.length,\n  completedCount: completedThisWeekArr.length\n} }];"
+      },
+      "id": "parse-data",
+      "name": "Parse North Star + Task List",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\nconst SYSTEM = 'You are the AI Brain for Aaron\\'s Life Operating System. Return structured JSON only. Be honest, direct, and strategic. The weekly review is the most important output you produce.';\n\nconst USER = `TASK: Generate a strategic weekly review.\\n\\nAnalyze domain balance, needle-mover progress, and alignment between actions and stated goals. Be honest — if Aaron is ignoring a priority area, call it out. The \"honest_question\" should be genuinely challenging, not soft.\\n\\nReturn JSON:\\n{\"results\": {\"needle_mover_scorecard\": {\"completed\": [{\"task\": \"string\", \"area\": \"string\"}], \"still_open\": [{\"task\": \"string\", \"area\": \"string\", \"next_action\": \"string\"}], \"completed_count\": 0, \"total_count\": 0}, \"domain_balance\": {\"faith\": 0, \"family\": 0, \"business\": 0, \"consulting\": 0, \"work\": 0, \"health\": 0, \"home\": 0, \"personal\": 0}, \"domain_warning\": \"string|null\", \"wins\": [\"string\"], \"next_week_focus\": [\"string\", \"string\", \"string\"], \"honest_question\": \"string\"}}\\n\\nNORTH STAR & QUARTERLY ROCKS:\\n${input.northStarContent}\\n\\nCOMPLETED TASKS THIS WEEK:\\n${input.completedThisWeek}\\n\\nOPEN NEEDLE-MOVERS (Priority A):\\n${input.openNeedleMovers}\\n\\nDOMAIN TASK COUNTS THIS WEEK:\\n${JSON.stringify(input.domainCounts)}`;\n\nreturn [{ json: { systemPrompt: SYSTEM, userMessage: USER } }];"
+      },
+      "id": "build-review-prompt",
+      "name": "Build Review Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://github.com/ObsidianHomeOrchestrator"
+            },
+            {
+              "name": "X-Title",
+              "value": "Life OS AI Brain"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000 }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "groq-review",
+      "name": "OpenRouter: Llama 3.3 70B",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1360,
+        460
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__OPENROUTER_CRED_ID__",
+          "name": "OpenRouter API"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\ntry {\n  const content = input.choices[0].message.content;\n  // Strip markdown fences if present (some models add them)\n  const cleaned = content.replace(/^```json\\n?/i, '').replace(/\\n?```$/i, '').trim();\n  const parsed = JSON.parse(cleaned);\n  return [{ json: { success: true, ...parsed, source: 'openrouter' } }];\n} catch (e) {\n  return [{ json: { success: false, error: 'Failed to parse AI response: ' + e.message, raw: JSON.stringify(input).substring(0, 500) } }];\n}"
+      },
+      "id": "parse-groq-review",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst r = input.results || {};\nconst sc = r.needle_mover_scorecard || { completed: [], still_open: [], completed_count: 0, total_count: 0 };\nconst db = r.domain_balance || {};\n\nconst areaEmoji = { faith: '🙏', family: '💒', business: '🚀', consulting: '💼', work: '🏥', health: '💪', home: '🏠', personal: '🤖' };\n\n// Build domain balance bar chart\nconst maxCount = Math.max(...Object.values(db), 1);\nconst domainBar = (area, count) => {\n  const barWidth = Math.round((count / maxCount) * 200);\n  const emoji = areaEmoji[area] || '📌';\n  const warning = count === 0 ? ' ⚠️' : '';\n  return `<tr><td style=\"padding:4px 8px;font-size:13px;\">${emoji} ${area}</td><td style=\"padding:4px 8px;\"><div style=\"background:#3498db;height:16px;width:${barWidth}px;border-radius:3px;display:inline-block;\"></div> ${count}${warning}</td></tr>`;\n};\n\nlet html = '<div style=\"font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',Roboto,sans-serif;max-width:600px;margin:0 auto;\">\\n';\nhtml += '<h1 style=\"color:#1a1a2e;\">📊 Weekly Review</h1>\\n';\n\n// Needle-mover scorecard\nhtml += `<h2 style=\"color:#2c3e50;\">🎯 Needle-Mover Scorecard: ${sc.completed_count} of ${sc.total_count}</h2>\\n`;\nif (sc.completed && sc.completed.length > 0) {\n  html += '<ul style=\"list-style:none;padding:0;\">' + sc.completed.map(t => `<li style=\"margin-bottom:4px;\">✅ ${t.task} (${t.area})</li>`).join('') + '</ul>\\n';\n}\nif (sc.still_open && sc.still_open.length > 0) {\n  html += '<ul style=\"list-style:none;padding:0;\">' + sc.still_open.map(t => `<li style=\"margin-bottom:4px;\">⬜ ${t.task} (${t.area}) → ${t.next_action}</li>`).join('') + '</ul>\\n';\n}\n\n// Domain balance\nhtml += '<h2 style=\"color:#2c3e50;\">⚖️ Domain Balance</h2>\\n';\nhtml += '<table style=\"width:100%;border-collapse:collapse;\">';\nfor (const area of ['work', 'consulting', 'business', 'family', 'faith', 'health', 'home', 'personal']) {\n  html += domainBar(area, db[area] || 0);\n}\nhtml += '</table>\\n';\nif (r.domain_warning) {\n  html += `<p style=\"color:#c0392b;font-weight:bold;\">⚠️ ${r.domain_warning}</p>\\n`;\n}\n\n// Wins\nif (r.wins && r.wins.length > 0) {\n  html += '<h2 style=\"color:#27ae60;\">🏆 Wins</h2>\\n';\n  html += '<ul>' + r.wins.map(w => `<li>${w}</li>`).join('') + '</ul>\\n';\n}\n\n// Next week focus\nif (r.next_week_focus && r.next_week_focus.length > 0) {\n  html += '<h2 style=\"color:#8e44ad;\">🎯 Next Week Focus</h2>\\n';\n  html += '<ol>' + r.next_week_focus.map(f => `<li>${f}</li>`).join('') + '</ol>\\n';\n}\n\n// Honest question\nif (r.honest_question) {\n  html += `<div style=\"background:#f8f9fa;border-left:4px solid #e74c3c;padding:16px;margin:20px 0;border-radius:4px;\">\\n`;\n  html += `<h2 style=\"color:#e74c3c;margin-top:0;\">💬 One Honest Question</h2>\\n`;\n  html += `<p style=\"font-style:italic;font-size:15px;color:#333;\">\"${r.honest_question}\"</p>\\n`;\n  html += `</div>\\n`;\n}\n\nhtml += '</div>';\n\nconst subject = `Weekly Review — ${sc.completed_count}/${sc.total_count} Needle-Movers Done${r.domain_warning ? ' | ⚠️ ' + r.domain_warning.substring(0, 40) : ''}`;\n\nreturn [{ json: { subject, html } }];"
+      },
+      "id": "build-digest",
+      "name": "Build Weekly Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2320,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-digest",
+      "name": "Send Weekly Digest",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2560,
+        460
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "__SMTP_CRED_ID__",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Sunday at 6PM": {
+      "main": [
+        [
+          {
+            "node": "S3: Get North Star",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S3: Get Master Task List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Get North Star": {
+      "main": [
+        [
+          {
+            "node": "Merge Downloads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Get Master Task List": {
+      "main": [
+        [
+          {
+            "node": "Merge Downloads",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Downloads": {
+      "main": [
+        [
+          {
+            "node": "Parse North Star + Task List",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse North Star + Task List": {
+      "main": [
+        [
+          {
+            "node": "Build Review Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Review Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenRouter: Llama 3.3 70B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter: Llama 3.3 70B": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Build Weekly Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Weekly Digest": {
+      "main": [
+        [
+          {
+            "node": "Send Weekly Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "America/Chicago"
+  },
+  "tags": [
+    {
+      "name": "obsidian",
+      "id": "obsidian-tag"
+    },
+    {
+      "name": "weekly-digest",
+      "id": "weekly-digest-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-28T00:00:00.000Z",
+  "versionId": "2"
+}

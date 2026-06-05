@@ -1,0 +1,389 @@
+{
+  "name": "⚠️ Overdue Task Alert — 8AM Daily",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## ⚠️ Overdue Task Alert\n\n**Schedule:** 8:00 AM every day\n**Scans:** Master Task List + processed inbox in MinIO\n**Output:** AI-triaged email with DO TODAY / RESCHEDULE / CONSIDER DROPPING sections\n\n### Setup\n- Credential `MinIO — obsidian-vault` must exist\n- Credential `Gmail SMTP` must exist\n- Credential `OpenRouter API` must exist (free tier at openrouter.ai)\n\n### Task Format Detected\n```\n- [ ] Task [area:: work] [priority:: A] [due:: 2026-03-20]\n```",
+        "height": 380,
+        "width": 360,
+        "color": 2
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Every Day at 8AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Define the files to scan for overdue tasks.\nconst BUCKET = 'obsidian-vault';\nconst filesToScan = [\n  { bucket: BUCKET, fileKey: 'Homelab/10_Active Projects/Active Personal/!!! MASTER TASK LIST.md', label: 'Master Task List' }\n];\n\n// Today in Central Time\nconst TZ = 'America/Chicago';\nconst now = new Date();\nconst fmt = (opts) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...opts });\nconst y = parseInt(fmt({ year: 'numeric' }).format(now));\nconst m = fmt({ month: '2-digit' }).format(now);\nconst d = fmt({ day: '2-digit' }).format(now);\nconst todayStr = `${y}-${m}-${d}`;\n\nreturn filesToScan.map(f => ({ json: { ...f, todayStr } }));"
+      },
+      "id": "define-scan-targets",
+      "name": "Define Files to Scan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "bucketName": "={{ $json.bucket }}",
+        "fileKey": "={{ $json.fileKey }}",
+        "options": {}
+      },
+      "id": "download-file",
+      "name": "S3: Download File",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        700,
+        360
+      ],
+      "credentials": {
+        "aws": {
+          "id": "__OLD_MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "Homelab/000_Master Dashboard/North Star.md"
+      },
+      "id": "read-north-star",
+      "name": "S3: Read North Star",
+      "type": "n8n-nodes-base.awsS3",
+      "typeVersion": 2,
+      "position": [
+        700,
+        560
+      ],
+      "credentials": {
+        "aws": {
+          "id": "__OLD_MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse overdue tasks locally (no AI) + gate check\nconst TZ = 'America/Chicago';\nconst now = new Date();\nconst fmt = (opts) => new Intl.DateTimeFormat('en-US', { timeZone: TZ, ...opts });\nconst y = parseInt(fmt({ year: 'numeric' }).format(now));\nconst m = fmt({ month: '2-digit' }).format(now);\nconst d = fmt({ day: '2-digit' }).format(now);\nconst todayStr = `${y}-${m}-${d}`;\n\n// Read MTL content\nlet mtlContent = '';\ntry {\n  const binary = $('S3: Download File').first().binary;\n  const key = Object.keys(binary || {})[0] || 'data';\n  if (binary && binary[key]) {\n    mtlContent = Buffer.from(binary[key].data, 'base64').toString('utf-8');\n  }\n} catch (e) {}\n\n// Read North Star content\nlet northStarContent = '';\ntry {\n  const binary = $('S3: Read North Star').first().binary;\n  const key = Object.keys(binary || {})[0] || 'data';\n  if (binary && binary[key]) {\n    northStarContent = Buffer.from(binary[key].data, 'base64').toString('utf-8');\n  }\n} catch (e) {}\n\nconst taskRegex = /^\\s*- \\[ \\]\\s+(.+)$/gm;\nconst overdueItems = [];\nlet match;\n\nwhile ((match = taskRegex.exec(mtlContent)) !== null) {\n  const line = match[1];\n  const dueMatch = line.match(/\\[due::\\s*(\\d{4}-\\d{2}-\\d{2})\\s*\\]/);\n  if (!dueMatch || dueMatch[1] >= todayStr) continue;\n\n  const areaMatch = line.match(/\\[area::\\s*(\\w+)\\s*\\]/);\n  const priorityMatch = line.match(/\\[priority::\\s*([A-C])\\s*\\]/i);\n\n  const dueDate = new Date(dueMatch[1]);\n  const daysOverdue = Math.floor((now - dueDate) / 86400000);\n\n  overdueItems.push({\n    task: line.replace(/\\[area::.*?\\]/g, '').replace(/\\[priority::.*?\\]/g, '').replace(/\\[due::.*?\\]/g, '').trim(),\n    area: areaMatch ? areaMatch[1] : 'unknown',\n    priority: priorityMatch ? priorityMatch[1].toUpperCase() : 'B',\n    due: dueMatch[1],\n    days_overdue: daysOverdue\n  });\n}\n\n// Gate check: no overdue items = stop\nif (overdueItems.length === 0) {\n  return [{ json: { hasOverdue: false, overdueItems: [], northStar: '' } }];\n}\n\nreturn [{ json: { hasOverdue: true, overdueItems, northStar: northStarContent, overdueCount: overdueItems.length } }];"
+      },
+      "id": "scan-overdue",
+      "name": "Scan for Overdue Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        940,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-overdue",
+              "leftValue": "={{ $json.hasOverdue }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "if-has-overdue",
+      "name": "Has Overdue?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1180,
+        460
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst overdueStr = input.overdueItems.map(t =>\n  `- \"${t.task}\" | area: ${t.area} | priority: ${t.priority} | due: ${t.due} | ${t.days_overdue} days overdue`\n).join('\\n');\n\nconst SYSTEM = 'You are the AI Brain for Aaron\\'s Life Operating System. Return structured JSON only. Be direct and actionable.';\nconst USER = `TASK: Triage overdue tasks with actionable recommendations.\\n\\nFor each overdue task, recommend one of:\\n- \"escalate\" — This is a needle-mover being ignored. Do it today.\\n- \"act\" — Important, do it today.\\n- \"reschedule\" — Push to a specific future date with reason.\\n- \"drop\" — Stale, low-priority, not advancing any goal.\\n\\nReturn JSON:\\n{\"results\": [{\"task\": \"string\", \"area\": \"string\", \"days_overdue\": 0, \"recommendation\": \"escalate|act|reschedule|drop\", \"reason\": \"string\", \"suggested_date\": \"YYYY-MM-DD|null\"}]}\\n\\nOVERDUE TASKS:\\n${overdueStr}\\n\\nNORTH STAR GOALS:\\n${input.northStar}`;\n\nreturn [{ json: { systemPrompt: SYSTEM, userMessage: USER } }];"
+      },
+      "id": "build-triage-prompt",
+      "name": "Build Triage Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1420,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://github.com/ObsidianHomeOrchestrator"
+            },
+            {
+              "name": "X-Title",
+              "value": "Life OS AI Brain"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'meta-llama/llama-3.3-70b-instruct:free', messages: [{ role: 'system', content: $json.systemPrompt }, { role: 'user', content: $json.userMessage }], temperature: 0.3, max_tokens: 2000 }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "groq-triage",
+      "name": "OpenRouter: Llama 3.3 70B",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1660,
+        360
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__OPENROUTER_CRED_ID__",
+          "name": "OpenRouter API"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\ntry {\n  const content = input.choices[0].message.content;\n  // Strip markdown fences if present (some models add them)\n  const cleaned = content.replace(/^```json\\n?/i, '').replace(/\\n?```$/i, '').trim();\n  const parsed = JSON.parse(cleaned);\n  return [{ json: { success: true, ...parsed, source: 'openrouter' } }];\n} catch (e) {\n  return [{ json: { success: false, error: 'Failed to parse AI response: ' + e.message, raw: JSON.stringify(input).substring(0, 500) } }];\n}"
+      },
+      "id": "parse-groq-triage",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst results = input.results || [];\n\nconst escalate = results.filter(r => r.recommendation === 'escalate');\nconst act = results.filter(r => r.recommendation === 'act');\nconst reschedule = results.filter(r => r.recommendation === 'reschedule');\nconst drop = results.filter(r => r.recommendation === 'drop');\n\nconst areaEmoji = { faith: '🙏', family: '💒', business: '🚀', consulting: '💼', work: '🏥', health: '💪', home: '🏠', personal: '🤖' };\n\nconst row = (item) => {\n  const emoji = areaEmoji[item.area] || '📌';\n  return `<li style=\"margin-bottom:8px;\">${emoji} <strong>${item.task}</strong> (${item.area}, ${item.days_overdue}d overdue)<br/><span style=\"color:#666;font-size:13px;\">→ ${item.reason}</span>${item.suggested_date ? `<br/><span style=\"color:#2980b9;font-size:13px;\">📅 Reschedule to ${item.suggested_date}</span>` : ''}</li>`;\n};\n\nlet html = '<div style=\"font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',Roboto,sans-serif;max-width:600px;margin:0 auto;\">\\n';\nhtml += '<h1 style=\"color:#1a1a2e;\">⚠️ Task Triage</h1>\\n';\n\nif (escalate.length > 0 || act.length > 0) {\n  html += '<h2 style=\"color:#c0392b;\">🔴 DO TODAY</h2>\\n';\n  html += `<ul style=\"list-style:none;padding:0;\">${[...escalate, ...act].map(row).join('')}</ul>\\n`;\n}\nif (reschedule.length > 0) {\n  html += '<h2 style=\"color:#f39c12;\">🟡 RESCHEDULE</h2>\\n';\n  html += `<ul style=\"list-style:none;padding:0;\">${reschedule.map(row).join('')}</ul>\\n`;\n}\nif (drop.length > 0) {\n  html += '<h2 style=\"color:#95a5a6;\">⚪ CONSIDER DROPPING</h2>\\n';\n  html += `<ul style=\"list-style:none;padding:0;\">${drop.map(row).join('')}</ul>\\n`;\n}\nhtml += '</div>';\n\nconst urgentCount = escalate.length + act.length;\nconst subject = urgentCount > 0\n  ? `[Triage] ${urgentCount} need action today, ${reschedule.length} to reschedule`\n  : `[Triage] ${reschedule.length} to reschedule, ${drop.length} to drop`;\n\nreturn [{ json: { subject, html } }];"
+      },
+      "id": "build-email",
+      "name": "Build Alert Email",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2620,
+        360
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "html": "={{ $json.html }}",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "Send Alert Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2860,
+        360
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "__SMTP_CRED_ID__",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Day at 8AM": {
+      "main": [
+        [
+          {
+            "node": "Define Files to Scan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Define Files to Scan": {
+      "main": [
+        [
+          {
+            "node": "S3: Download File",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S3: Read North Star",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Download File": {
+      "main": [
+        [
+          {
+            "node": "Scan for Overdue Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read North Star": {
+      "main": [
+        [
+          {
+            "node": "Scan for Overdue Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scan for Overdue Tasks": {
+      "main": [
+        [
+          {
+            "node": "Has Overdue?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Overdue?": {
+      "main": [
+        [
+          {
+            "node": "Build Triage Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Build Triage Prompt": {
+      "main": [
+        [
+          {
+            "node": "OpenRouter: Llama 3.3 70B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter: Llama 3.3 70B": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Build Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Alert Email": {
+      "main": [
+        [
+          {
+            "node": "Send Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "America/Chicago"
+  },
+  "tags": [
+    {
+      "name": "obsidian",
+      "id": "obsidian-tag"
+    },
+    {
+      "name": "overdue-tasks",
+      "id": "overdue-tasks-tag"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2026-03-28T00:00:00.000Z",
+  "versionId": "3"
+}

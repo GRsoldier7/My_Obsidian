@@ -1,0 +1,502 @@
+{
+  "name": "Vault Health Report - Weekly Sunday",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 20 * * 0"
+            }
+          ]
+        }
+      },
+      "id": "trigger",
+      "name": "Every Sunday 8PM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const now = new Date();\nconst today = now.toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nconst dayOfWeek = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][now.getDay()];\nconst d = now.getDay();\nconst daysToMon = d === 0 ? 6 : d - 1;\nconst weekStart = new Date(now - daysToMon * 86400000).toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });\nreturn [{ json: { today, dayOfWeek, weekStart } }];"
+      },
+      "id": "set-dates",
+      "name": "Set Dates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "bucketName": "obsidian-vault",
+        "returnAll": true,
+        "prefix": "00_Inbox/brain-dumps/",
+        "additionalFields": {}
+      },
+      "id": "s3-list-bd",
+      "name": "S3: List Brain Dumps",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        660,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst files = items\n  .filter(i => i.json.Key && i.json.Key.endsWith('.md') && (i.json.Size || 0) > 0)\n  .map(i => ({ key: i.json.Key, name: i.json.Key.split('/').pop(), sizeKB: Math.round((i.json.Size||0)/1024) }));\nconst { today, dayOfWeek, weekStart } = $('Set Dates').first().json;\nreturn [{ json: { braindumpFiles: files, braindumpCount: files.length, today, dayOfWeek, weekStart } }];"
+      },
+      "id": "collect-bd",
+      "name": "Collect Brain Dumps",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "bucketName": "obsidian-vault",
+        "fileKey": "00_Inbox/articles-to-process.md"
+      },
+      "id": "s3-read-articles",
+      "name": "S3: Read Articles",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1100,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "list",
+        "bucketName": "obsidian-vault",
+        "returnAll": true,
+        "prefix": "00_Inbox/processed/",
+        "additionalFields": {}
+      },
+      "id": "s3-list-processed",
+      "name": "S3: List Processed",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst { today, dayOfWeek, weekStart, braindumpFiles, braindumpCount } = $('Collect Brain Dumps').first().json;\nconst thisWeek = items\n  .filter(i => {\n    const key = i.json.Key || '';\n    if (!key.endsWith('.md') || (i.json.Size || 0) === 0) return false;\n    const name = key.split('/').pop();\n    const m = name.match(/^(\\d{4}-\\d{2}-\\d{2})/);\n    return m && m[1] >= weekStart;\n  })\n  .map(i => ({ key: i.json.Key, name: i.json.Key.split('/').pop() }));\nreturn [{ json: { today, dayOfWeek, weekStart, braindumpFiles, braindumpCount, processedThisWeek: thisWeek, processedCount: thisWeek.length } }];"
+      },
+      "id": "collect-processed",
+      "name": "Collect Processed Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const { today, weekStart, braindumpFiles, braindumpCount, processedThisWeek, processedCount } = $input.first().json;\n\nlet articlesContent = '';\ntry {\n  const articlesDecoded = $('Decode Articles').first().json._text;\n  articlesContent = articlesDecoded || '';\n} catch(e) {}\nconst allUrls = articlesContent.split('\\n').filter(l => /https?:\\/\\//.test(l));\nconst enriched = allUrls.filter(l => l.includes('[title::'));\nconst unenriched = allUrls.filter(l => !l.includes('[title::'));\n\n// === Build prescriptive actions list ===\nconst actions = [];\n\nif (braindumpCount > 0) {\n  const fileList = braindumpFiles.slice(0, 5).map(f => f.name).join(', ');\n  const more = braindumpCount > 5 ? ` (+${braindumpCount - 5} more)` : '';\n  actions.push({\n    severity: 'high',\n    icon: '🧠',\n    title: `Process ${braindumpCount} brain dump${braindumpCount > 1 ? 's' : ''} sitting in inbox`,\n    detail: `${fileList}${more}`,\n    command: 'set -a && source .env && set +a && python3 tools/process_brain_dump.py --verbose',\n    why: 'Brain dumps in 00_Inbox/brain-dumps/ should be cleared by the daily 7AM processor. Anything still here means the cron skipped or the file landed after run.',\n  });\n}\n\nif (unenriched.length > 20) {\n  actions.push({\n    severity: 'high',\n    icon: '🔗',\n    title: `Enrich ${unenriched.length} article URL${unenriched.length > 1 ? 's' : ''} — backlog growing`,\n    detail: 'link-enricher runs hourly at :13 and processes 8 per pass. Backlog of >20 means hourly cadence is not keeping up.',\n    command: '# Trigger link-enricher manually in n8n UI, OR raise batch size in workflows/n8n/link-enricher.json',\n    why: 'Articles without [title::] tags show up as raw URLs in your Reading Queue.',\n  });\n} else if (unenriched.length > 0 && unenriched.length <= 20) {\n  actions.push({\n    severity: 'low',\n    icon: '🔗',\n    title: `${unenriched.length} unenriched article URL${unenriched.length > 1 ? 's' : ''} (catching up next hour)`,\n    detail: 'Backlog within normal range — link-enricher will pick these up.',\n  });\n}\n\nif (processedCount === 0) {\n  actions.push({\n    severity: 'high',\n    icon: '⚠️',\n    title: 'No tasks processed all week — brain-dump-processor likely broken',\n    detail: 'Check n8n at http://192.168.1.121:5678 for failed brain-dump-processor-v2 executions.',\n    command: 'set -a && source .env && set +a && python3 scripts/health_check.py --json',\n    why: 'A healthy week should produce 1-3 processed files. Zero means the processor cron failed or was disabled.',\n  });\n}\n\nconst allClear = actions.length === 0;\n\n// === Compute \"spoiler\" subject ===\nconst highCount = actions.filter(a => a.severity === 'high').length;\nlet subject;\nif (allClear) {\n  subject = `✅ Vault Health: ALL CLEAR — ${processedCount} tasks added this week`;\n} else if (highCount > 0) {\n  const headlineAction = actions.find(a => a.severity === 'high');\n  subject = `⚠️ Vault Health: ${highCount} action${highCount > 1 ? 's' : ''} needed — ${headlineAction.title.substring(0, 60)}`;\n} else {\n  subject = `Vault Health: tidy — ${braindumpCount} dumps, ${unenriched.length} unenriched, ${processedCount} processed this week`;\n}\n\n// === HTML ===\nfunction severityStyle(sev) {\n  if (sev === 'high') return { bg: '#fef2f2', border: '#dc2626', text: '#991b1b', label: 'NOW' };\n  if (sev === 'med')  return { bg: '#fff7ed', border: '#ea580c', text: '#9a3412', label: 'SOON' };\n  return { bg: '#f0fdf4', border: '#16a34a', text: '#14532d', label: 'FYI' };\n}\n\nfunction actionCard(a) {\n  const s = severityStyle(a.severity);\n  let html = '<div style=\"background:' + s.bg + ';border-left:4px solid ' + s.border + ';padding:14px 16px;margin:8px 0;border-radius:0 4px 4px 0\">';\n  html += '<div style=\"display:flex;justify-content:space-between;align-items:center;margin-bottom:6px\">';\n  html += '<span style=\"font-weight:700;color:' + s.text + ';font-size:14px\">' + a.icon + ' ' + a.title + '</span>';\n  html += '<span style=\"background:' + s.border + ';color:white;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;letter-spacing:1px\">' + s.label + '</span>';\n  html += '</div>';\n  if (a.detail) {\n    html += '<p style=\"margin:4px 0;font-size:12px;color:#4b5563\">' + a.detail + '</p>';\n  }\n  if (a.command) {\n    html += '<pre style=\"background:#1f2937;color:#a7f3d0;padding:10px 12px;border-radius:4px;font-size:11px;overflow-x:auto;margin:8px 0;white-space:pre-wrap;word-break:break-word\">' + a.command.replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</pre>';\n  }\n  if (a.why) {\n    html += '<p style=\"margin:6px 0 0;font-size:11px;color:#6b7280;font-style:italic\">' + a.why + '</p>';\n  }\n  html += '</div>';\n  return html;\n}\n\nlet html = '<div style=\"font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',Arial,sans-serif;max-width:680px;margin:0 auto;background:#f5f5f5;padding:0;line-height:1.5;color:#1a1a1a\">';\n\n// Apple Watch / accessibility preview\nconst previewLine = allClear\n  ? `Vault healthy · ${processedCount} processed this week · ${enriched.length}/${allUrls.length} articles enriched`\n  : `${highCount} action${highCount > 1 ? 's' : ''} needed · ${braindumpCount} dumps · ${unenriched.length} unenriched · ${processedCount} processed`;\nhtml += '<noscript style=\"display:block;padding:8px 16px;background:#f3f4f6;color:#1f2937;font-size:12px\">' + previewLine + '</noscript>';\n\n// Header — color reflects status\nconst headerBg = allClear ? '#16a34a' : (highCount > 0 ? '#dc2626' : '#d97706');\nhtml += '<div style=\"background:' + headerBg + ';color:white;padding:22px 20px;border-radius:8px 8px 0 0\">';\nhtml += '<h1 style=\"margin:0;font-size:20px;font-weight:700\">' + (allClear ? '✅ Vault Health — All Clear' : '🛠️ Vault Health — Action Required') + '</h1>';\nhtml += '<p style=\"margin:6px 0 0;font-size:13px;opacity:0.9\">Week of ' + weekStart + ' · scanned ' + today + '</p>';\nhtml += '</div>';\n\n// DO THIS NOW (the headline section)\nhtml += '<div style=\"padding:18px 20px;background:white;margin-top:2px\">';\nif (allClear) {\n  html += '<div style=\"background:#f0fdf4;border:1px solid #86efac;border-radius:6px;padding:18px;text-align:center\">';\n  html += '<p style=\"margin:0;font-size:15px;font-weight:600;color:#14532d\">🎉 No actions needed.</p>';\n  html += '<p style=\"margin:8px 0 0;font-size:12px;color:#15803d\">Inbox clear · ' + enriched.length + '/' + allUrls.length + ' articles enriched · ' + processedCount + ' tasks processed this week.</p>';\n  html += '</div>';\n} else {\n  html += '<h2 style=\"margin:0 0 10px;font-size:14px;color:#1a1a1a;text-transform:uppercase;letter-spacing:1.5px\">📋 Do This Now</h2>';\n  for (const a of actions) html += actionCard(a);\n}\nhtml += '</div>';\n\n// Compact diagnostics footer (collapsible details)\nhtml += '<div style=\"padding:14px 20px;background:#f9fafb;margin-top:2px\">';\nhtml += '<details><summary style=\"cursor:pointer;font-size:13px;font-weight:600;color:#374151;padding:6px 0\">📊 Vault Diagnostics (raw counts)</summary>';\nhtml += '<table style=\"width:100%;border-collapse:collapse;margin-top:10px;font-size:12px\">';\nhtml += '<tr><td style=\"padding:6px 0;color:#6b7280\">Brain dumps in inbox</td><td style=\"text-align:right;font-weight:600\">' + braindumpCount + '</td></tr>';\nhtml += '<tr><td style=\"padding:6px 0;color:#6b7280\">Article URLs queued</td><td style=\"text-align:right;font-weight:600\">' + allUrls.length + ' (' + enriched.length + ' enriched / ' + unenriched.length + ' raw)</td></tr>';\nhtml += '<tr><td style=\"padding:6px 0;color:#6b7280\">Tasks processed this week</td><td style=\"text-align:right;font-weight:600\">' + processedCount + '</td></tr>';\nhtml += '</table>';\n\nif (braindumpCount > 0) {\n  html += '<p style=\"margin:12px 0 4px;font-size:11px;color:#6b7280;font-weight:600\">Brain dumps waiting:</p>';\n  html += '<ul style=\"margin:0;padding-left:20px;font-size:11px;color:#6b7280\">';\n  for (const f of braindumpFiles.slice(0, 8)) {\n    html += '<li><code>' + f.name + '</code> (' + f.sizeKB + 'KB)</li>';\n  }\n  if (braindumpCount > 8) html += '<li>...and ' + (braindumpCount - 8) + ' more</li>';\n  html += '</ul>';\n}\nif (unenriched.length > 0) {\n  html += '<p style=\"margin:12px 0 4px;font-size:11px;color:#6b7280;font-weight:600\">Unenriched URLs (sample):</p>';\n  html += '<ul style=\"margin:0;padding-left:20px;font-size:11px;color:#6b7280\">';\n  for (const l of unenriched.slice(0, 6)) {\n    html += '<li><code>' + l.slice(0, 90).replace(/</g, '&lt;') + '</code></li>';\n  }\n  if (unenriched.length > 6) html += '<li>...and ' + (unenriched.length - 6) + ' more</li>';\n  html += '</ul>';\n}\n\nhtml += '</details></div>';\n\nhtml += '<div style=\"background:#1a1a2e;color:#9ca3af;padding:12px 20px;border-radius:0 0 8px 8px;text-align:center;font-size:11px\">';\nhtml += 'Life OS Vault Health · runbook: <code>docs/RUNBOOK.md</code> · ' + today;\nhtml += '</div>';\nhtml += '</div>';\n\nconst badge = allClear ? 'HEALTHY' : (highCount > 0 ? 'ACTION' : 'OK');\nreturn [{ json: {\n  html, subject, today, badge,\n  braindumpCount, unenrichedCount: unenriched.length, processedCount,\n  actionCount: actions.length, highCount,\n  bodyLength: html.length\n} }];\n"
+      },
+      "id": "build-report",
+      "name": "Build Health Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
+        "subject": "={{ $json.subject }}",
+        "html": "={{ $json.html }}",
+        "options": {},
+        "emailFormat": "html"
+      },
+      "id": "email",
+      "name": "Email: Vault Health",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        300
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "__SMTP_CRED_ID__",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst log = JSON.stringify({\n  workflow: 'vault-health-report', run_date: j.today,\n  finished_at: new Date().toISOString(), status: 'success',\n  badge: j.badge, braindump_count: j.braindumpCount,\n  unenriched_articles: j.unenrichedCount, processed_this_week: j.processedCount\n}, null, 2);\nconst buf = Buffer.from(log, 'utf-8');\nconst logKey = `99_System/logs/vault-health-report-${j.today}.json`;\nreturn [{ json: { logKey }, binary: {\n  data: { data: buf.toString('base64'), mimeType: 'application/json', fileName: logKey.split('/').pop(), fileExtension: 'json', fileSize: buf.length }\n}}];"
+      },
+      "id": "build-log",
+      "name": "Build Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "bucketName": "obsidian-vault",
+        "fileName": "={{ $json.logKey }}",
+        "binaryPropertyName": "data",
+        "additionalFields": {}
+      },
+      "id": "s3-write-log",
+      "name": "S3: Write Log",
+      "type": "n8n-nodes-base.s3",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        300
+      ],
+      "credentials": {
+        "s3": {
+          "id": "__MINIO_CRED_ID__",
+          "name": "MinIO S3"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Decode S3 binary (filesystem-v2) to plain JSON text for downstream cross-reference\nlet text = '';\ntry {\n  const buf = await this.helpers.getBinaryDataBuffer(0, 'data');\n  text = buf.toString('utf-8');\n} catch(e) {}\nreturn [{ json: { ...($input.first().json), _text: text } }];"
+      },
+      "id": "decode-articles",
+      "name": "Decode Articles",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1210,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://oho-runner:8080/audit-receipts",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": false,
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true,
+              "fullResponse": false
+            }
+          },
+          "timeout": 200000
+        }
+      },
+      "id": "run-receipt-audit",
+      "name": "Run: Receipt Audit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        600
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "__OHO_RUNNER_CRED_ID__",
+          "name": "OHO Runner Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the audit endpoint's response. The runner returns\n// {exit_code, duration_ms, stdout_json, stdout_raw, stderr_tail, timed_out}.\n// When the audit script printed valid JSON to stdout, stdout_json is the\n// already-parsed object; otherwise stdout_raw carries the literal text.\nconst item = $input.first();\nconst exitCode = item.json.exit_code != null ? item.json.exit_code : -1;\nconst stderrTail = (item.json.stderr_tail || '').toString();\nlet summary = item.json.stdout_json;\nif (!summary && item.json.stdout_raw) {\n  try { summary = JSON.parse(item.json.stdout_raw); } catch (e) {}\n}\nif (!summary) {\n  return [{ json: {\n    audit_status: 'parse_error',\n    parse_error: 'audit_stdout_unparseable',\n    exitCode,\n    raw_stderr_tail: stderrTail.split('\\n').slice(-15).join('\\n'),\n    findings_count: 0,\n    findings: [],\n    findings_by_rule: {},\n  }}];\n}\nreturn [{ json: {\n  audit_status: summary.status,\n  sources_scanned: summary.sources_scanned,\n  receipts_scanned: summary.receipts_scanned,\n  window_days: summary.window_days,\n  findings_count: summary.findings_count,\n  findings: summary.findings || [],\n  findings_by_rule: summary.findings_by_rule || {},\n  exitCode,\n}}];\n"
+      },
+      "id": "parse-audit-output",
+      "name": "Parse Audit Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.findings_count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        }
+      },
+      "id": "if-has-findings",
+      "name": "Has Audit Findings?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "fromEmail": "__NOTIFICATION_EMAIL__",
+        "toEmail": "__NOTIFICATION_EMAIL__",
+        "subject": "=🔍 Integrity Audit — {{ $json.findings_count }} finding{{ $json.findings_count === 1 ? '' : 's' }}",
+        "html": "=<h2>🔍 Brain-Dump Integrity Audit — {{ $now.toFormat('LLL d, yyyy') }}</h2><p>The weekly receipt audit (<code>scripts/audit_extraction_receipts.py</code>) found <b>{{ $json.findings_count }}</b> issue{{ $json.findings_count === 1 ? '' : 's' }} in the integrity layer.</p><p><b>Status:</b> <code>{{ $json.audit_status }}</code> · <b>Sources scanned:</b> {{ $json.sources_scanned }} · <b>Receipts scanned:</b> {{ $json.receipts_scanned }} · <b>Window:</b> {{ $json.window_days }} days</p><h3>📊 Findings by rule</h3><pre>{{ JSON.stringify($json.findings_by_rule, null, 2) }}</pre><h3>🧾 Findings</h3><pre>{{ ($json.findings || []).map(f => `[${f.rule}] ${f.target} — ${f.message}`).join('\\n') }}</pre><p style='color:#888;font-size:0.85em'>Rule reference: R1 receipt missing for run-log claim · R2 orphan receipt · R4 partial &gt;7 days · R5 extracted but body has content · R6 missing canonical frontmatter fields · R7 status=empty hash drift. See <code>docs/adr/0005-brain-dump-state-machine-and-receipts.md</code>.</p>",
+        "options": {},
+        "emailFormat": "html"
+      },
+      "id": "email-audit-findings",
+      "name": "Email: Integrity Audit Findings",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        600
+      ],
+      "credentials": {
+        "smtp": {
+          "id": "__SMTP_CRED_ID__",
+          "name": "Gmail SMTP (Aaron)"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every Sunday 8PM": {
+      "main": [
+        [
+          {
+            "node": "Set Dates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Dates": {
+      "main": [
+        [
+          {
+            "node": "S3: List Brain Dumps",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Run: Receipt Audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: List Brain Dumps": {
+      "main": [
+        [
+          {
+            "node": "Collect Brain Dumps",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Brain Dumps": {
+      "main": [
+        [
+          {
+            "node": "S3: Read Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: Read Articles": {
+      "main": [
+        [
+          {
+            "node": "Decode Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S3: List Processed": {
+      "main": [
+        [
+          {
+            "node": "Collect Processed Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Processed Files": {
+      "main": [
+        [
+          {
+            "node": "Build Health Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Health Report": {
+      "main": [
+        [
+          {
+            "node": "Email: Vault Health",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Log": {
+      "main": [
+        [
+          {
+            "node": "S3: Write Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Decode Articles": {
+      "main": [
+        [
+          {
+            "node": "S3: List Processed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run: Receipt Audit": {
+      "main": [
+        [
+          {
+            "node": "Parse Audit Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Audit Output": {
+      "main": [
+        [
+          {
+            "node": "Has Audit Findings?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Audit Findings?": {
+      "main": [
+        [
+          {
+            "node": "Email: Integrity Audit Findings",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "errorWorkflow": "jIOFmhr37mXEhlHz",
+    "timezone": "America/Chicago"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "id": "F-0001",
+  "class": "public",
+  "category": "edge-case",
+  "payload": {
+    "text": "Grocery list: milk, eggs, bread, coffee. Stop by hardware store for furnace filter.",
+    "fields": {"area": "home", "priority": "C"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["default"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "allow",
+    "to_broker": "allow",
+    "to_openrouter": "allow"
+  },
+  "notes": "Mundane home-area content. `[area:: home]` is NOT in the sensitive list (faith/family/health are). Pure default-public. Guards against over-classification of the home area."
+}

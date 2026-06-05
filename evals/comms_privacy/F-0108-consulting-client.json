@@ -1,0 +1,21 @@
+{
+  "id": "F-0108",
+  "class": "sensitive",
+  "category": "client-id",
+  "payload": {
+    "text": "Acme renewal terms: 12-month commit, 15% lift, value-based pricing on the analytics module. Decision by Friday.",
+    "fields": {"area": "consulting", "priority": "A"}
+  },
+  "hints": {
+    "caller_asserted_class": null,
+    "_test_client_identifiers": ["Acme"]
+  },
+  "expected_reasons": ["client-id:Acme"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  }
+}

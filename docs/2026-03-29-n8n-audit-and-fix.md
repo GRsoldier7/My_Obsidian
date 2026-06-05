@@ -12,10 +12,16 @@ Full audit of the ObsidianHomeOrchestrator repo and live n8n instance (http://19
 - **Fix:** Deactivated via API. Workflow needs Tailscale connectivity or a valid endpoint before reactivation.
 
 ### 2. MinIO S3 Credential — InvalidAccessKeyId (CRITICAL)
-- **Credential ID (old):** `jscahbrUH2TCnnSx`
-- **Problem:** Access key stored in n8n (`zzfy7Jd3Fsdp...`) did not match any key in MinIO. All S3 operations failed.
+- **Credential ID (old):** `[OLD_MINIO_CRED_ID]`
+- **Problem:** Access key stored in n8n (`[REDACTED]...`) did not match any key in MinIO. All S3 operations failed.
 - **Impact:** Daily Note Creator failing every day since Mar 25. Brain Dump Processor S3 reads failing.
-- **Fix:** Deleted old credential, created new one (ID: `z9qTyG2NVVbhHkg0`) with correct access key from MinIO service account `Claude_Code` (access key: `7BHf9fjXTN2mdtPwivvv`). Updated all 5 workflows referencing MinIO.
+- **Fix:** Deleted old credential, created new one (ID: `[MINIO_CRED_ID]`) with correct access key from MinIO service account `Claude_Code` (access key: `[REDACTED_MINIO_ACCESS_KEY]`). Updated all 5 workflows referencing MinIO.
+
+### 2a. Mixed S3 Node Families Caused Credential Drift (CRITICAL)
+- **Problem:** The repo mixed `n8n-nodes-base.s3` nodes and legacy `n8n-nodes-base.awsS3` nodes while reusing one `__MINIO_CRED_ID__` placeholder and one credential name (`MinIO S3`).
+- **Why this re-broke after credential changes:** n8n binds credential IDs by both ID and credential type. A credential object valid for type `aws` is not valid for a node asking for type `s3`, even if the name is the same. That created an oscillating failure pattern where one workflow family could be "fixed" while the other still failed with `credential does not exist for type s3`.
+- **Secondary problem:** some workflows swallowed S3 read failures and continued with empty/default outputs, which made broken storage access look like successful runs.
+- **Fix:** Standardized repo workflows on `n8n-nodes-base.s3` only, migrated `article-processor.json` off legacy `awsS3`, and added a deployment preflight (`scripts/audit_workflow_credentials.py`) that hard-fails if `awsS3` and `s3` families are mixed again.
 
 ### 3. Weekly Digest Merge Node — Configuration Error (HIGH)
 - **Workflow ID:** `qQ4fidC1K755758J`
@@ -65,9 +71,9 @@ Full audit of the ObsidianHomeOrchestrator repo and live n8n instance (http://19
 ### Credentials
 | Name | Type | ID | Status |
 |------|------|-----|--------|
-| MinIO S3 | aws | `z9qTyG2NVVbhHkg0` | NEW — correct access key |
-| Gmail SMTP (Aaron) | smtp | `lWGOwsktldwb3iEj` | Unchanged |
-| OpenRouter API | httpHeaderAuth | `Z7liUYc3Toq3q7W7` | Unchanged |
+| MinIO S3 | s3 | `[MINIO_CRED_ID]` | NEW — correct access key |
+| Gmail SMTP (Aaron) | smtp | `[SMTP_CRED_ID]` | Unchanged |
+| OpenRouter API | httpHeaderAuth | `[OPENROUTER_CRED_ID]` | Unchanged |
 
 ### Workflows
 | Workflow | Schedule | Status |

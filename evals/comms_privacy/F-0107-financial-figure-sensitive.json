@@ -1,0 +1,21 @@
+{
+  "id": "F-0107",
+  "class": "sensitive",
+  "category": "financial",
+  "payload": {
+    "text": "Q3 consulting projection: $48,000 in pipeline; book $32,000 by EOQ to hit goal.",
+    "fields": {"area": "business", "priority": "A"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["financial:$48,000", "financial:$32,000"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "hard_deny_except_explicit_allow_egress_to_vps",
+    "to_broker": "hard_deny_except_explicit_allow_egress_to_broker",
+    "to_openrouter": "hard_deny"
+  },
+  "notes": "Financial figures above the 4-digit threshold ($\\d{4,}) trigger Tier 7 → sensitive (not private). Guards against under-classification of large dollar amounts. Hard-denies to VPS / broker / OpenRouter cloud routes."
+}

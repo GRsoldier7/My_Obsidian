@@ -1,0 +1,250 @@
+# Privacy data-class registry — Wave-X H1 seed (ADR-0007 cross-cutting §1.A).
+#
+# This is the SOURCE OF TRUTH for the privacy classifier (`tools/privacy_classifier.py`,
+# proposed in ADR-0008, NOT YET IMPLEMENTED). Rules apply in order; first match wins.
+#
+# Three classes:
+#   public     — safe to ship to any host, any cloud, any log retention
+#   private    — kept on the OHO LXC unless explicitly allow_egress_to includes a peer
+#   sensitive  — NEVER leaves the OHO LXC without explicit per-message override
+#
+# The classifier MUST be deterministic, code-grounded, and explainable. No ML, no LLM
+# fallback — for security infrastructure, every decision must be traceable to a single
+# rule with a stable name. Tests pin every rule against a fixture in evals/comms_privacy/.
+
+version: 1
+schema: oho.privacy-classifier.v1
+updated: 2026-05-16
+
+# ── Rule tiers (apply in order; first hit wins) ────────────────────────────────
+rules:
+
+  # Tier 1 — caller-asserted override (only honored if signed by the caller).
+  # When a trusted local agent (e.g. brain-dump-processor) classifies its OWN content
+  # and signs the assertion with its agent key, the classifier accepts the assertion
+  # verbatim. Used to avoid double-guessing a more-informed caller.
+  - id: caller-asserted-override
+    tier: 1
+    matches:
+      signed_caller_assertion: true
+    result: caller_specified
+    notes: |
+      Caller writes `hints.caller_asserted_class` + a Ed25519 signature over the
+      payload-hash. Classifier verifies the signature against the agent's public key
+      registered in infra/agent-keys.yaml (not yet created). If verification fails →
+      fall through to the next tier.
+
+  # Tier 2 — area-tag based (matches the canonical OHO task format `[area:: …]`).
+  - id: area-faith
+    tier: 2
+    matches:
+      any_field_value:
+        area: faith
+    result: sensitive
+    reasons:
+      - "area:faith"
+
+  - id: area-family
+    tier: 2
+    matches:
+      any_field_value:
+        area: family
+    result: sensitive
+    reasons:
+      - "area:family"
+
+  - id: area-health
+    tier: 2
+    matches:
+      any_field_value:
+        area: health
+    result: sensitive
+    reasons:
+      - "area:health"
+
+  # Tier 3 — kid-name dictionary (configurable via .env OHO_KID_NAMES).
+  - id: kid-name-match
+    tier: 3
+    matches:
+      whole_word_case_insensitive:
+        env: OHO_KID_NAMES
+    result: sensitive
+    reasons:
+      - "kid-name:<name>"
+
+  # Tier 4 — family-name dictionary (configurable via .env OHO_FAMILY_NAMES).
+  - id: family-name-match
+    tier: 4
+    matches:
+      whole_word_case_insensitive:
+        env: OHO_FAMILY_NAMES
+    result: sensitive
+    reasons:
+      - "family-name:<name>"
+
+  # Tier 5 — health biomarker dictionary (built-in list + .env additions).
+  - id: health-biomarker
+    tier: 5
+    matches:
+      whole_word_case_insensitive:
+        builtin:
+          - hrv
+          - a1c
+          - testosterone
+          - glucose
+          - cortisol
+          - sleep_score
+          - recovery
+          - vo2max
+          - ldl
+          - hdl
+          - triglycerides
+          - blood pressure
+          - resting heart rate
+        env: OHO_BIOMARKER_TERMS
+    result: sensitive
+    reasons:
+      - "biomarker:<term>"
+
+  # Tier 6 — faith-life terms (built-in list).
+  - id: faith-terms
+    tier: 6
+    matches:
+      whole_word_case_insensitive:
+        builtin:
+          - prayer
+          - sermon
+          - pastoral
+          - exegesis
+          - liturgy
+          - sunday-school
+          - bible-study
+        regex:
+          - '\b\d?\s?[A-Z][a-z]+\s\d+:\d+(-\d+)?\b'   # scripture refs like Romans 12:2, 1 Corinthians 13:4-7
+    result: sensitive
+    reasons:
+      - "faith-term:<match>"
+
+  # Tier 7 — financial figures + [financial::] inline field.
+  - id: financial-data
+    tier: 7
+    matches:
+      regex:
+        - '\$\d{4,}'
+      inline_field_present:
+        - financial
+    result: sensitive
+    reasons:
+      - "financial:<match>"
+
+  # Tier 8 — consulting client identifiers (configurable via .env).
+  - id: consulting-client-id
+    tier: 8
+    matches:
+      whole_word_case_insensitive:
+        env: OHO_CLIENT_IDENTIFIERS
+    result: sensitive
+    reasons:
+      - "client-id:<name>"
+
+  # Tier 9 — PII patterns (catch-all). Demoted to `private` rather than `sensitive`
+  # because external-system noise (other people's email addresses) is broader than
+  # Aaron's faith/family/health concentric circle.
+  - id: pii-email
+    tier: 9
+    matches:
+      regex:
+        - '[\w.+-]+@[\w-]+\.[\w.-]+'
+      not_in_allowlist:
+        env: OHO_KNOWN_EMAILS
+    result: private
+    reasons:
+      - "pii:email"
+
+  - id: pii-phone
+    tier: 9
+    matches:
+      regex:
+        - '\+?\d{1,3}[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}'
+    result: private
+    reasons:
+      - "pii:phone"
+
+  - id: pii-ssn-shape
+    tier: 9
+    matches:
+      regex:
+        - '\b\d{3}-\d{2}-\d{4}\b'
+    result: private
+    reasons:
+      - "pii:ssn-shape"
+
+  - id: pii-credit-card-shape
+    tier: 9
+    matches:
+      regex:
+        - '\b(?:\d[ -]*?){13,19}\b'
+      luhn_check: true
+    result: private
+    reasons:
+      - "pii:credit-card-shape"
+
+  # Tier 10 — default. Everything else is public.
+  - id: default-public
+    tier: 10
+    matches:
+      default: true
+    result: public
+    reasons:
+      - "default"
+
+# ── Egress policy ──────────────────────────────────────────────────────────────
+egress_policy:
+  # Outbound from OHO LXC to peers.
+  to_lxc:        # self; trivially allowed
+    public: allow
+    private: allow
+    sensitive: allow
+
+  to_desktop:    # tailnet peer; Aaron's primary workstation
+    public: allow
+    private: allow
+    sensitive: allow   # the desktop is trusted; Aaron operates it
+
+  to_vps:        # Vultr agent-core-01; external; OpenRouter free-tier
+    public: allow
+    private: require_explicit_allow_egress_to_vps
+    sensitive: hard_deny_except_explicit_allow_egress_to_vps
+
+  to_broker:     # CT 215 agent-orch-lxc; tailnet but routes to VPS workers
+    public: allow
+    private: require_explicit_allow_egress_to_broker
+    sensitive: hard_deny_except_explicit_allow_egress_to_broker
+
+  to_openrouter: # AI cascade endpoint; cloud
+    public: allow
+    private: require_explicit_allow_egress_to_openrouter
+    sensitive: hard_deny    # no override; faith/family/health NEVER hits cloud LLMs
+
+# ── Tests + eval cadence ──────────────────────────────────────────────────────
+tests:
+  fixture_dir: evals/comms_privacy/
+  required_coverage: 95.0     # min precision AND min recall, percent
+  fixture_count_target: 200   # 50 per class + 50 edge-cases
+  eval_cadence: weekly
+
+# ── Audit hooks ───────────────────────────────────────────────────────────────
+audit:
+  # Every classification result is logged with the rule_id that fired.
+  log_field: privacy_class_rule_id
+  # Egress denials are surfaced in the weekly vault-health-report.
+  digest_section: "🔒 Privacy egress denials (7d)"
+  # PAGE-level alert if a `sensitive` payload reaches the VPS audit feed.
+  page_on:
+    - sensitive_egress_to_vps
+    - sensitive_egress_to_openrouter
+
+# ── Versioning ────────────────────────────────────────────────────────────────
+# Adding rules: append + bump `version` minor.
+# Changing tier order: bump major + write an ADR amendment.
+# Removing a class: requires a new ADR.

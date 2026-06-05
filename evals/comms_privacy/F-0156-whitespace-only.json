@@ -1,0 +1,12 @@
+{
+  "id": "F-0156",
+  "class": "public",
+  "category": "edge-case",
+  "payload": {
+    "text": "   \n\n\t  \n",
+    "fields": {"area": "personal"}
+  },
+  "hints": {"caller_asserted_class": null},
+  "expected_reasons": ["default"],
+  "expected_egress": {"to_lxc": "allow", "to_desktop": "allow", "to_vps": "allow", "to_broker": "allow", "to_openrouter": "allow"}
+}

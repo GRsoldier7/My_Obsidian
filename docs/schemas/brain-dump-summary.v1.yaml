@@ -1,0 +1,104 @@
+# Brain-dump summary state schema v1 — top-down-plan §5 A4 (SinkInputContract).
+#
+# Produced by tools/process_brain_dump.build_operator_summary; written to
+# 99_System/state/last-brain-dump-summary.json. Consumed by:
+#   - tools/build_command_center (DCC render)
+#   - workflows/n8n/morning-briefing.json (Code node; reads same MinIO key)
+#   - tools/build_health_dashboard (last-run row)
+#
+# Lock contract:
+#   - Schema is FROZEN at v1 once A4 ships. Additive changes only (new optional
+#     fields). Field removals require a schema-version bump.
+#   - Consumers MUST tolerate unknown fields (ADR-0008 forward-compat). Producers
+#     MAY add fields without notice.
+#   - status enum is fixed at three values; new values require version bump.
+
+schema_version: 1
+schema: oho.brain-dump-summary.v1
+
+required_fields:
+  run_finished_at:
+    type: string
+    format: iso-8601-utc
+  run_started_at:
+    type: string
+    format: iso-8601-utc
+  status:
+    type: string
+    enum: [success, skipped, error]
+  tasks_written:
+    type: integer
+    minimum: 0
+  review_added:
+    type: integer
+    minimum: 0
+  articles_queued:
+    type: integer
+    minimum: 0
+  files_extracted:
+    type: array
+    items: { type: string }
+  files_partial:
+    type: array
+    items:
+      type: object
+      required: [file, reasons]
+      properties:
+        file: { type: string }
+        reasons: { type: array, items: { type: string } }
+  files_error:
+    type: array
+    items:
+      type: object
+      required: [file, error]
+      properties:
+        file: { type: string }
+        error: { type: string }
+  files_by_state:
+    type: object
+    description: Counts keyed by tools.bd_integrity.VALID_STATES.
+    properties:
+      empty: { type: integer, minimum: 0 }
+      has_content: { type: integer, minimum: 0 }
+      scanning: { type: integer, minimum: 0 }
+      extracted: { type: integer, minimum: 0 }
+      partial: { type: integer, minimum: 0 }
+      error: { type: integer, minimum: 0 }
+  reset_summary:
+    type: object
+    required: [files_reset_full, files_reset_partial, files_reset_skipped]
+    properties:
+      files_reset_full: { type: integer, minimum: 0 }
+      files_reset_partial: { type: integer, minimum: 0 }
+      files_reset_skipped: { type: integer, minimum: 0 }
+  top_added_tasks:
+    type: array
+    description: First 10 tasks from new_tasks_added; parsed and sorted A→B→C.
+    items:
+      type: object
+      required: [area, priority, desc]
+      properties:
+        area:
+          type: string
+          enum: [faith, family, business, consulting, work, health, home, personal]
+        priority:
+          type: string
+          enum: [A, B, C]
+        desc: { type: string }
+  total_added_tasks:
+    type: integer
+    minimum: 0
+
+# Forward-compat zone (ADR-0008). Producers MAY add fields here without bumping
+# the schema version. Consumers MUST ignore unknown keys.
+optional_fields: {}
+
+invariants:
+  - id: status_skipped_requires_reason
+    rule: when status == "skipped", a skip_reason field MUST be present (forward-compat addition)
+  - id: file_counts_consistent
+    rule: |
+      len(files_extracted) + len(files_partial) + len(files_error)
+        == files_by_state["extracted"] + files_by_state["partial"] + files_by_state["error"]
+  - id: top_tasks_capped
+    rule: len(top_added_tasks) <= 10

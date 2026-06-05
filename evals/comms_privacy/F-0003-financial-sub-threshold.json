@@ -1,0 +1,21 @@
+{
+  "id": "F-0003",
+  "class": "public",
+  "category": "edge-case",
+  "payload": {
+    "text": "Snake plant from the nursery: $42 incl. tax. Cheaper than the box store.",
+    "fields": {"area": "home", "priority": "C"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["default"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "allow",
+    "to_broker": "allow",
+    "to_openrouter": "allow"
+  },
+  "notes": "Financial figure $42 is BELOW the regex threshold `\\$\\d{4,}` (4+ digits). Tier 7 rule does NOT fire. Should stay public. Guards against false positives on small amounts."
+}

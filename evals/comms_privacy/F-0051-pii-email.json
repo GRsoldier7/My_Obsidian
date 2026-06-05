@@ -1,0 +1,21 @@
+{
+  "id": "F-0051",
+  "class": "private",
+  "category": "pii-email",
+  "payload": {
+    "text": "Follow up with jordan.kim@acme-corp.example about the renewal terms by Friday.",
+    "fields": {"area": "consulting", "priority": "A"}
+  },
+  "hints": {
+    "caller_asserted_class": null
+  },
+  "expected_reasons": ["pii:email"],
+  "expected_egress": {
+    "to_lxc": "allow",
+    "to_desktop": "allow",
+    "to_vps": "require_explicit_allow_egress_to_vps",
+    "to_broker": "require_explicit_allow_egress_to_broker",
+    "to_openrouter": "require_explicit_allow_egress_to_openrouter"
+  },
+  "notes": "Third-party email address (not in OHO_KNOWN_EMAILS allowlist). Tier 9 PII rule fires; classification is `private`, not `sensitive`. Requires explicit allow_egress_to header to leave the LXC."
+}

@@ -1,0 +1,221 @@
+{
+  "name": "🔧 MinIO HTTP Upload Pattern — S3 V2 Workaround",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔧 MinIO HTTP Upload Pattern\n\n**Problem:** n8n's awsS3 V2 node can READ from MinIO but CANNOT WRITE (InvalidAccessKeyId on upload).\n\n**Solution:** Three approaches to upload files via HTTP Request or Code node, bypassing the broken S3 V2 node entirely.\n\n### Approach A: HTTP Request + Predefined AWS Credential (RECOMMENDED)\n- Uses n8n's built-in AWS V4 signing via the HTTP Request node\n- Requires an `aws` credential with custom S3 endpoint pointing to MinIO\n- Simplest configuration, fewest moving parts\n- **IMPORTANT:** Must pass `service=s3` and `path=/{key}` as query params\n  so n8n's credential signer knows this is an S3 request\n\n### Approach B: Presigned URL via Code Node\n- Generates a presigned PUT URL in a Code node using crypto\n- Then uses a plain HTTP Request node with no auth\n- More complex but fully self-contained\n\n### Approach C: Full Code Node Upload (MOST RELIABLE)\n- Entire upload logic in a single Code node\n- Uses Node.js crypto + http for AWS V4 signing\n- Zero dependency on n8n credential handling\n- Best for debugging and guaranteed MinIO compatibility\n\n### How To Use\n1. Pick your preferred approach (A, B, or C)\n2. Copy the relevant nodes into your workflow\n3. Feed `noteContent` (string) and `fileKey` (string) from your previous Code node\n4. The upload node writes to MinIO, verify node confirms it\n\n### Credential Setup (Approach A only)\nCreate an `aws` credential in n8n:\n- Name: `MinIO S3 HTTP`\n- Access Key: (your MinIO access key)\n- Secret Key: (your MinIO secret key)\n- Region: `us-east-1`\n- Custom Endpoints: ON\n- S3 Endpoint: `http://192.168.1.240:9000`",
+        "height": 900,
+        "width": 520,
+        "color": 4
+      },
+      "id": "sticky-overview",
+      "name": "Sticky Note — Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-120, 40]
+    },
+    {
+      "parameters": {
+        "content": "## Approach A\nHTTP Request + AWS Credential\n\n**Simplest approach.**\nUses n8n built-in AWS V4 signing.\nRequires aws credential with\ncustom S3 endpoint → MinIO.",
+        "height": 180,
+        "width": 340,
+        "color": 5
+      },
+      "id": "sticky-a",
+      "name": "Sticky Note — Approach A",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [460, 40]
+    },
+    {
+      "parameters": {
+        "content": "## Approach B\nPresigned URL + HTTP Request\n\n**More complex but no credential needed on the HTTP node.**\nCode node generates a time-limited presigned PUT URL.\nHTTP Request node does a plain PUT with no auth.",
+        "height": 180,
+        "width": 380,
+        "color": 6
+      },
+      "id": "sticky-b",
+      "name": "Sticky Note — Approach B",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [460, 480]
+    },
+    {
+      "parameters": {
+        "content": "## Approach C (MOST RELIABLE)\nFull Code Node Upload\n\n**Everything in one Code node.**\nAWS V4 signing + HTTP PUT in JavaScript.\nZero dependency on n8n credential system.\nBest for debugging.",
+        "height": 180,
+        "width": 380,
+        "color": 2
+      },
+      "id": "sticky-c",
+      "name": "Sticky Note — Approach C",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [460, 920]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "// ========================================================================\n// SIMULATED INPUT — replace with your actual upstream node\n// Your previous Code node should output: { noteContent, fileKey }\n// ========================================================================\nconst today = new Date().toISOString().split('T')[0];\n\nconst noteContent = `---\ndate: ${today}\ntype: daily-note\n---\n\n# Test Daily Note — ${today}\n\nThis is a test upload via HTTP Request to MinIO.\n\n## Tasks\n- [ ] Verify MinIO HTTP upload works [area:: personal] [priority:: A]\n`;\n\nconst fileKey = `40_Timeline_Weekly/Daily/${today}.md`;\n\nreturn [{ json: { noteContent, fileKey, bucket: 'obsidian-vault' } }];"
+      },
+      "id": "mock-input",
+      "name": "Mock Input (Replace Me)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300]
+    },
+
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "=http://192.168.1.240:9000/obsidian-vault/{{ encodeURIComponent($json.fileKey).replace(/%2F/g, '/') }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "aws",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "text/markdown; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json.noteContent }}",
+        "options": {
+          "timeout": 30000,
+          "fullResponse": true
+        }
+      },
+      "id": "http-upload-a",
+      "name": "A: HTTP PUT to MinIO",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [520, 260],
+      "credentials": {
+        "aws": {
+          "id": "REPLACE_WITH_CREDENTIAL_ID",
+          "name": "MinIO S3 HTTP"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Verify the upload succeeded by checking response\nconst response = $input.first().json;\nconst statusCode = response.statusCode || response.headers?.['status-code'] || 200;\n\nif (statusCode >= 200 && statusCode < 300) {\n  return [{ json: {\n    success: true,\n    method: 'approach-a-http-request-aws-credential',\n    statusCode,\n    etag: response.headers?.etag || 'unknown'\n  }}];\n} else {\n  throw new Error(`Upload failed with status ${statusCode}: ${JSON.stringify(response)}`);\n}"
+      },
+      "id": "verify-a",
+      "name": "A: Verify Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [760, 260]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "// ========================================================================\n// APPROACH B: Generate a Presigned PUT URL for MinIO\n// Then use a plain HTTP Request node (no auth) to upload\n// ========================================================================\nconst crypto = require('crypto');\n\n// MinIO configuration\nconst MINIO_ENDPOINT = '192.168.1.240';\nconst MINIO_PORT = '9000';\nconst MINIO_ACCESS_KEY = '[REDACTED_MINIO_ACCESS_KEY]';\nconst MINIO_SECRET_KEY = '[REDACTED_MINIO_SECRET_KEY]';\nconst REGION = 'us-east-1';\nconst BUCKET = $json.bucket || 'obsidian-vault';\nconst KEY = $json.fileKey;\nconst EXPIRES_IN = 3600; // 1 hour\n\n// Helper: HMAC-SHA256\nfunction hmac(key, data) {\n  return crypto.createHmac('sha256', key).update(data).digest();\n}\n\n// Helper: SHA256 hex\nfunction sha256hex(data) {\n  return crypto.createHash('sha256').update(data).digest('hex');\n}\n\n// Build presigned URL using AWS Signature V4\nconst now = new Date();\nconst dateStamp = now.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';\nconst dateOnly = dateStamp.substring(0, 8);\nconst scope = `${dateOnly}/${REGION}/s3/aws4_request`;\n\n// Canonical query string parameters (alphabetically sorted)\nconst queryParams = {\n  'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',\n  'X-Amz-Credential': `${MINIO_ACCESS_KEY}/${scope}`,\n  'X-Amz-Date': dateStamp,\n  'X-Amz-Expires': String(EXPIRES_IN),\n  'X-Amz-SignedHeaders': 'host'\n};\n\nconst canonicalQueryString = Object.keys(queryParams)\n  .sort()\n  .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)\n  .join('&');\n\n// Canonical request\nconst encodedKey = KEY.split('/').map(s => encodeURIComponent(s)).join('/');\nconst canonicalUri = `/${BUCKET}/${encodedKey}`;\nconst host = `${MINIO_ENDPOINT}:${MINIO_PORT}`;\n\nconst canonicalRequest = [\n  'PUT',\n  canonicalUri,\n  canonicalQueryString,\n  `host:${host}\\n`,\n  'host',\n  'UNSIGNED-PAYLOAD'\n].join('\\n');\n\n// String to sign\nconst stringToSign = [\n  'AWS4-HMAC-SHA256',\n  dateStamp,\n  scope,\n  sha256hex(canonicalRequest)\n].join('\\n');\n\n// Signing key\nconst kDate = hmac(`AWS4${MINIO_SECRET_KEY}`, dateOnly);\nconst kRegion = hmac(kDate, REGION);\nconst kService = hmac(kRegion, 's3');\nconst kSigning = hmac(kService, 'aws4_request');\n\n// Signature\nconst signature = crypto.createHmac('sha256', kSigning).update(stringToSign).digest('hex');\n\n// Build final presigned URL\nconst presignedUrl = `http://${host}${canonicalUri}?${canonicalQueryString}&X-Amz-Signature=${signature}`;\n\nreturn [{ json: {\n  presignedUrl,\n  noteContent: $json.noteContent,\n  fileKey: KEY,\n  expiresIn: EXPIRES_IN\n}}];"
+      },
+      "id": "presign-b",
+      "name": "B: Generate Presigned URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 560]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $json.presignedUrl }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "text/markdown; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "={{ $json.noteContent }}",
+        "options": {
+          "timeout": 30000,
+          "fullResponse": true
+        }
+      },
+      "id": "http-upload-b",
+      "name": "B: HTTP PUT (Presigned)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 560],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "const response = $input.first().json;\nconst statusCode = response.statusCode || 200;\n\nif (statusCode >= 200 && statusCode < 300) {\n  return [{ json: {\n    success: true,\n    method: 'approach-b-presigned-url',\n    statusCode,\n    etag: response.headers?.etag || 'unknown'\n  }}];\n} else {\n  throw new Error(`Presigned upload failed with status ${statusCode}: ${JSON.stringify(response)}`);\n}"
+      },
+      "id": "verify-b",
+      "name": "B: Verify Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 560]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "// ========================================================================\n// APPROACH C: Full Code Node Upload (MOST RELIABLE)\n// Complete AWS V4 signing + HTTP PUT in a single Code node.\n// Zero dependency on n8n credential system.\n// ========================================================================\nconst crypto = require('crypto');\nconst http = require('http');\n\n// MinIO configuration\nconst MINIO_HOST = '192.168.1.240';\nconst MINIO_PORT = 9000;\nconst ACCESS_KEY = '[REDACTED_MINIO_ACCESS_KEY]';\nconst SECRET_KEY = '[REDACTED_MINIO_SECRET_KEY]';\nconst REGION = 'us-east-1';\nconst BUCKET = $json.bucket || 'obsidian-vault';\nconst KEY = $json.fileKey;\nconst CONTENT = $json.noteContent;\n\n// ---- AWS V4 Signing Helpers ----\nfunction hmac(key, data, encoding) {\n  const h = crypto.createHmac('sha256', key).update(data, 'utf8');\n  return encoding ? h.digest(encoding) : h.digest();\n}\n\nfunction sha256(data, encoding) {\n  return crypto.createHash('sha256').update(data, 'utf8').digest(encoding || 'hex');\n}\n\nfunction getSignatureKey(key, dateStamp, regionName, serviceName) {\n  const kDate = hmac('AWS4' + key, dateStamp);\n  const kRegion = hmac(kDate, regionName);\n  const kService = hmac(kRegion, serviceName);\n  return hmac(kService, 'aws4_request');\n}\n\n// ---- Build the signed request ----\nconst now = new Date();\nconst amzDate = now.toISOString().replace(/[-:]/g, '').replace(/\\.\\d+Z$/, 'Z');\nconst dateStamp = amzDate.substring(0, 8);\n\nconst body = Buffer.from(CONTENT, 'utf-8');\nconst payloadHash = sha256(body, 'hex');\n\n// Encode the key path (preserve /)\nconst encodedKey = KEY.split('/').map(s => encodeURIComponent(s)).join('/');\nconst canonicalUri = `/${BUCKET}/${encodedKey}`;\nconst host = `${MINIO_HOST}:${MINIO_PORT}`;\n\n// Headers to sign\nconst headers = {\n  'host': host,\n  'content-type': 'text/markdown; charset=utf-8',\n  'content-length': String(body.length),\n  'x-amz-content-sha256': payloadHash,\n  'x-amz-date': amzDate\n};\n\n// Canonical headers (sorted, lowercased)\nconst sortedHeaderKeys = Object.keys(headers).sort();\nconst canonicalHeaders = sortedHeaderKeys.map(k => `${k}:${headers[k]}`).join('\\n') + '\\n';\nconst signedHeaders = sortedHeaderKeys.join(';');\n\n// Canonical request\nconst canonicalRequest = [\n  'PUT',\n  canonicalUri,\n  '', // empty query string\n  canonicalHeaders,\n  signedHeaders,\n  payloadHash\n].join('\\n');\n\n// String to sign\nconst credentialScope = `${dateStamp}/${REGION}/s3/aws4_request`;\nconst stringToSign = [\n  'AWS4-HMAC-SHA256',\n  amzDate,\n  credentialScope,\n  sha256(canonicalRequest, 'hex')\n].join('\\n');\n\n// Signing key and signature\nconst signingKey = getSignatureKey(SECRET_KEY, dateStamp, REGION, 's3');\nconst signature = hmac(signingKey, stringToSign, 'hex');\n\n// Authorization header\nconst authHeader = `AWS4-HMAC-SHA256 Credential=${ACCESS_KEY}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;\n\n// ---- Execute HTTP PUT ----\nconst result = await new Promise((resolve, reject) => {\n  const options = {\n    hostname: MINIO_HOST,\n    port: MINIO_PORT,\n    path: canonicalUri,\n    method: 'PUT',\n    headers: {\n      ...headers,\n      'Authorization': authHeader\n    }\n  };\n\n  const req = http.request(options, (res) => {\n    let data = '';\n    res.on('data', chunk => data += chunk);\n    res.on('end', () => {\n      resolve({\n        statusCode: res.statusCode,\n        headers: res.headers,\n        body: data\n      });\n    });\n  });\n\n  req.on('error', (err) => reject(err));\n  req.write(body);\n  req.end();\n});\n\nif (result.statusCode < 200 || result.statusCode >= 300) {\n  throw new Error(`MinIO upload failed [${result.statusCode}]: ${result.body}`);\n}\n\nreturn [{ json: {\n  success: true,\n  method: 'approach-c-code-node-full',\n  statusCode: result.statusCode,\n  etag: result.headers?.etag || 'unknown',\n  fileKey: KEY,\n  bucket: BUCKET,\n  size: body.length\n}}];"
+      },
+      "id": "code-upload-c",
+      "name": "C: Code Node Upload (Full V4 Signing)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [520, 1000]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "// ========================================================================\n// VERIFY UPLOAD — Works with any approach\n// Reads back from MinIO using S3 V2 node (reads work fine)\n// or uses HTTP HEAD to confirm the object exists\n// ========================================================================\nconst http = require('http');\nconst crypto = require('crypto');\n\nconst MINIO_HOST = '192.168.1.240';\nconst MINIO_PORT = 9000;\nconst ACCESS_KEY = '[REDACTED_MINIO_ACCESS_KEY]';\nconst SECRET_KEY = '[REDACTED_MINIO_SECRET_KEY]';\nconst REGION = 'us-east-1';\n\n// Get the file key from upstream\nconst input = $input.first().json;\nconst BUCKET = input.bucket || 'obsidian-vault';\nconst KEY = input.fileKey || $('Mock Input (Replace Me)').first().json.fileKey;\n\nfunction hmac(key, data, enc) {\n  const h = crypto.createHmac('sha256', key).update(data, 'utf8');\n  return enc ? h.digest(enc) : h.digest();\n}\nfunction sha256(data, enc) {\n  return crypto.createHash('sha256').update(data, 'utf8').digest(enc || 'hex');\n}\nfunction getSignKey(key, ds, region, svc) {\n  return hmac(hmac(hmac(hmac('AWS4' + key, ds), region), svc), 'aws4_request');\n}\n\nconst now = new Date();\nconst amzDate = now.toISOString().replace(/[-:]/g, '').replace(/\\.\\d+Z$/, 'Z');\nconst dateStamp = amzDate.substring(0, 8);\nconst encodedKey = KEY.split('/').map(s => encodeURIComponent(s)).join('/');\nconst canonicalUri = `/${BUCKET}/${encodedKey}`;\nconst host = `${MINIO_HOST}:${MINIO_PORT}`;\n\nconst payloadHash = sha256('', 'hex');\nconst headers = {\n  'host': host,\n  'x-amz-content-sha256': payloadHash,\n  'x-amz-date': amzDate\n};\nconst sortedKeys = Object.keys(headers).sort();\nconst canonicalHeaders = sortedKeys.map(k => `${k}:${headers[k]}`).join('\\n') + '\\n';\nconst signedHeaders = sortedKeys.join(';');\n\nconst canonicalRequest = ['HEAD', canonicalUri, '', canonicalHeaders, signedHeaders, payloadHash].join('\\n');\nconst scope = `${dateStamp}/${REGION}/s3/aws4_request`;\nconst stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha256(canonicalRequest, 'hex')].join('\\n');\nconst signingKey = getSignKey(SECRET_KEY, dateStamp, REGION, 's3');\nconst signature = hmac(signingKey, stringToSign, 'hex');\nconst authHeader = `AWS4-HMAC-SHA256 Credential=${ACCESS_KEY}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;\n\nconst result = await new Promise((resolve, reject) => {\n  const req = http.request({\n    hostname: MINIO_HOST,\n    port: MINIO_PORT,\n    path: canonicalUri,\n    method: 'HEAD',\n    headers: { ...headers, 'Authorization': authHeader }\n  }, (res) => {\n    resolve({ statusCode: res.statusCode, headers: res.headers });\n  });\n  req.on('error', reject);\n  req.end();\n});\n\nif (result.statusCode === 200) {\n  return [{ json: {\n    verified: true,\n    fileKey: KEY,\n    bucket: BUCKET,\n    size: parseInt(result.headers['content-length'] || '0'),\n    etag: result.headers.etag,\n    lastModified: result.headers['last-modified'],\n    contentType: result.headers['content-type']\n  }}];\n} else {\n  throw new Error(`Verification failed: HEAD returned ${result.statusCode} for ${KEY}`);\n}"
+      },
+      "id": "verify-upload",
+      "name": "Verify Upload (HEAD Object)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 1000]
+    }
+  ],
+  "connections": {
+    "Mock Input (Replace Me)": {
+      "main": [
+        [
+          { "node": "A: HTTP PUT to MinIO", "type": "main", "index": 0 },
+          { "node": "B: Generate Presigned URL", "type": "main", "index": 0 },
+          { "node": "C: Code Node Upload (Full V4 Signing)", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "A: HTTP PUT to MinIO": {
+      "main": [[{ "node": "A: Verify Upload", "type": "main", "index": 0 }]]
+    },
+    "B: Generate Presigned URL": {
+      "main": [[{ "node": "B: HTTP PUT (Presigned)", "type": "main", "index": 0 }]]
+    },
+    "B: HTTP PUT (Presigned)": {
+      "main": [[{ "node": "B: Verify Upload", "type": "main", "index": 0 }]]
+    },
+    "C: Code Node Upload (Full V4 Signing)": {
+      "main": [[{ "node": "Verify Upload (HEAD Object)", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "America/Chicago"
+  },
+  "staticData": null,
+  "tags": []
+}

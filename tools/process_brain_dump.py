@@ -23,11 +23,11 @@ import sys
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import boto3
 from botocore.client import Config
 from botocore.exceptions import ClientError
-from openai import OpenAI
 
 try:
     from dotenv import load_dotenv
@@ -35,11 +35,35 @@ try:
 except ImportError:
     pass
 
+# When invoked as `python3 tools/process_brain_dump.py`, tools/ is sys.path[0]
+# but the repo root isn't, so `from tools import ...` fails. Add repo root.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+# P1 integrity layer (ADR-0005). Pure functions — no I/O.
+from tools import bd_integrity as bdi
+
+# A4 SinkInputContract — typed dataclasses for at-rest JSON (additive: adds
+# schema_version + schema; all existing field names preserved at top level).
+from tools.sink_contracts import (
+    SCHEMA_NAME_RUNLOG,
+    SCHEMA_NAME_SUMMARY,
+    SCHEMA_VERSION_RUNLOG,
+    SCHEMA_VERSION_SUMMARY,
+    BrainDumpSummary,
+    FileError,
+    FilePartial,
+    RunLogEntry,
+    TopAddedTask,
+)
+from tools.s3_verified import put_text_verified
+
 # ── Configuration ────────────────────────────────────────────────────────────
 
 MINIO_ENDPOINT = os.environ.get("MINIO_ENDPOINT", "http://192.168.1.240:9000")
-MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "7BHf9fjXTN2mdtPwivvv")
-MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "EHW3HkfxD8aFGmuOO8beQEXFHJXeQ92zHHwj7rFi")
+MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "")  # Required: set in .env
+MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "")  # Required: set in .env
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "obsidian-vault")
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -54,7 +78,19 @@ EXTRACT_MODELS = [
 BRAIN_DUMPS_PREFIX = "00_Inbox/brain-dumps/"
 PROCESSED_PREFIX = "00_Inbox/processed/"
 ARTICLES_FILE = "00_Inbox/articles-to-process.md"
+MTL_KEY = "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md"
 LOGS_PREFIX = "99_System/logs/"
+METRICS_KEY = "99_System/metrics/brain-dump-extraction.jsonl"
+REVIEW_QUEUE_KEY = "00_Inbox/review-queue.md"
+DAILY_NOTES_PREFIX = "40_Timeline_Weekly/Daily/"
+# Operator summary state file. Read by tools/build_command_center.py to render
+# the 🧠 New From Brain Dumps section. Decoupled from run-log schema (ADR-0006).
+OPERATOR_SUMMARY_KEY = "99_System/state/last-brain-dump-summary.json"
+
+# Confidence threshold below which items go to review queue (Layer 3).
+CONFIDENCE_THRESHOLD = 0.6
+# Fuzzy-match similarity threshold for MTL dedup (Layer 3).
+FUZZY_DEDUP_THRESHOLD = 0.85
 
 VALID_AREAS = {"faith", "family", "business", "consulting", "work", "health", "home", "personal"}
 VALID_PRIORITIES = {"A", "B", "C"}
@@ -85,7 +121,9 @@ Priority C = nice-to-have, research, or low-urgency
 
 TASK_FORMAT_PATTERN = re.compile(
     r"^- \[ \] .+\[area:: (?:faith|family|business|consulting|work|health|home|personal)\]"
-    r"( \[priority:: [ABC]\])?( \[due:: \d{4}-\d{2}-\d{2}\])?$"
+    r"( \[priority:: [ABC]\])?( \[due:: \d{4}-\d{2}-\d{2}\])?"
+    r"( \[explore:: (?:true|false)\])?"
+    r"( \[source:: \[\[[^\]]+\]\]\])?$"
 )
 
 SECTION_HEADERS = [
@@ -120,6 +158,9 @@ class RunLog:
     finished_at: str = ""
     duration_ms: int = 0
     status: str = "success"
+    # Optional skip_reason — populated when status="skipped". Surfaced at the
+    # top level of the run-log JSON via RunLogEntry (A4 SinkInputContract).
+    skip_reason: str | None = None
     files_discovered: int = 0
     files_with_content: int = 0
     items_extracted: int = 0
@@ -131,6 +172,34 @@ class RunLog:
     files_processed: list = field(default_factory=list)
     errors: list = field(default_factory=list)
     quality_rejections: list = field(default_factory=list)
+    # Layer 3 — intent routing + confidence gating telemetry
+    candidates_seen: int = 0
+    items_routed: dict = field(default_factory=lambda: {
+        "mtl": 0, "daily_note": 0, "captured_references": 0, "review_queue": 0
+    })
+    ai_calls: int = 0
+    dedup_skips: int = 0
+    low_confidence: int = 0
+    # P1 integrity layer (ADR-0005)
+    receipts_written: int = 0
+    archive_writes_pass: int = 0
+    archive_writes_fail: int = 0
+    files_by_state: dict = field(default_factory=lambda: {
+        "empty": 0, "has_content": 0, "scanning": 0,
+        "extracted": 0, "partial": 0, "error": 0,
+    })
+    files_extracted: list = field(default_factory=list)
+    files_partial:   list = field(default_factory=list)  # [{file, reasons}]
+    files_error:     list = field(default_factory=list)  # [{file, error}]
+    reset_summary: dict = field(default_factory=lambda: {
+        "files_reset_full": 0,
+        "files_reset_partial": 0,
+        "files_reset_skipped": 0,
+    })
+    # Captured for the operator-summary state file (ADR-0006). Stores the
+    # post-dedup MTL-bound task lines exactly as appended, so the command-center
+    # generator can parse area/priority/desc without re-reading MTL.
+    new_tasks_added: list = field(default_factory=list)
 
 
 # ── MinIO helpers ────────────────────────────────────────────────────────────
@@ -141,7 +210,7 @@ def s3_client():
         endpoint_url=MINIO_ENDPOINT,
         aws_access_key_id=MINIO_ACCESS_KEY,
         aws_secret_access_key=MINIO_SECRET_KEY,
-        config=Config(signature_version="s3v4"),
+        config=Config(signature_version="s3v4", connect_timeout=10, read_timeout=30),
         region_name="us-east-1",
     )
 
@@ -163,6 +232,63 @@ def s3_put_verified(s3, key: str, body: str, dry_run: bool = False) -> bool:
     except Exception as e:
         logging.error(f"WRITE_VERIFY_FAIL: {key}: {e}")
         return False
+
+
+# ── P1 integrity helpers (ADR-0005) ──────────────────────────────────────────
+
+def s3_put_receipt(s3, key: str, body: bytes, dry_run: bool = False) -> dict:
+    """Verified PUT for a receipt or any binary-ish payload. Returns
+    {verified: bool, etag: str|None, size_bytes: int}.
+    """
+    if dry_run:
+        logging.info(f"[DRY RUN] Would write receipt: {key}")
+        return {"verified": True, "etag": None, "size_bytes": len(body)}
+    try:
+        put_resp = s3.put_object(Bucket=MINIO_BUCKET, Key=key, Body=body)
+        head = s3.head_object(Bucket=MINIO_BUCKET, Key=key)
+        return {
+            "verified": head["ContentLength"] == len(body),
+            "etag": head.get("ETag", put_resp.get("ETag")),
+            "size_bytes": head["ContentLength"],
+        }
+    except Exception as e:
+        logging.error(f"RECEIPT_WRITE_FAIL: {key}: {e}")
+        return {"verified": False, "etag": None, "size_bytes": 0, "error": str(e)[:240]}
+
+
+def write_archive(s3, source_key: str, source_name: str, content: str,
+                  today_yyyymmdd: str, dry_run: bool) -> dict:
+    """Write the raw source to 99_System/archive/brain-dumps/<date>/<file>.
+
+    Returns the archive dict for inclusion in the receipt.
+    """
+    body = content.encode("utf-8")
+    archive_key = bdi.archive_path(source_name, today_yyyymmdd)
+    if dry_run:
+        logging.info(f"[DRY RUN] Would archive: {archive_key}")
+        return {"key": archive_key, "etag": None, "size_bytes": len(body), "verified": True}
+    try:
+        put_resp = s3.put_object(Bucket=MINIO_BUCKET, Key=archive_key, Body=body)
+        head = s3.head_object(Bucket=MINIO_BUCKET, Key=archive_key)
+        return {
+            "key": archive_key,
+            "etag": head.get("ETag", put_resp.get("ETag")),
+            "size_bytes": head["ContentLength"],
+            "verified": head["ContentLength"] == len(body),
+        }
+    except Exception as e:
+        logging.error(f"ARCHIVE_WRITE_FAIL: {archive_key}: {e}")
+        return {"key": archive_key, "etag": None, "size_bytes": 0, "verified": False,
+                "error": str(e)[:240]}
+
+
+def section_template_for(header: str) -> str | None:
+    """Return the template body for a section header, or None if unknown."""
+    header_clean = header.lstrip("⚡🎯✅📰🗂️💡🔁 ").strip()
+    for known, tmpl in SECTION_TEMPLATES.items():
+        if known in header_clean or header_clean in known:
+            return tmpl
+    return None
 
 
 def discover_brain_dumps(s3) -> list[dict]:
@@ -252,8 +378,53 @@ def is_section_empty(section_content: str) -> bool:
     return len(real_lines) == 0
 
 
+def _strip_yaml_frontmatter(text: str) -> str:
+    """Strip YAML front matter block (--- ... ---) and common template boilerplate.
+
+    Also removes:
+    - H1 headings (# Title) — brain dump file titles
+    - Blockquote lines (> ...) — "How to use" template instructions
+    - Horizontal rules (--- / ***)
+    Returns the remaining user-authored body text.
+    """
+    text = text.strip()
+    # Strip YAML block
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            text = text[end + 4:].strip()
+    # Strip line-by-line boilerplate
+    clean_lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        # H1 headings (file title)
+        if re.match(r"^#\s+", stripped):
+            continue
+        # Blockquote instructions
+        if stripped.startswith(">"):
+            continue
+        # Horizontal rules
+        if re.match(r"^-{3,}$|^\*{3,}$|^_{3,}$", stripped):
+            continue
+        clean_lines.append(line)
+    return "\n".join(clean_lines).strip()
+
+
 def extract_real_sections(sections: dict[str, str]) -> dict[str, str]:
-    """Return only sections that have real user content."""
+    """Return only sections that have real user content.
+
+    For files with no ## section headers (e.g. plain-text brain dumps, ad-hoc
+    notes like Coding.md or Website & Business.md), all content lands in
+    '_frontmatter'.  If no named sections have real content we fall back to
+    treating the body of '_frontmatter' (after stripping the YAML block and
+    template boilerplate) as a generic 'To Do's' section so the content is not
+    silently discarded.
+
+    Structured brain dump templates (Faith, Family, etc.) have ## sections and
+    will never trigger the fallback even if the frontmatter body has a H1 title,
+    because the fallback only fires when real{} is still empty after the named
+    section pass.
+    """
     real = {}
     for header, body in sections.items():
         if header.startswith("_"):
@@ -266,6 +437,15 @@ def extract_real_sections(sections: dict[str, str]) -> dict[str, str]:
             if known in header_clean or header_clean in known:
                 real[header] = body
                 break
+
+    # Fallback: header-less files — treat stripped body as a task section.
+    # Only activates when NO named sections were found (i.e. truly header-less
+    # files like Coding.md, Website & Business.md, Bible post on Social Media.md).
+    if not real and "_frontmatter" in sections:
+        body = _strip_yaml_frontmatter(sections["_frontmatter"])
+        if not is_section_empty(body):
+            real["✅ To Do's"] = body
+
     return real
 
 
@@ -308,6 +488,9 @@ Q2_ROCK_KEYWORDS = {
     "business": ["echelon", "website", "offer", "outreach", "mvp", "client", "echelon seven"],
     "work": ["union", "parallon", "project", "deliver", "exit"],
     "health": ["hip", "gym", "3x", "crossfit", "workout", "decision", "biohacking"],
+    "consulting": ["client", "sow", "proposal", "engagement", "scope", "invoice", "billable", "retainer", "deliverable", "consulting"],
+    "home": ["house", "michigan", "mi property", "generator", "ups", "photo", "repair", "maintenance", "basement", "hvac", "yard"],
+    "personal": ["ai project", "hobby", "side project", "experiment", "learning", "reading", "self", "tinkering", "personal"],
 }
 
 def infer_priority(text: str) -> str:
@@ -332,12 +515,70 @@ def _infer_due(raw: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _build_task(desc: str, area: str, priority: str, due: str | None = None) -> str:
+def _build_task(desc: str, area: str, priority: str, due: str | None = None,
+                explore: bool = False) -> str:
     """Build a canonical task line."""
     task = f"- [ ] {desc} [area:: {area}] [priority:: {priority}]"
     if due:
         task += f" [due:: {due}]"
+    if explore:
+        task += " [explore:: true]"
     return task
+
+
+# Shorthand-date suffix:  "... - 20260420"  (8 digits, optionally space-padded)
+SHORTHAND_DATE_RE = re.compile(r"\s*[-—]\s*(\d{4})(\d{2})(\d{2})\s*$")
+# Loose imperative-verb start (any TitleCase or imperative verb).
+# Lines like "Flush out X", "Re-apply", "Dig into Y", "Fine Tune Z" all match.
+IMPERATIVE_LINE_RE = re.compile(
+    r"^([A-Z][a-z]+(?:[-\s][A-Za-z]+)?)\b"  # Word or hyphenated/two-word lead
+)
+# Lines that should never be treated as tasks even if they start TitleCase.
+TASK_BLOCKLIST = (
+    "## ", "# ", "*Tags:", "*Last", "*Updated", "Format:", "How to use",
+)
+
+
+def normalize_shorthand_dates(text: str) -> str:
+    """Convert trailing `- YYYYMMDD` (or `— YYYYMMDD`) into `[due:: YYYY-MM-DD]`.
+
+    Validates as a real date. Random 8-digit numbers (e.g. `12345678`) pass
+    through unchanged because they fail the date validity check.
+    """
+    m = SHORTHAND_DATE_RE.search(text)
+    if not m:
+        return text
+    yyyy, mm, dd = m.group(1), m.group(2), m.group(3)
+    try:
+        datetime(int(yyyy), int(mm), int(dd))
+    except ValueError:
+        return text
+    return SHORTHAND_DATE_RE.sub(f" [due:: {yyyy}-{mm}-{dd}]", text)
+
+
+def _is_imperative_prose(line: str) -> bool:
+    """Return True if the line looks like an actionable prose statement.
+
+    Catches the operator's writing patterns that the old verb whitelist missed:
+    "Flush out ICP...", "Fine Tune E7...", "Re-apply to Google...", "Dig into ICP...".
+
+    Heuristic:
+      • Starts with a Title-Case word (or hyphenated like "Re-apply") OR a
+        known imperative phrase ("I need to", "Need to").
+      • Is at least 10 chars long (filters short fragments).
+      • Is not a markdown heading or template artifact.
+    """
+    if len(line) < 10:
+        return False
+    if any(line.startswith(b) for b in TASK_BLOCKLIST):
+        return False
+    if line.startswith("#") or line.startswith("|"):
+        return False
+    if re.match(r"^[Ii]\s+(need|should|must|want|have)\s+to\b", line):
+        return True
+    if re.match(r"^Need\s+to\b", line, re.IGNORECASE):
+        return True
+    return bool(IMPERATIVE_LINE_RE.match(line))
 
 
 def regex_extract_tasks(section_body: str, file_area: str) -> list[str]:
@@ -346,8 +587,11 @@ def regex_extract_tasks(section_body: str, file_area: str) -> list[str]:
     Always rebuilds canonical format: - [ ] desc [area:: X] [priority:: X]
     """
     tasks = []
-    for line in section_body.splitlines():
-        stripped = line.strip()
+    for raw_line in section_body.splitlines():
+        # Normalize the raw line first so trailing `- YYYYMMDD` shorthand
+        # becomes a real `[due:: YYYY-MM-DD]` tag before any extraction logic.
+        line = normalize_shorthand_dates(raw_line.strip())
+        stripped = line
         if not stripped or is_section_empty(stripped):
             continue
         if stripped.startswith("<!--") or stripped.startswith(">"):
@@ -365,9 +609,10 @@ def regex_extract_tasks(section_body: str, file_area: str) -> list[str]:
                 continue
             priority = infer_priority(desc)
             tasks.append(_build_task(desc, file_area, priority, due))
+            continue
 
         # Bullet without checkbox: "- item" or "* item"
-        elif re.match(r"^[-*]\s+\S", stripped):
+        if re.match(r"^[-*]\s+\S", stripped):
             raw_text = re.sub(r"^[-*]\s+", "", stripped).strip()
             if len(raw_text) < 5:
                 continue
@@ -375,32 +620,129 @@ def regex_extract_tasks(section_body: str, file_area: str) -> list[str]:
             desc = _clean_task_text(raw_text)
             priority = infer_priority(desc)
             tasks.append(_build_task(desc, file_area, priority, due))
+            continue
 
-        # Plain imperative sentences
-        elif re.match(
-            r"^(I need|Need to|Research|Call|Email|Buy|Get|Check|Follow up|"
-            r"Review|Write|Schedule|Set up|Look into|Find|Fix|Create|Build|"
-            r"Update|Send|Submit|Complete|Finish|Start|Launch|Plan|Talk to|Meet with)",
-            stripped, re.IGNORECASE
-        ):
+        # Plain sentence with explicit inline priority marker: "Do thing - A"
+        # ("Apply to Reggie program ASAP - A")
+        priority_match = re.search(
+            r"\s+-\s+([ABC])(?:\s+-\s+due\s+(\d{4}-\d{2}-\d{2}))?$", stripped
+        )
+        if priority_match and len(stripped) >= 10:
+            explicit_priority = priority_match.group(1)
+            due_date = priority_match.group(2)
+            desc = stripped[:priority_match.start()].strip()
+            desc = _clean_task_text(desc)
+            if len(desc) >= 5:
+                tasks.append(_build_task(desc, file_area, explicit_priority, due_date))
+                continue
+
+        # Imperative-prose lines — broad heuristic (replaces narrow verb whitelist).
+        if _is_imperative_prose(stripped):
+            due = _infer_due(stripped)
             desc = _clean_task_text(stripped)
+            if len(desc) < 5:
+                continue
             priority = infer_priority(desc)
-            tasks.append(_build_task(desc, file_area, priority))
+            tasks.append(_build_task(desc, file_area, priority, due))
+            continue
 
     return tasks
 
 
+# ── Explore-intent auto-tag ──────────────────────────────────────────────────
+
+EXPLORE_INTENT_RE = re.compile(
+    r"\b(research|investigate|explore|look\s+into|dig\s+into|study|"
+    r"evaluate|deep\s+dive)\b",
+    re.IGNORECASE,
+)
+
+
+def _ensure_explore_tag(task: str) -> str:
+    """If the task description has research/explore intent and the AI did
+    not already include `[explore:: true]`, append it."""
+    if "[explore::" in task:
+        return task
+    # Look only at the description portion (between "- [ ]" and the first "[area::")
+    desc_match = re.match(r"^- \[ \] (.+?)\s*\[area::", task)
+    desc = desc_match.group(1) if desc_match else task
+    if EXPLORE_INTENT_RE.search(desc):
+        return task + " [explore:: true]"
+    return task
+
+
+def extract_tasks_with_ai_fallback(client: Any, section_body: str,
+                                    file_area: str, today: str) -> list[str]:
+    """AI fallback path. Always called when regex returns 0 tasks (and AI is the
+    gold path on every brain dump for richer extraction).
+
+    Auto-tags research/investigate/explore-intent items with [explore:: true].
+    Returns canonical-format task lines only — invalid lines are dropped.
+    """
+    if client is None:
+        return []
+    raw = extract_tasks_from_section(client, "AI fallback", section_body, file_area, today)
+    out = []
+    for task in raw:
+        task = _ensure_explore_tag(task.strip())
+        # Validate canonical shape, but tolerate trailing [explore:: true]
+        base = re.sub(r"\s*\[explore::[^\]]+\]\s*$", "", task).strip()
+        if validate_task_line(base):
+            out.append(task)
+    return out
+
+
 # ── OpenRouter AI extraction ─────────────────────────────────────────────────
 
-def openrouter_client() -> OpenAI:
+def openrouter_client() -> Any:
     api_key = OPENROUTER_API_KEY
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY not set in environment")
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise RuntimeError(
+            "openai package is required for OpenRouter calls. Install dependencies from requirements.txt."
+        ) from exc
     return OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
 
 
-def _chat_with_fallback(client: OpenAI, prompt: str, max_tokens: int = 600) -> str | None:
-    """Try models in cascade order. Return response text or None if all fail."""
+def _chat_with_fallback(
+    client: Any,
+    prompt: str,
+    max_tokens: int = 600,
+    *,
+    area: str | None = None,
+) -> str | None:
+    """Try models in cascade order. Return response text or None if all fail.
+
+    Every call is gated by the privacy classifier (tools/egress_guard) BEFORE
+    the OpenRouter request goes out. ``area`` is the file_area hint (faith,
+    family, business, …) — used by the classifier's tier-2 area-tag rules
+    to short-circuit on sensitive domains (ADR-0008).
+
+    When the guard denies egress, returns None without making any HTTP call.
+    Callers already handle None as "AI unavailable, fall back to regex" (the
+    regex-first principle from ADR-0001), so no caller change is required.
+    """
+    # Egress gate — runs before any network call.
+    from tools import egress_guard  # local import keeps module-import cheap
+
+    fields: dict[str, Any] = {}
+    if area:
+        fields["area"] = area
+    allowed, verdict = egress_guard.guard_for_peer(
+        peer="to_openrouter",
+        text=prompt,
+        fields=fields,
+    )
+    if not allowed:
+        logging.warning(
+            "openrouter call blocked by privacy classifier: class=%s reasons=%s area=%s",
+            verdict.privacy_class, verdict.reasons, area,
+        )
+        return None
+
     for model in EXTRACT_MODELS:
         try:
             resp = client.chat.completions.create(
@@ -419,7 +761,7 @@ def _chat_with_fallback(client: OpenAI, prompt: str, max_tokens: int = 600) -> s
     return None
 
 
-def extract_tasks_from_section(client: OpenAI, section_header: str, section_body: str,
+def extract_tasks_from_section(client: Any, section_header: str, section_body: str,
                                 file_area: str, today: str) -> list[str]:
     """Ask OpenRouter to extract canonical tasks from a section."""
     prompt = f"""Extract tasks from this brain dump section into Obsidian task format.
@@ -441,7 +783,7 @@ File domain: {file_area} | Today: {today} | Section: {section_header}
 CONTENT:
 {section_body}"""
 
-    text = _chat_with_fallback(client, prompt, max_tokens=600)
+    text = _chat_with_fallback(client, prompt, max_tokens=600, area=file_area)
     if not text or text.strip() == "NONE":
         return []
     return [ln.strip() for ln in text.splitlines() if ln.strip().startswith("- [ ]")]
@@ -461,7 +803,7 @@ File domain: {file_area} | Section: {section_header}
 CONTENT:
 {section_body}"""
 
-    text = _chat_with_fallback(client, prompt, max_tokens=400)
+    text = _chat_with_fallback(client, prompt, max_tokens=400, area=file_area)
     if not text or text.strip() == "NONE":
         return []
     notes = []
@@ -488,7 +830,7 @@ If no URLs found, output: NONE
 CONTENT:
 {section_body}"""
 
-    text = _chat_with_fallback(client, prompt, max_tokens=300)
+    text = _chat_with_fallback(client, prompt, max_tokens=300, area=file_area)
     if not text or text.strip() == "NONE":
         return []
     return [ln.strip() for ln in text.splitlines() if ln.strip().startswith("- [")]
@@ -537,6 +879,70 @@ type: extracted-tasks
     return len(tasks) if ok else 0
 
 
+def append_tasks_to_mtl(s3, tasks: list[str], source_file: str, today: str,
+                        dry_run: bool) -> dict:
+    """Append extracted tasks to the Master Task List.
+
+    Reads MTL, deduplicates against existing tasks, appends new ones,
+    writes back with verification. Returns a dict:
+        {"appended": int, "verified": bool, "error": str|None}
+
+    Verified semantics:
+      - True if the MTL write was head_object-verified (or dry-run).
+      - True if all candidate tasks deduped (no-op write — nothing to verify).
+      - True if no candidate tasks at all (no-op).
+      - False if MTL read or write failed; the receipt gate uses this to
+        retain the source section instead of clearing it (ADR-0005 §4).
+    """
+    if not tasks:
+        return {"appended": 0, "verified": True, "error": None, "new_tasks": []}
+
+    try:
+        mtl = s3_get(s3, MTL_KEY)
+    except Exception as e:
+        logging.error(f"Failed to read MTL for append: {e}")
+        return {"appended": 0, "verified": False, "error": f"mtl_read: {str(e)[:200]}", "new_tasks": []}
+
+    existing = set()
+    for line in mtl.splitlines():
+        m = re.match(r'^- \[[ x]\] (.+?)(?:\s*\[area::|\s*$)', line)
+        if m:
+            existing.add(m.group(1).strip().lower())
+
+    new_tasks = []
+    for task in tasks:
+        m = re.match(r'^- \[ \] (.+?)(?:\s*\[area::|\s*$)', task)
+        if m:
+            desc = m.group(1).strip().lower()
+            if desc not in existing:
+                new_tasks.append(task)
+                existing.add(desc)
+            else:
+                logging.info(f"      dedup: skipping '{desc[:50]}...' (already in MTL)")
+
+    if not new_tasks:
+        logging.info(f"      all {len(tasks)} tasks already in MTL (deduped)")
+        return {"appended": 0, "verified": True, "error": None, "new_tasks": []}
+
+    append_block = (
+        f"\n\n## Brain Dump Capture — {today} ({source_file})\n"
+        + "\n".join(new_tasks)
+        + "\n"
+    )
+    updated_mtl = mtl.rstrip() + append_block
+
+    if dry_run:
+        logging.info(f"      [dry-run] would append {len(new_tasks)} tasks to MTL")
+        return {"appended": len(new_tasks), "verified": True, "error": None, "new_tasks": list(new_tasks)}
+
+    ok = s3_put_verified(s3, MTL_KEY, updated_mtl, dry_run=False)
+    if ok:
+        logging.info(f"      appended {len(new_tasks)} tasks to MTL")
+        return {"appended": len(new_tasks), "verified": True, "error": None, "new_tasks": list(new_tasks)}
+    logging.error(f"      FAILED to append tasks to MTL")
+    return {"appended": 0, "verified": False, "error": "mtl_put_or_head_failed", "new_tasks": []}
+
+
 def write_note_file(s3, note: dict, source_file: str, today: str, dry_run: bool) -> bool:
     """Write a single note to its domain folder."""
     area = note.get("area", "personal")
@@ -560,17 +966,28 @@ type: note
     return s3_put_verified(s3, key, content, dry_run)
 
 
-def append_articles(s3, article_lines: list[str], today: str, dry_run: bool):
-    """Append article URLs to the articles-to-process.md queue file."""
+def append_articles(s3, article_lines: list[str], today: str, dry_run: bool) -> dict:
+    """Append article URLs to the articles queue.
+
+    Returns {"appended": int, "verified": bool, "error": str|None}.
+    Verified is True only when the put + head_object both succeeded
+    (or in dry-run mode). The receipt gate (ADR-0005 §4) uses verified
+    to decide whether the brain-dump's articles section can be cleared.
+    """
     if not article_lines:
-        return
+        return {"appended": 0, "verified": True, "error": None}
     try:
         existing = s3_get(s3, ARTICLES_FILE)
     except ClientError:
         existing = f"# Articles to Process\n\n"
 
     new_content = existing.rstrip() + f"\n\n## Added {today}\n\n" + "\n".join(article_lines) + "\n"
-    s3_put_verified(s3, ARTICLES_FILE, new_content, dry_run)
+    if dry_run:
+        return {"appended": len(article_lines), "verified": True, "error": None}
+    ok = s3_put_verified(s3, ARTICLES_FILE, new_content, dry_run=False)
+    if ok:
+        return {"appended": len(article_lines), "verified": True, "error": None}
+    return {"appended": 0, "verified": False, "error": "articles_put_or_head_failed"}
 
 
 SECTION_TEMPLATES = {
@@ -616,103 +1033,1052 @@ def reset_to_template(content: str, extracted_headers: list[str], today: str) ->
 
 
 def write_run_log(s3, log: RunLog, dry_run: bool):
-    """Write JSON run log to 99_System/logs/."""
+    """Write JSON run log to 99_System/logs/.
+
+    Routes through RunLogEntry (A4 SinkInputContract). Common fields
+    (workflow, run_date, started_at, finished_at, duration_ms, status,
+    skip_reason) sit at the top level; everything else on RunLog rides
+    under `extras` and is flattened back to top-level on serialise — so
+    n8n Code-node consumers that grep for `tasks_written` / `articles_queued`
+    continue to work unchanged.
+    """
     if dry_run:
         return
     key = f"{LOGS_PREFIX}brain-dump-processor-{log.run_date}.json"
-    log_dict = asdict(log)
-    s3_put_verified(s3, key, json.dumps(log_dict, indent=2), dry_run)
+
+    common = {
+        "schema_version": SCHEMA_VERSION_RUNLOG,
+        "schema": SCHEMA_NAME_RUNLOG,
+        "workflow": log.workflow,
+        "run_date": log.run_date,
+        "started_at": log.started_at,
+        "finished_at": log.finished_at,
+        "duration_ms": log.duration_ms,
+        "status": log.status,
+    }
+    if getattr(log, "skip_reason", None):
+        common["skip_reason"] = log.skip_reason
+
+    extras = asdict(log)
+    for k in list(common.keys()):
+        extras.pop(k, None)
+    # Defensive: drop schema_version / schema if they ever leaked into RunLog.
+    extras.pop("schema_version", None)
+    extras.pop("schema", None)
+
+    entry = RunLogEntry.from_dict({**common, **extras})
+    body = json.dumps(entry.to_dict(), indent=2)
+    put_text_verified(s3, MINIO_BUCKET, key, body, content_type="application/json")
+
+
+def build_operator_summary(log: RunLog, *, top_n: int = 10) -> BrainDumpSummary:
+    """Build the operator-summary payload for the daily command center.
+
+    Pure function — no I/O. Reads the captured `new_tasks_added` lines and
+    parses each into TopAddedTask(area, priority, desc) for the home page's
+    "🧠 New From Brain Dumps" section. Sort key: priority A → B → C → none,
+    then insertion order. ADR-0006 + A4 SinkInputContract.
+    """
+    parsed: list[dict] = []
+    for line in log.new_tasks_added:
+        m_open = re.match(r"^- \[ \] (.+)$", line)
+        if not m_open:
+            continue
+        body = m_open.group(1)
+        area = re.search(r"\[area::\s*([a-z]+)\]", body)
+        prio = re.search(r"\[priority::\s*([ABC])\]", body)
+        desc = re.sub(r"\s*\[(?:area|priority|due|explore|completion|source)::[^\]]*\]", "", body).strip()
+        parsed.append({
+            "area": area.group(1) if area else None,
+            "priority": prio.group(1) if prio else None,
+            "desc": desc,
+        })
+
+    rank = {"A": 0, "B": 1, "C": 2, None: 3}
+    parsed_sorted = sorted(parsed, key=lambda t: rank.get(t["priority"], 3))
+
+    top_added = [
+        TopAddedTask(area=t["area"], priority=t["priority"], desc=t["desc"])
+        for t in parsed_sorted[:top_n]
+    ]
+
+    files_partial = [
+        FilePartial(file=fp.get("file", ""), reasons=list(fp.get("reasons", [])))
+        for fp in log.files_partial
+    ]
+    files_error = [
+        FileError(file=fe.get("file", ""), error=fe.get("error", ""))
+        for fe in log.files_error
+    ]
+
+    return BrainDumpSummary(
+        schema_version=SCHEMA_VERSION_SUMMARY,
+        schema=SCHEMA_NAME_SUMMARY,
+        run_finished_at=log.finished_at,
+        run_started_at=log.started_at,
+        status=log.status,
+        tasks_written=log.tasks_written,
+        review_added=log.items_routed.get("review_queue", 0),
+        articles_queued=log.articles_queued,
+        files_extracted=list(log.files_extracted),
+        files_partial=files_partial,
+        files_error=files_error,
+        files_by_state=dict(log.files_by_state),
+        reset_summary=dict(log.reset_summary),
+        top_added_tasks=top_added,
+        total_added_tasks=len(parsed),
+    )
+
+
+def write_operator_summary(s3, log: RunLog, dry_run: bool):
+    """Persist the operator-summary state file (ADR-0006).
+
+    Decoupled from run-log schema so build_command_center.py reads a stable
+    contract. Idempotent — overwrites prior summary every run. Serialises
+    through BrainDumpSummary.to_dict() (A4 SinkInputContract).
+    """
+    if dry_run:
+        return
+    summary = build_operator_summary(log)
+    body = json.dumps(summary.to_dict(), indent=2, ensure_ascii=False)
+    put_text_verified(s3, MINIO_BUCKET, OPERATOR_SUMMARY_KEY, body, content_type="application/json")
+
+
+# ── Layer 3: Intent classification + routing ─────────────────────────────────
+
+# Keyword dictionaries for area auto-detection. AI's call wins when the AI is
+# confident; these only force an area when the AI is uncertain or absent.
+AREA_KEYWORDS = {
+    "family":     ["christy", "kids", "family", "marriage", "wife"],
+    "business":   ["echelon", "echelon seven", "e7", "mvp", "icp", "outreach",
+                   "client", "offer", "temple protocol", "leads", "cold email"],
+    "health":     ["hip", "gym", "supplement", "sleep", "biomarker", "crossfit",
+                   "workout", "vagal", "biohack"],
+    "faith":      ["bible", "prayer", "church", "ministry", "sunday school",
+                   "scripture", "gospel"],
+    "work":       ["parallon", "bam", "day job", "tmc", "union project"],
+    "home":       ["house", "mi property", "michigan property", "ups",
+                   "generator", "yard", "basement", "hvac"],
+    "consulting": ["sow", "proposal", "engagement", "retainer", "billable",
+                   "consulting"],
+}
+
+# Priority phrase markers (Layer 3).
+PRIORITY_A_MARKERS = ("asap", "urgent", "critical", "needle-mover",
+                      "needle mover", "today", "must")
+PRIORITY_C_MARKERS = ("maybe", "someday", "would be nice", "nice to have",
+                      "low priority", "no rush")
+PRIORITY_B_MARKERS = ("should", "want to", "plan to", "would like")
+
+# Question / event / reference cues.
+QUESTION_RE = re.compile(r"\?\s*$")
+EVENT_KEYWORDS = ("lunch with", "dinner with", "coffee with", "meeting with",
+                  "call with", "appointment", "tomorrow at", "today at",
+                  "this evening")
+URL_RE = re.compile(r"^https?://\S+$|\bhttps?://\S+\b")
+
+
+def _detect_area(text: str, hint: str | None = None) -> tuple[str, float]:
+    """Return (area, confidence_boost). Confidence_boost is added to base.
+
+    Uses word-boundary matching so "hip" doesn't match inside "scholarship",
+    "ups" doesn't match inside "groups", etc.
+    """
+    lower = text.lower()
+    hits = []
+    for area, keywords in AREA_KEYWORDS.items():
+        for kw in keywords:
+            # Compile a word-boundary regex; for multi-word keywords it
+            # still anchors on the outer word boundaries.
+            pattern = r"\b" + re.escape(kw) + r"\b"
+            if re.search(pattern, lower):
+                hits.append((area, len(kw)))
+    if hits:
+        hits.sort(key=lambda x: -x[1])
+        return hits[0][0], 0.25
+    if hint and hint in VALID_AREAS:
+        return hint, 0.10
+    return "personal", 0.0
+
+
+def _detect_priority(text: str) -> tuple[str, float]:
+    """Return (priority, confidence_boost) using phrase markers."""
+    lower = text.lower()
+    if any(m in lower for m in PRIORITY_A_MARKERS):
+        return "A", 0.20
+    if any(m in lower for m in PRIORITY_C_MARKERS):
+        return "C", 0.20
+    if any(m in lower for m in PRIORITY_B_MARKERS):
+        return "B", 0.15
+    # Fall back to the Q2-rock keyword classifier.
+    return infer_priority(text), 0.05
+
+
+def _detect_intent(text: str) -> tuple[str, float]:
+    """Return (intent, base_confidence) using cheap, deterministic heuristics."""
+    stripped = text.strip()
+    if not stripped:
+        return "reference", 0.0
+
+    # Reference: bare URL or just a link
+    if URL_RE.match(stripped) or stripped.startswith("http"):
+        return "reference", 0.85
+
+    # Question: ends with ?
+    if QUESTION_RE.search(stripped):
+        return "question", 0.85
+
+    # Event: calendar-shape phrases
+    lower = stripped.lower()
+    if any(kw in lower for kw in EVENT_KEYWORDS):
+        return "event", 0.80
+
+    # Research / explore intent
+    if EXPLORE_INTENT_RE.search(stripped):
+        return "research", 0.70
+
+    # Action: imperative-shaped prose, ≥10 chars, starts with TitleCase or "Need to"
+    if _is_imperative_prose(stripped):
+        return "action", 0.65
+
+    # Generic short non-actionable text → reference (low confidence)
+    if len(stripped) < 10:
+        return "reference", 0.30
+
+    return "action", 0.45
+
+
+def classify_intent(text: str, file_area_hint: str | None = None) -> dict:
+    """Classify a single line of brain-dump text.
+
+    Returns a dict with:
+        intent     ∈ {action, research, question, event, reference}
+        task       — cleaned imperative phrasing
+        area       ∈ VALID_AREAS
+        priority   ∈ {A, B, C}
+        due        — ISO date string or None
+        confidence — float in [0.0, 1.0]
+
+    Pure-Python heuristic implementation; AI augmentation is layered on top
+    by `ai_classify_intent` when an OpenRouter client is available.
+    """
+    raw = (text or "").strip()
+    intent, base_conf = _detect_intent(raw)
+    area, area_boost = _detect_area(raw, hint=file_area_hint)
+    priority, prio_boost = _detect_priority(raw)
+    due = _infer_due(raw)
+
+    confidence = round(min(1.0, base_conf + area_boost + prio_boost), 3)
+    return {
+        "intent": intent,
+        "task": _clean_task_text(raw),
+        "area": area,
+        "priority": priority,
+        "due": due,
+        "confidence": confidence,
+    }
+
+
+def ai_classify_intent(client: Any, text: str, file_area: str,
+                       today: str) -> dict | None:
+    """Ask the AI gold path to classify an item — returns dict or None on failure.
+
+    The AI gold path runs on every brain dump (per Layer 3 mandate). It returns
+    a richer structured payload than the regex heuristic. If AI is unavailable
+    (offline, key dead), callers should fall back to `classify_intent`.
+    """
+    if client is None:
+        return None
+    prompt = f"""Classify this brain dump line into a JSON object.
+
+Output ONLY one JSON object (no markdown, no preamble). Fields:
+- intent: one of action, research, question, event, reference
+- task: imperative phrasing of the item (one short sentence)
+- area: one of faith, family, business, consulting, work, health, home, personal
+- priority: A (critical/needle-mover), B (important), C (nice-to-have)
+- due: YYYY-MM-DD or null
+- confidence: 0.0 to 1.0
+
+File domain hint: {file_area} | Today: {today}
+
+LINE: {text}"""
+    raw = _chat_with_fallback(client, prompt, max_tokens=200, area=file_area)
+    if not raw:
+        return None
+    raw = raw.strip()
+    # Strip markdown fences if model included them.
+    raw = re.sub(r"^```(?:json)?", "", raw).strip()
+    raw = re.sub(r"```$", "", raw).strip()
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        # Try to find the first {...} block.
+        m = re.search(r"\{[^{}]*\}", raw, re.DOTALL)
+        if not m:
+            return None
+        try:
+            obj = json.loads(m.group(0))
+        except json.JSONDecodeError:
+            return None
+    # Normalize / sanity-check.
+    intent = obj.get("intent", "action")
+    if intent not in ("action", "research", "question", "event", "reference"):
+        intent = "action"
+    area = obj.get("area", file_area)
+    if area not in VALID_AREAS:
+        area = "personal"
+    priority = obj.get("priority", "B")
+    if priority not in VALID_PRIORITIES:
+        priority = "B"
+    due = obj.get("due")
+    if due and not re.match(r"^\d{4}-\d{2}-\d{2}$", str(due)):
+        due = None
+    try:
+        confidence = float(obj.get("confidence", 0.5))
+    except (TypeError, ValueError):
+        confidence = 0.5
+    return {
+        "intent": intent,
+        "task": (obj.get("task") or text).strip(),
+        "area": area,
+        "priority": priority,
+        "due": due,
+        "confidence": max(0.0, min(1.0, confidence)),
+    }
+
+
+def confidence_gate(item: dict) -> str:
+    """Return 'promote' if item is above threshold, else 'review_queue'."""
+    return "promote" if float(item.get("confidence", 0)) >= CONFIDENCE_THRESHOLD else "review_queue"
+
+
+def build_source_link(source_file: str, today: str) -> str:
+    """Inline-field source link to the brain-dump origin.
+
+    Example: `[source:: [[braindump-2026-04-25-BrainDump-Personal]]]`
+    """
+    base = re.sub(r"\.md$", "", source_file)
+    base = re.sub(r"\s+", "-", base)
+    base = re.sub(r"[^A-Za-z0-9\-_]", "", base)
+    note = f"braindump-{today}-{base}"
+    return f"[source:: [[{note}]]]"
+
+
+def route_by_intent(item: dict, source_file: str, today: str) -> dict:
+    """Build the routing decision for an intent-classified item.
+
+    Returns a dict with:
+        destination ∈ {mtl, daily_note, captured_references, review_queue}
+        task_line   — full canonical line (for mtl + review_queue)
+        section     — daily-note section name (for daily_note)
+        target_key  — vault key (for captured_references / daily_note / review_queue)
+    """
+    intent = item.get("intent", "action")
+    task   = item.get("task", "").strip()
+    area   = item.get("area", "personal")
+    if area not in VALID_AREAS:
+        area = "personal"
+    priority = item.get("priority", "B")
+    if priority not in VALID_PRIORITIES:
+        priority = "B"
+    due    = item.get("due")
+    src    = build_source_link(source_file, today)
+
+    if intent in ("action", "research", "explore"):
+        explore = (intent in ("research", "explore"))
+        line = _build_task(task, area, priority, due, explore=explore)
+        line = f"{line} {src}"
+        return {
+            "destination": "mtl",
+            "task_line": line,
+            "intent": intent,
+        }
+
+    if intent == "question":
+        return {
+            "destination": "daily_note",
+            "section": "❓ Open Questions",
+            "task_line": f"- {task} {src}",
+            "target_key": f"{DAILY_NOTES_PREFIX}{today}.md",
+        }
+
+    if intent == "event":
+        return {
+            "destination": "daily_note",
+            "section": "📅 Events",
+            "task_line": f"- {task} {src}",
+            "target_key": f"{DAILY_NOTES_PREFIX}{today}.md",
+        }
+
+    if intent == "reference":
+        ym = today[:7]  # YYYY-MM
+        return {
+            "destination": "captured_references",
+            "task_line": f"- {task} {src}",
+            "target_key": f"00_Inbox/captured-references-{ym}.md",
+        }
+
+    # Default fallback
+    line = _build_task(task, area, priority, due) + f" {src}"
+    return {"destination": "mtl", "task_line": line, "intent": "action"}
+
+
+# ── Layer 3: Fuzzy dedup against existing MTL ────────────────────────────────
+
+try:
+    from difflib import SequenceMatcher
+except ImportError:  # pragma: no cover — stdlib
+    SequenceMatcher = None  # type: ignore
+
+
+def _task_desc(line: str) -> str | None:
+    """Extract just the description portion of a canonical task line."""
+    m = re.match(r"^- \[[ x]\]\s+(.+?)(?:\s*\[area::|\s*$)", line)
+    if not m:
+        return None
+    return m.group(1).strip().lower()
+
+
+def fuzzy_dedup_filter(candidates: list[str], existing_descs: set[str],
+                        threshold: float = FUZZY_DEDUP_THRESHOLD) -> list[str]:
+    """Return only candidate task lines whose description is < threshold similar
+    to any existing MTL task description.
+
+    `existing_descs` is a set of lowercase, normalized description strings.
+    """
+    kept: list[str] = []
+    if SequenceMatcher is None:  # pragma: no cover
+        return candidates
+    for line in candidates:
+        desc = _task_desc(line)
+        if not desc:
+            kept.append(line)
+            continue
+        is_dup = False
+        for ex in existing_descs:
+            if not ex:
+                continue
+            ratio = SequenceMatcher(None, desc, ex).ratio()
+            if ratio >= threshold:
+                is_dup = True
+                break
+        if not is_dup:
+            kept.append(line)
+    return kept
+
+
+# ── Layer 4: Telemetry sidecar ───────────────────────────────────────────────
+
+def write_telemetry_entry(s3, entry: dict, dry_run: bool = False) -> bool:
+    """Append a single JSON-line entry to 99_System/metrics/brain-dump-extraction.jsonl."""
+    if dry_run:
+        logging.info(f"[DRY RUN] would append telemetry: {entry}")
+        return True
+    line = json.dumps(entry, sort_keys=False) + "\n"
+    try:
+        existing = s3.get_object(Bucket=MINIO_BUCKET, Key=METRICS_KEY)["Body"].read().decode("utf-8")
+    except Exception:
+        existing = ""
+    body = (existing or "") + line
+    try:
+        s3.put_object(Bucket=MINIO_BUCKET, Key=METRICS_KEY, Body=body.encode("utf-8"))
+        s3.head_object(Bucket=MINIO_BUCKET, Key=METRICS_KEY)
+        return True
+    except Exception as e:
+        logging.error(f"Telemetry write failed: {e}")
+        return False
+
+
+# ── Layer 3: Review queue + daily-note + captured-references writers ─────────
+
+REVIEW_QUEUE_HEADER = """# Review Queue
+
+> Move tasks from this file into the MTL when ready; delete to discard.
+> Items here came from a brain dump but the AI was not confident enough
+> (confidence < 0.6) to auto-promote them.
+
+"""
+
+
+def append_to_review_queue(s3, items: list[dict], today: str, source_file: str,
+                            dry_run: bool) -> int:
+    """Append low-confidence items to 00_Inbox/review-queue.md."""
+    if not items:
+        return 0
+    try:
+        existing = s3_get(s3, REVIEW_QUEUE_KEY)
+    except ClientError:
+        existing = REVIEW_QUEUE_HEADER
+
+    if not existing.startswith("# Review Queue"):
+        existing = REVIEW_QUEUE_HEADER + existing
+
+    block = [f"\n## {today} — {source_file}"]
+    for it in items:
+        line = it.get("task_line") or it.get("task") or ""
+        conf = it.get("confidence")
+        if conf is not None:
+            line = f"{line} <!-- conf={conf} -->"
+        block.append(line)
+    block.append("")
+
+    body = existing.rstrip() + "\n" + "\n".join(block) + "\n"
+    if dry_run:
+        return len(items)
+    ok = s3_put_verified(s3, REVIEW_QUEUE_KEY, body, dry_run=False)
+    return len(items) if ok else 0
+
+
+def append_to_daily_note(s3, today: str, section: str, lines: list[str],
+                         dry_run: bool) -> int:
+    """Append lines under a `## section` heading in today's daily note.
+
+    If the daily note doesn't exist, create a minimal one. If the section
+    is absent, append it at the bottom.
+    """
+    if not lines:
+        return 0
+    key = f"{DAILY_NOTES_PREFIX}{today}.md"
+    try:
+        body = s3_get(s3, key)
+    except ClientError:
+        body = f"# Daily Note — {today}\n"
+
+    section_header = f"## {section}"
+    if section_header in body:
+        # Insert lines after the section header — at end of section.
+        new_body = re.sub(
+            rf"({re.escape(section_header)}\n)",
+            r"\1" + "\n".join(lines) + "\n",
+            body,
+            count=1,
+        )
+    else:
+        # Append a fresh section
+        new_body = body.rstrip() + f"\n\n{section_header}\n\n" + "\n".join(lines) + "\n"
+
+    if dry_run:
+        return len(lines)
+    ok = s3_put_verified(s3, key, new_body, dry_run=False)
+    return len(lines) if ok else 0
+
+
+def append_to_captured_references(s3, today: str, lines: list[str],
+                                   dry_run: bool) -> int:
+    """Append lines to 00_Inbox/captured-references-{YYYY-MM}.md."""
+    if not lines:
+        return 0
+    ym = today[:7]
+    key = f"00_Inbox/captured-references-{ym}.md"
+    try:
+        body = s3_get(s3, key)
+    except ClientError:
+        body = f"# Captured References — {ym}\n"
+
+    block = f"\n## {today}\n\n" + "\n".join(lines) + "\n"
+    new_body = body.rstrip() + block
+    if dry_run:
+        return len(lines)
+    ok = s3_put_verified(s3, key, new_body, dry_run=False)
+    return len(lines) if ok else 0
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
 def process_file(s3, client: OpenAI, file_info: dict, log: RunLog,
-                 today: str, dry_run: bool) -> bool:
-    """Process a single brain dump file through the pipeline. Returns True if content found."""
+                 today: str, dry_run: bool, no_reset: bool = False) -> bool:
+    """Process a single brain-dump file with the P1 integrity layer (ADR-0005).
+
+    Per-file flow under the gated path:
+      1. Read content + parse frontmatter.
+      2. Compute content_hash on the normalized body.
+      3. If body is effectively empty → status=empty, heartbeat-only, return.
+      4. Write archive (raw source) → if fails, status=error, abort.
+      5. Run extraction (existing regex/AI/intent-routing logic).
+      6. Build receipt with per-section + per-write verification.
+      7. Write receipt → if fails, status=error, no clearing.
+      8. Compute new frontmatter from receipt summary.
+      9. Apply gated reset (verified sections cleared, failed retained with
+         retention block); write source back.
+
+    --no-reset: heartbeat-only path. Writes outputs but no archive, no
+    receipt, no clearing. Mirrors the pre-P1 extraction behavior with
+    frontmatter heartbeat updates. Used for safe drains.
+
+    Note: `scanning` state is logical-only during a run; it is not
+    persisted to disk. A crashed run leaves the file in its prior
+    state and the next run re-picks it. Receipts are content-addressed
+    so a re-run produces the same receipt key (idempotent).
+    """
     key = file_info["key"]
     name = file_info["name"]
+    today_yyyymmdd = today.replace("-", "")
+    now_iso = bdi.now_utc_iso()
     logging.info(f"Processing: {name}")
 
+    # Stage 1 — read + parse frontmatter
     try:
         content = s3_get(s3, key)
     except Exception as e:
         log.errors.append(f"Failed to read {name}: {e}")
+        log.files_error.append({"file": name, "error": str(e)[:240]})
+        log.files_by_state["error"] += 1
         return False
 
-    # Stage 2: Smart Read — parse sections, detect real content
-    sections = parse_sections(content)
+    fm, body = bdi.parse_frontmatter(content)
+    content_hash = bdi.compute_content_hash(body)
+
+    # Heartbeat fields are always updated (even when status stays empty).
+    fm["last_checked"] = now_iso
+    fm["content_hash"] = content_hash
+    fm.setdefault("domain", "personal")
+    fm.setdefault("area", infer_area_from_filename(name))
+    fm.setdefault("last_partial_reasons", [])
+    fm.setdefault("last_receipt", None)
+
+    # Stage 2 — section parse & emptiness detection
+    sections = parse_sections(body)
     real_sections = extract_real_sections(sections)
 
     if not real_sections:
-        logging.info(f"  → No real content in {name}, skipping")
+        # Body is template-only or empty; nothing to extract.
+        fm["status"] = "empty"
+        if fm.get("last_processed_hash") != content_hash:
+            fm["last_processed_hash"] = content_hash
+            fm["last_processed"] = now_iso
+        if not dry_run:
+            new_content = bdi.serialize_frontmatter(fm, body if body else content)
+            s3_put_verified(s3, key, new_content, dry_run)
+        log.files_by_state["empty"] += 1
+        logging.info(f"  → No real content in {name}, status=empty")
         return False
 
-    file_area = infer_area_from_filename(name)
+    file_area = fm.get("area") or infer_area_from_filename(name)
     logging.info(f"  → {len(real_sections)} section(s) with real content, area={file_area}")
+    # Note: log.files_with_content is incremented by main() based on the return
+    # value of this function (return True ⇒ had real content). Don't double-count.
 
-    all_tasks = []
-    all_articles = []
-    notes_written = 0
+    # --no-reset: heartbeat-only path (no archive, no receipt, no clearing)
+    if no_reset:
+        return _extract_no_reset(s3, client, name, key, content, body, fm,
+                                  real_sections, file_area, today, log, dry_run)
 
-    # Stage 3+4: Extract per section (regex primary, AI for articles/notes)
-    for header, body in real_sections.items():
+    # ── Gated path ────────────────────────────────────────────────────────────
+
+    # Stage 3 — Archive write (BEFORE extraction). Hard gate.
+    archive = write_archive(s3, key, name, content, today_yyyymmdd, dry_run)
+    if archive["verified"]:
+        log.archive_writes_pass += 1
+    else:
+        log.archive_writes_fail += 1
+        fm["status"] = "error"
+        if not dry_run:
+            new_content = bdi.serialize_frontmatter(fm, body if body else content)
+            s3_put_verified(s3, key, new_content, dry_run)
+        log.files_by_state["error"] += 1
+        log.files_error.append({"file": name, "error": f"archive_write_failed: {archive.get('error','?')}"})
+        log.errors.append(f"archive_write_failed for {name}: {archive.get('error','?')}")
+        log.reset_summary["files_reset_skipped"] += 1
+        return True  # had content, but errored
+
+    # Stage 4 — Extraction with per-section outcome tracking
+    section_outcomes: dict[str, dict] = {}
+    src_link_token = build_source_link(name, today)
+    all_tasks: list[str] = []
+    all_articles: list[str] = []
+    notes_written_total = 0
+    routed_questions: list[str] = []
+    routed_events: list[str] = []
+    routed_refs: list[str] = []
+    review_items: list[dict] = []
+
+    for header, sec_body in real_sections.items():
         stype = section_type(header)
+        outcome = {
+            "section": header,
+            "section_type": stype,
+            "items_extracted": 0,
+            "writes": [],
+            "verified": False,
+            "_targets": set(),
+        }
         logging.info(f"    [{stype}] {header}")
 
         if stype == "tasks":
-            # Regex extraction — deterministic, no API call needed
-            tasks = regex_extract_tasks(body, file_area)
+            tasks = regex_extract_tasks(sec_body, file_area)
             logging.info(f"      regex extracted {len(tasks)} task(s)")
-            # Try AI enhancement if client available (optional, improves quality)
             if client and len(tasks) == 0:
-                ai_tasks = extract_tasks_from_section(client, header, body, file_area, today)
+                ai_tasks = extract_tasks_with_ai_fallback(client, sec_body, file_area, today)
                 if ai_tasks:
                     tasks = ai_tasks
+                    log.ai_calls += 1
                     logging.info(f"      AI fallback extracted {len(tasks)} task(s)")
-            valid_tasks, rejections = quality_gate_tasks(tasks)
-            all_tasks.extend(valid_tasks)
-            log.quality_rejections.extend(rejections)
+            tasks = [_ensure_explore_tag(t) for t in tasks]
+            tasks = [t if "[source::" in t else f"{t} {src_link_token}" for t in tasks]
+            valid: list[str] = []
+            for t in tasks:
+                base = re.sub(r"\s*\[(explore|source)::[^\]]+\]\s*$", "", t).strip()
+                base = re.sub(r"\s*\[(explore|source)::[^\]]+\]\s*$", "", base).strip()
+                if validate_task_line(base):
+                    valid.append(t)
+                else:
+                    log.quality_rejections.append({"item": t[:80], "reason": "invalid canonical format"})
+            outcome["items_extracted"] = len(valid)
+            if valid:
+                outcome["_targets"] = {"mtl", "processed_file"}
+            all_tasks.extend(valid)
+
+            # Intent routing (questions/events/refs/review)
+            for raw_line in sec_body.splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith(("<!--", ">", "#", "*", "-", "|")):
+                    continue
+                if is_section_empty(line):
+                    continue
+                log.candidates_seen += 1
+                item = classify_intent(line, file_area_hint=file_area)
+                if item["intent"] == "action":
+                    continue
+                if confidence_gate(item) == "review_queue":
+                    log.low_confidence += 1
+                    item["task_line"] = (
+                        f"- [ ] {item['task']} [area:: {item['area']}] "
+                        f"[priority:: {item['priority']}] {src_link_token}"
+                    )
+                    review_items.append(item)
+                    continue
+                route = route_by_intent(item, source_file=name, today=today)
+                if route["destination"] == "daily_note":
+                    if route["section"] == "❓ Open Questions":
+                        routed_questions.append(route["task_line"])
+                    else:
+                        routed_events.append(route["task_line"])
+                    log.items_routed["daily_note"] += 1
+                elif route["destination"] == "captured_references":
+                    routed_refs.append(route["task_line"])
+                    log.items_routed["captured_references"] += 1
 
         elif stype == "articles":
-            # Extract raw URLs with regex (reliable, zero cost)
-            urls = re.findall(r'https?://[^\s\)\]]+', body)
-            articles = [f"- <{url}>" for url in urls if len(url) > 10]
-            all_articles.extend(articles)
+            urls = re.findall(r'https?://[^\s\)\]]+', sec_body)
+            section_articles = [f"- <{url}>" for url in urls if len(url) > 10]
+            outcome["items_extracted"] = len(section_articles)
+            if section_articles:
+                outcome["_targets"] = {"articles_queue"}
+            all_articles.extend(section_articles)
 
         elif stype == "notes":
-            # AI for notes (optional — skip if client unavailable)
+            section_note_writes: list[dict] = []
             if client:
-                notes = extract_notes_from_section(client, header, body, file_area, today)
+                notes = extract_notes_from_section(client, header, sec_body, file_area, today)
+                for note in notes:
+                    ok = write_note_file(s3, note, name, today, dry_run)
+                    section_note_writes.append({
+                        "target": "note_file",
+                        "key": note.get("key") or "note",
+                        "items": 1,
+                        "verified": bool(ok),
+                    })
+                    if ok:
+                        notes_written_total += 1
+                        log.notes_written += 1
+                        log.write_verifications_pass += 1
+                    else:
+                        log.write_verifications_fail += 1
+            outcome["items_extracted"] = len(section_note_writes)
+            outcome["writes"].extend(section_note_writes)
+
+        section_outcomes[header] = outcome
+
+    # Stage 5 — Aggregate writes (tasks → processed_file + MTL; articles → queue)
+    processed_file_result: dict | None = None
+    mtl_result: dict | None = None
+    articles_result: dict | None = None
+
+    if all_tasks:
+        slug = name.replace(".md", "").replace(" ", "-").replace("—", "").strip("-")
+        processed_key = f"{PROCESSED_PREFIX}{today}-{slug}-tasks.md"
+        proc_count = write_task_file(s3, all_tasks, name, file_area, today, dry_run)
+        proc_verified = bool(proc_count) or not bool(all_tasks)
+        if proc_verified and not dry_run:
+            try:
+                head = s3.head_object(Bucket=MINIO_BUCKET, Key=processed_key)
+                proc_verified = head["ContentLength"] > 0
+            except Exception:
+                proc_verified = False
+        processed_file_result = {
+            "target": "processed_file", "key": processed_key,
+            "items": len(all_tasks), "verified": proc_verified,
+        }
+        log.tasks_written += proc_count
+        if proc_verified:
+            log.write_verifications_pass += 1
+        else:
+            log.write_verifications_fail += 1
+
+        mtl_outcome = append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
+        mtl_result = {
+            "target": "mtl", "key": MTL_KEY,
+            "items": mtl_outcome["appended"],
+            "verified": mtl_outcome["verified"],
+        }
+        if mtl_outcome.get("error"):
+            mtl_result["error"] = mtl_outcome["error"]
+        if mtl_outcome["verified"]:
+            if mtl_outcome["appended"] > 0:
+                log.write_verifications_pass += 1
+                # ADR-0006: capture for the operator summary state file.
+                log.new_tasks_added.extend(mtl_outcome.get("new_tasks", []))
+        else:
+            log.write_verifications_fail += 1
+
+    if all_articles:
+        art_outcome = append_articles(s3, all_articles, today, dry_run)
+        articles_result = {
+            "target": "articles_queue", "key": ARTICLES_FILE,
+            "items": art_outcome["appended"],
+            "verified": art_outcome["verified"],
+        }
+        if art_outcome.get("error"):
+            articles_result["error"] = art_outcome["error"]
+        if art_outcome["verified"]:
+            log.articles_queued += art_outcome["appended"]
+            log.write_verifications_pass += 1
+        else:
+            log.write_verifications_fail += 1
+            logging.error(f"articles append failed: {art_outcome.get('error')}")
+
+    # Routed intent items — written inline; not part of receipt sections
+    # (they cross-cut the source sections). Tracked in log.items_routed.
+    if review_items and not dry_run:
+        append_to_review_queue(s3, review_items, today, name, dry_run)
+    if routed_questions and not dry_run:
+        append_to_daily_note(s3, today, "❓ Open Questions", routed_questions, dry_run)
+    if routed_events and not dry_run:
+        append_to_daily_note(s3, today, "📅 Events", routed_events, dry_run)
+    if routed_refs and not dry_run:
+        append_to_captured_references(s3, today, routed_refs, dry_run)
+
+    # Stage 6 — Populate section_outcomes.writes from aggregate results
+    for header, outcome in section_outcomes.items():
+        targets = outcome.get("_targets", set())
+        if "mtl" in targets and mtl_result:
+            outcome["writes"].append(mtl_result)
+        if "processed_file" in targets and processed_file_result:
+            outcome["writes"].append(processed_file_result)
+        if "articles_queue" in targets and articles_result:
+            outcome["writes"].append(articles_result)
+        # Compute verified from writes (or True if no items extracted to verify)
+        if outcome["writes"]:
+            outcome["verified"] = all(w["verified"] for w in outcome["writes"])
+        else:
+            outcome["verified"] = outcome["items_extracted"] == 0
+        outcome.pop("_targets", None)
+
+    # Stage 7 — Build receipt + write receipt (the gate)
+    started_iso = log.started_at or now_iso
+    receipt = bdi.build_receipt(
+        source={
+            "key": key,
+            "filename": name,
+            "content_hash": content_hash,
+            "size_bytes": len(content.encode("utf-8")),
+        },
+        run={
+            "workflow": "brain-dump-processor",
+            "run_id": f"{started_iso}-{name}",
+            "started_at": started_iso,
+            "finished_at": now_iso,
+            "executor": "python",
+            "no_reset": False,
+        },
+        archive=archive,
+        sections=list(section_outcomes.values()),
+    )
+    receipt_key = bdi.receipt_path(name, today_yyyymmdd, content_hash)
+    receipt_body = json.dumps(receipt, indent=2, ensure_ascii=False).encode("utf-8")
+    receipt_write = s3_put_receipt(s3, receipt_key, receipt_body, dry_run)
+    if receipt_write["verified"]:
+        log.receipts_written += 1
+    else:
+        # Receipt write failed → no clearing. status=error.
+        fm["status"] = "error"
+        if not dry_run:
+            new_content = bdi.serialize_frontmatter(fm, body if body else content)
+            s3_put_verified(s3, key, new_content, dry_run)
+        log.files_by_state["error"] += 1
+        log.files_error.append({"file": name, "error": "receipt_write_failed"})
+        log.errors.append(f"receipt_write_failed for {name}")
+        log.reset_summary["files_reset_skipped"] += 1
+        return True
+
+    # Stage 8 — Compute new frontmatter from receipt summary
+    final_status = receipt["summary"]["final_status"]
+    fm["status"] = final_status
+    fm["last_receipt"] = (
+        receipt_key[len("99_System/"):] if receipt_key.startswith("99_System/") else receipt_key
+    )
+    if final_status == "extracted":
+        fm["last_processed"] = now_iso
+        fm["last_processed_hash"] = content_hash
+        fm["last_partial_reasons"] = []
+    elif final_status == "partial":
+        fm["last_partial_reasons"] = [
+            {"section": s["section"], "reason": _section_reason(s), "dt": now_iso}
+            for s in section_outcomes.values() if not s.get("verified")
+        ]
+
+    # Stage 9 — Apply gated reset
+    new_source_content = bdi.apply_reset(
+        content=content,
+        receipt=receipt,
+        new_frontmatter=fm,
+        section_template_for=section_template_for,
+    )
+    if not dry_run:
+        s3_put_verified(s3, key, new_source_content, dry_run)
+    logging.info(f"  → Reset gated: status={final_status}")
+
+    # Stage 10 — Bookkeeping
+    log.items_extracted += len(all_tasks) + notes_written_total + len(all_articles)
+    log.files_by_state[final_status] += 1
+    if final_status == "extracted":
+        log.files_extracted.append(name)
+        log.reset_summary["files_reset_full"] += 1
+    elif final_status == "partial":
+        log.files_partial.append({
+            "file": name,
+            "reasons": fm.get("last_partial_reasons", []),
+        })
+        log.reset_summary["files_reset_partial"] += 1
+    log.files_processed.append(name)
+    logging.info(
+        f"  → Done: {len(all_tasks)} tasks, {notes_written_total} notes, "
+        f"{len(all_articles)} articles, status={final_status}"
+    )
+    return True
+
+
+def _section_reason(section: dict) -> str:
+    """Extract a human-readable failure reason for a partial-state section."""
+    failed = [w for w in section.get("writes", []) if not w.get("verified")]
+    if failed:
+        return failed[0].get("error") or f"{failed[0].get('target', '?')} write unverified"
+    return "unknown"
+
+
+def _extract_no_reset(s3, client, name, key, content, body, fm,
+                      real_sections, file_area, today, log, dry_run) -> bool:
+    """`--no-reset` extraction path: writes outputs, heartbeat-only frontmatter.
+
+    No archive write. No receipt. No section clearing. Frontmatter status
+    stays `has_content` (we found content but did not gate-process it).
+    Used during P0 backlog drain and any time we want value-extraction
+    without integrity gates.
+    """
+    src_link_token = build_source_link(name, today)
+    all_tasks: list[str] = []
+    all_articles: list[str] = []
+    notes_written_total = 0
+    routed_questions: list[str] = []
+    routed_events: list[str] = []
+    routed_refs: list[str] = []
+    review_items: list[dict] = []
+
+    for header, sec_body in real_sections.items():
+        stype = section_type(header)
+        if stype == "tasks":
+            tasks = regex_extract_tasks(sec_body, file_area)
+            if client and len(tasks) == 0:
+                ai_tasks = extract_tasks_with_ai_fallback(client, sec_body, file_area, today)
+                if ai_tasks:
+                    tasks = ai_tasks
+                    log.ai_calls += 1
+            tasks = [_ensure_explore_tag(t) for t in tasks]
+            tasks = [t if "[source::" in t else f"{t} {src_link_token}" for t in tasks]
+            for t in tasks:
+                base = re.sub(r"\s*\[(explore|source)::[^\]]+\]\s*$", "", t).strip()
+                base = re.sub(r"\s*\[(explore|source)::[^\]]+\]\s*$", "", base).strip()
+                if validate_task_line(base):
+                    all_tasks.append(t)
+                else:
+                    log.quality_rejections.append({"item": t[:80], "reason": "invalid canonical format"})
+            for raw_line in sec_body.splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith(("<!--", ">", "#", "*", "-", "|")):
+                    continue
+                if is_section_empty(line):
+                    continue
+                log.candidates_seen += 1
+                item = classify_intent(line, file_area_hint=file_area)
+                if item["intent"] == "action":
+                    continue
+                if confidence_gate(item) == "review_queue":
+                    log.low_confidence += 1
+                    item["task_line"] = (
+                        f"- [ ] {item['task']} [area:: {item['area']}] "
+                        f"[priority:: {item['priority']}] {src_link_token}"
+                    )
+                    review_items.append(item)
+                    continue
+                route = route_by_intent(item, source_file=name, today=today)
+                if route["destination"] == "daily_note":
+                    if route["section"] == "❓ Open Questions":
+                        routed_questions.append(route["task_line"])
+                    else:
+                        routed_events.append(route["task_line"])
+                    log.items_routed["daily_note"] += 1
+                elif route["destination"] == "captured_references":
+                    routed_refs.append(route["task_line"])
+                    log.items_routed["captured_references"] += 1
+        elif stype == "articles":
+            urls = re.findall(r'https?://[^\s\)\]]+', sec_body)
+            for url in urls:
+                if len(url) > 10:
+                    all_articles.append(f"- <{url}>")
+        elif stype == "notes":
+            if client:
+                notes = extract_notes_from_section(client, header, sec_body, file_area, today)
                 for note in notes:
                     ok = write_note_file(s3, note, name, today, dry_run)
                     if ok:
-                        notes_written += 1
+                        notes_written_total += 1
                         log.notes_written += 1
                         log.write_verifications_pass += 1
                     else:
                         log.write_verifications_fail += 1
 
-    # Stage 6: Verified writes
     tasks_written = write_task_file(s3, all_tasks, name, file_area, today, dry_run)
     log.tasks_written += tasks_written
-    log.items_extracted += tasks_written + notes_written + len(all_articles)
-    if tasks_written > 0:
-        log.write_verifications_pass += 1
-
+    if all_tasks:
+        # --no-reset path: we don't gate on the result (sources stay untouched
+        # regardless), but the function now returns dict — capture for stats.
+        no_reset_mtl = append_tasks_to_mtl(s3, all_tasks, name, today, dry_run)
+        if no_reset_mtl.get("verified") and no_reset_mtl.get("appended", 0) > 0:
+            log.new_tasks_added.extend(no_reset_mtl.get("new_tasks", []))
     if all_articles:
-        append_articles(s3, all_articles, today, dry_run)
-        log.articles_queued += len(all_articles)
-        log.write_verifications_pass += 1
+        art_outcome = append_articles(s3, all_articles, today, dry_run)
+        if art_outcome.get("verified"):
+            log.articles_queued += art_outcome["appended"]
+    if review_items and not dry_run:
+        append_to_review_queue(s3, review_items, today, name, dry_run)
+    if routed_questions and not dry_run:
+        append_to_daily_note(s3, today, "❓ Open Questions", routed_questions, dry_run)
+    if routed_events and not dry_run:
+        append_to_daily_note(s3, today, "📅 Events", routed_events, dry_run)
+    if routed_refs and not dry_run:
+        append_to_captured_references(s3, today, routed_refs, dry_run)
 
-    # Reset extracted sections to empty template (ready for user to fill again)
-    extracted_headers = list(real_sections.keys())
-    updated_content = reset_to_template(content, extracted_headers, today)
+    log.items_extracted += tasks_written + notes_written_total + len(all_articles)
+    fm["status"] = "has_content"
     if not dry_run:
-        s3_put_verified(s3, key, updated_content, dry_run)
-        logging.info(f"  → Reset {len(extracted_headers)} section(s) to empty template")
-
+        new_content = bdi.serialize_frontmatter(fm, body if body else content)
+        s3_put_verified(s3, key, new_content, dry_run)
+    log.files_by_state["has_content"] += 1
     log.files_processed.append(name)
-    logging.info(f"  → Done: {tasks_written} tasks, {notes_written} notes, {len(all_articles)} articles")
+    logging.info(
+        f"  → [no-reset] heartbeat updated; source body untouched. "
+        f"{tasks_written} tasks, {notes_written_total} notes, {len(all_articles)} articles"
+    )
     return True
 
 
@@ -720,6 +2086,8 @@ def main():
     parser = argparse.ArgumentParser(description="Process brain dump files from MinIO")
     parser.add_argument("--dry-run", action="store_true", help="Parse and log without writing")
     parser.add_argument("--file", help="Process only this specific filename")
+    parser.add_argument("--no-reset", action="store_true",
+                        help="Extract tasks/articles/notes to vault but leave source brain-dump files untouched (safe drain mode)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -757,7 +2125,8 @@ def main():
     logging.info(f"Discovered {len(all_files)} brain dump file(s)")
 
     for file_info in all_files:
-        had_content = process_file(s3, client, file_info, log, today, args.dry_run)
+        had_content = process_file(s3, client, file_info, log, today, args.dry_run,
+                                    no_reset=args.no_reset)
         if had_content:
             log.files_with_content += 1
 
@@ -768,7 +2137,16 @@ def main():
     log.status = "success" if not log.errors else "partial"
 
     write_run_log(s3, log, args.dry_run)
+    # ADR-0006: persist a decoupled operator-summary state file for the
+    # daily command center. Best-effort — never fails the run.
+    try:
+        write_operator_summary(s3, log, args.dry_run)
+    except Exception as e:
+        logging.warning(f"operator summary write failed (non-fatal): {e}")
 
+    # Summary shape designed for the OHO runner / n8n HTTP consumer.
+    # Includes the P1 integrity-layer counters so the digest email can show
+    # per-state breakdown instead of just totals.
     result = {
         "status": log.status,
         "files_discovered": log.files_discovered,
@@ -776,11 +2154,24 @@ def main():
         "tasks_written": log.tasks_written,
         "notes_written": log.notes_written,
         "articles_queued": log.articles_queued,
+        "receipts_written": log.receipts_written,
+        "archive_writes_pass": log.archive_writes_pass,
+        "archive_writes_fail": log.archive_writes_fail,
+        "files_by_state": log.files_by_state,
+        "files_extracted": log.files_extracted,
+        "files_partial": log.files_partial,
+        "files_error": log.files_error,
+        "reset_summary": log.reset_summary,
         "duration_ms": log.duration_ms,
         "errors": log.errors,
     }
     print(json.dumps(result, indent=2))
-    sys.exit(0 if log.status == "success" else 1)
+    # Exit 0 unless something prevented the run end-to-end.
+    # Per-file failures (partial, error) are reported in the JSON, not via
+    # the exit code — the runner reports non-zero separately, and we only want
+    # that on environment-level problems (MinIO unreachable, creds missing,
+    # etc.) which already exit 1 above before we get here.
+    sys.exit(0)
 
 
 if __name__ == "__main__":
