@@ -46,6 +46,20 @@ Tailscale serve already gives n8n a public-TLD HTTPS hostname → Google accepts
 
 CI gate at `.github/workflows/audit-pr.yml` is live; sticky failure comment added 2026-05-25 (`1fc577a`). Pre-commit hook at `.githooks/pre-commit` installable via `make hooks-install`.
 
+### 4b. (Optional) Provision real storage for `/mnt/ssd-storage` — only if Immich is wanted
+
+The 2026-06-05 ENOSPC incident was caused by `sync-photos-nas-to-ssd.sh` (cron `0 3 * * 3,6`)
+copying 48G of NAS photos onto a "local SSD" that doesn't exist → it landed on `pve-root` and
+filled the OS disk. **The cron is now DISABLED** (commented in `root@pve` crontab; backup at
+`/root/crontab.bak.20260605-ohofix`); photos remain safe on the Synology NAS. No action needed
+unless you want a local Immich library. If so:
+
+1. Carve a dedicated LV from the 816G `pve-data` thin pool, `mkfs.ext4`, mount at `/mnt/ssd-storage`, add to fstab.
+2. Enable the `ssd-fast` Proxmox storage (remove `disable` in `/etc/pve/storage.cfg`).
+3. Re-enable the photo-sync cron line on `pve`.
+
+Until then: leave disabled. Full write-up: `docs/session-logs/2026-06-05-enospc-host-root-disk-full.md`; playbook in RUNBOOK § Disk-Full.
+
 ### 5. MTL backfill dry-run
 
 ```bash

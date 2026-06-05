@@ -1,6 +1,6 @@
 # OHO — Current State (canonical)
 
-**As of:** 2026-05-27 (Wed) — P0.5 soak EXITED 2026-05-18; foundation deepening continues
+**As of:** 2026-06-05 (Fri) — host-disk ENOSPC incident resolved (pve-root 100%→43%); foundation deepening continues
 **Branch:** `polish/prod-ready` · **PR:** [#2](https://github.com/GRsoldier7/My_Obsidian/pull/2) open + MERGEABLE
 **Commits ahead of `master`:** 85 (polish/prod-ready) + isolated branch `feature/phase-c-f-skeletons` carrying Phase C+F skeletons (63 tests)
 **Soak status:** ✅ CLEARED 2026-05-18 (Day 7 brain-dump-processor `status: success`); Aaron's Wave-X H3 dashboard + CI hardening landed 2026-05-25.
@@ -15,7 +15,7 @@ Last refresh: 2026-05-27 (auto-regenerable from `make audit-all` + `git rev-list
 
 | Metric | Value | Source |
 |---|---|---|
-| Commits ahead of `master` (polish/prod-ready) | **94** | `git rev-list --left-right --count master...HEAD` |
+| Commits ahead of `master` (polish/prod-ready) | **126** | `git rev-list --left-right --count master...HEAD` |
 | Test suite (`make verify` scope) | **676 pass + 7 skip** | `make verify` |
 | Offline audits | **12 green** | see below |
 | Active n8n workflows | **14** | `workflows/n8n/*.json` (job-search quarantined) |
@@ -51,6 +51,7 @@ Run all in one shot: `make audit-all`. Pre-PR gate: `make verify` (audit-all + u
 - **CI gate** — `.github/workflows/audit-pr.yml` runs every audit + unit tests on every PR + push to `master` / `polish/prod-ready`.
 - **Pre-commit hook** — `.githooks/pre-commit` runs the offline audit subset before every commit. Activate per-clone with `git config core.hooksPath .githooks`.
 - **`make verify`** — fast local pre-PR gate (audit-all + unit tests, ≤2s warm).
+- **Disk-error canary (2026-06-05)** — `health_check.py::check_n8n_disk_errors` FAILs on any ENOSPC in n8n executions within 24h, catching a full disk regardless of which filesystem fills (the older execution-count canary watched a proxy and was blind to host-disk fills). n8n pruning now ON (`EXECUTIONS_DATA_PRUNE`). Root cause + playbook: RUNBOOK § Disk-Full; full write-up `docs/session-logs/2026-06-05-enospc-host-root-disk-full.md`.
 
 ---
 

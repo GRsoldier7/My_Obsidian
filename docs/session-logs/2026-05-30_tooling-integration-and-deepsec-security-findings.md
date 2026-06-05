@@ -89,3 +89,25 @@ Researched in parallel (5 agents), then decided with the operator.
 - [ ] Scratch staged at `/tmp/deepsec-target` + `/tmp/deepsec-tools` (ephemeral; `.deepsec` workspace holds both registered projects).
 
 **Operator-manual (not automatable by Claude):** Claude-in-Chrome extension install; any further `pnpm deepsec process` runs (classifier-gated).
+
+---
+
+## Addendum — 2026-05-31: n8n disk-full (ENOSPC) incident
+
+Separate from the tooling work, error emails arrived: "🚨 n8n Error: 📚 Article
+Processor — Parse URLs". Real error was **`ENOSPC: no space left on device`** on
+the CT-202 LXC — n8n could not `mkdir` an execution's binaryData dir. Not a code
+bug; the disk was full from ~860 unpruned execution binaryData artifacts (oldest
+2026-05-17, no pruning configured).
+
+**Fix applied (this session):**
+- Deleted 685 executions older than 3 days via the n8n API (0 failures) → freed
+  their on-disk binaryData → newest execution then returned `status: success`.
+- Added an early-warning canary `check_n8n_execution_backlog()` to
+  `scripts/health_check.py` (PASS <1200, WARN ≥1200, FAIL ≥2500 retained) + 5 tests.
+- Documented the full playbook in `docs/RUNBOOK.md` § Disk-Full / Execution Pruning.
+
+**Operator action still required:** enable pruning on CT-202 —
+`EXECUTIONS_DATA_PRUNE=true`, `EXECUTIONS_DATA_MAX_AGE=168`,
+`EXECUTIONS_DATA_PRUNE_MAX_COUNT=500`, then recreate the n8n container. Until
+then the backlog will slowly regrow (canary will WARN first).

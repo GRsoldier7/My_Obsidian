@@ -36,6 +36,13 @@ _RUNNER_TIMEOUT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_DISK_FULL_RE = re.compile(
+    r"ENOSPC"
+    r"|no space left on device"
+    r"|disk (?:is )?full",
+    re.IGNORECASE,
+)
+
 REQUIRED_VAULT_FILES = [
     "000_Master Dashboard/North Star.md",
     "10_Active Projects/Active Personal/!!! MASTER TASK LIST.md",
@@ -283,6 +290,182 @@ def check_n8n_task_runner_recent_errors() -> HealthResult:
     )
 
 
+# Execution-backlog canary. binaryData accrues on the n8n LXC disk per
+# execution (filesystem mode), so retained-execution count is a shell-free
+# proxy for disk pressure. With EXECUTIONS_DATA_PRUNE on (cap 500) the steady
+# state is a few hundred. Crossing these means pruning is off / disk is at
+# risk — the 2026-05-31 ENOSPC incident hit ~860 with no pruning.
+EXEC_BACKLOG_WARN = 1200
+EXEC_BACKLOG_FAIL = 2500
+_EXEC_BACKLOG_MAX_PAGES = 40   # 250/page → caps the scan at 10k
+
+
+def check_n8n_execution_backlog() -> HealthResult:
+    """
+    Count retained n8n executions as a disk-pressure early-warning.
+
+    Behavior:
+      - PASS → backlog under EXEC_BACKLOG_WARN (or N8N_API_KEY not set: skipped-PASS)
+      - WARN → backlog >= EXEC_BACKLOG_WARN — pruning likely off; set
+               EXECUTIONS_DATA_PRUNE (RUNBOOK § Disk-Full / Execution Pruning)
+      - FAIL → backlog >= EXEC_BACKLOG_FAIL — disk fill imminent; prune now
+    """
+    if not N8N_API_KEY:
+        return HealthResult(
+            component="n8n_execution_backlog",
+            status="pass",
+            message="Skipped (N8N_API_KEY not set)",
+            details={"reason": "no_api_key"},
+        )
+
+    total = 0
+    cursor = None
+    try:
+        for _ in range(_EXEC_BACKLOG_MAX_PAGES):
+            params = {"limit": 250}
+            if cursor:
+                params["cursor"] = cursor
+            r = requests.get(
+                f"{N8N_HOST}/api/v1/executions",
+                params=params,
+                headers={"X-N8N-API-KEY": N8N_API_KEY},
+                timeout=15,
+            )
+            r.raise_for_status()
+            body = r.json()
+            total += len(body.get("data", []))
+            cursor = body.get("nextCursor")
+            if not cursor:
+                break
+    except Exception as e:
+        return HealthResult(
+            component="n8n_execution_backlog",
+            status="warn",
+            message=f"Could not count n8n executions: {e}",
+            details={"error": str(e)},
+        )
+
+    capped = bool(cursor)  # still more pages than we scanned
+    if total >= EXEC_BACKLOG_FAIL:
+        status, msg = "fail", f"{total}{'+' if capped else ''} executions retained — disk fill imminent, prune now"
+    elif total >= EXEC_BACKLOG_WARN:
+        status, msg = "warn", f"{total} executions retained — enable EXECUTIONS_DATA_PRUNE"
+    else:
+        status, msg = "pass", f"{total} executions retained (under {EXEC_BACKLOG_WARN})"
+    return HealthResult(
+        component="n8n_execution_backlog",
+        status=status,
+        message=msg,
+        details={"retained": total, "scan_capped": capped,
+                 "warn_at": EXEC_BACKLOG_WARN, "fail_at": EXEC_BACKLOG_FAIL,
+                 "fix": "RUNBOOK § Disk-Full / Execution Pruning"},
+    )
+
+
+def check_n8n_disk_errors() -> HealthResult:
+    """
+    Scan recent failed executions for disk-full (ENOSPC) errors.
+
+    This watches the *actual* failure mode directly, unlike
+    check_n8n_execution_backlog which only counts retained executions as a
+    proxy for disk pressure. In the 2026-06-05 incident the Proxmox HOST root
+    LV filled (a stale 48G photo-sync copy + unrotated backups) — NOT the n8n
+    binaryData itself — so the backlog count stayed green (~220) while every
+    binary-writing workflow failed ENOSPC for days. A symptom-level canary
+    catches that regardless of which filesystem fills.
+
+    Behavior:
+      - PASS → no ENOSPC errors (or N8N_API_KEY not set: skipped-PASS)
+      - WARN → ENOSPC error(s) older than 24h (a disk has since recovered)
+      - FAIL → ENOSPC error(s) within last 24h (a disk is full NOW)
+    """
+    if not N8N_API_KEY:
+        return HealthResult(
+            component="n8n_disk_errors",
+            status="pass",
+            message="Skipped (N8N_API_KEY not set)",
+            details={"reason": "no_api_key"},
+        )
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    recent: list[dict] = []
+    older_count = 0
+
+    try:
+        r = requests.get(
+            f"{N8N_HOST}/api/v1/executions",
+            params={"status": "error", "limit": 50},
+            headers={"X-N8N-API-KEY": N8N_API_KEY},
+            timeout=10,
+        )
+        r.raise_for_status()
+        execs = r.json().get("data", [])
+    except Exception as e:
+        return HealthResult(
+            component="n8n_disk_errors",
+            status="warn",
+            message=f"Could not query n8n executions API: {e}",
+            details={"error": str(e)},
+        )
+
+    for ex in execs:
+        ex_id = ex.get("id")
+        if not ex_id:
+            continue
+        try:
+            d = requests.get(
+                f"{N8N_HOST}/api/v1/executions/{ex_id}",
+                params={"includeData": "true"},
+                headers={"X-N8N-API-KEY": N8N_API_KEY},
+                timeout=10,
+            ).json()
+        except Exception:
+            continue
+        err = d.get("data", {}).get("resultData", {}).get("error", {}) or {}
+        msg = err.get("message", "") or ""
+        if not _DISK_FULL_RE.search(msg):
+            continue
+        started = ex.get("startedAt") or d.get("startedAt") or ""
+        try:
+            dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            dt = None
+        record = {
+            "execution_id": ex_id,
+            "started_at": started,
+            "workflow_id": ex.get("workflowId"),
+            "error": msg[:200],
+        }
+        if dt and dt >= cutoff:
+            recent.append(record)
+        else:
+            older_count += 1
+
+    if recent:
+        return HealthResult(
+            component="n8n_disk_errors",
+            status="fail",
+            message=(f"{len(recent)} disk-full (ENOSPC) error(s) in last 24h "
+                     "— verify `df -h` (a disk filled recently)"),
+            details={"recent": recent, "older_count": older_count,
+                     "fix": "RUNBOOK § Disk-Full — check `df -h /` on the "
+                            "Proxmox host (pve-root), not just n8n binaryData"},
+        )
+    if older_count:
+        return HealthResult(
+            component="n8n_disk_errors",
+            status="warn",
+            message=f"{older_count} historical ENOSPC error(s) — none in last 24h",
+            details={"older_count": older_count},
+        )
+    return HealthResult(
+        component="n8n_disk_errors",
+        status="pass",
+        message="No disk-full (ENOSPC) errors in recent executions",
+        details={"checked": len(execs)},
+    )
+
+
 def run_all_checks() -> list[HealthResult]:
     return [
         check_minio(),
@@ -290,6 +473,8 @@ def run_all_checks() -> list[HealthResult]:
         check_vault_files(),
         check_brain_dumps(),
         check_n8n_task_runner_recent_errors(),
+        check_n8n_execution_backlog(),
+        check_n8n_disk_errors(),
     ]
 
 

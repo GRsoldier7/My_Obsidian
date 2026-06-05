@@ -13,6 +13,7 @@
 5. [Credential Rotation Playbook](#credential-rotation-playbook)
 6. [Common Failures & Decision Tree](#common-failures--decision-tree)
 7. [Task-Runner Recovery](#task-runner-recovery)
+7a. [Disk-Full / Execution Pruning](#disk-full--execution-pruning)
 8. [Task-Runner Scheduling Slots](#task-runner-scheduling-slots)
 9. [Re-deploy from Scratch](#re-deploy-from-scratch)
 10. [Bitwarden MCP Session Refresh](#bitwarden-mcp-session-refresh)
@@ -365,6 +366,131 @@ job. Recovery order:
    N8N_RUNNERS_MAX_CONCURRENCY=8         # default 5; only raise if 5+ Code nodes overlap
    ```
    Then `docker restart n8n` and re-verify with `health_check.py`.
+
+---
+
+## Disk-Full / Execution Pruning
+
+n8n stores each execution's binary artifacts on the CT-202 LXC disk
+(`/home/node/.n8n/binaryData/`, filesystem mode). Without pruning these
+accumulate forever. When the disk fills, **every** binary-writing workflow
+fails — not just one — at the point n8n tries to create the execution's
+binaryData dir:
+
+```
+ENOSPC: no space left on device,
+  mkdir '/home/node/.n8n/binaryData/workflows/<wfId>/executions/<n>'
+```
+
+The error surfaces inside whatever Code node runs first (e.g. "Parse URLs" in
+the Article Processor), so it *looks* like a code bug. It is not — it is disk.
+
+**CRITICAL — the disk is NOT n8n's.** `/home/node/.n8n` is a bind mount
+(`/data` in CT-202) backed by the **Proxmox HOST root LV `pve-root`** (subpath
+`/srv/data/n8n`). So binaryData writes fail ENOSPC whenever **pve-root** fills —
+*for any reason, n8n or not*. The execution-count canary is a proxy for n8n's
+own footprint only; it is **blind to non-n8n hogs on pve-root**. Always check
+`pct exec 202 -- df -h /data` (== `df -h /` on pve) before assuming n8n.
+
+**Incidents of record:**
+- 2026-05-31 — ~860 unpruned executions (n8n's own binaryData) filled the disk.
+- **2026-06-05 — pve-root (96G) hit 100% from NON-n8n causes:** a stale **48G
+  photo-sync copy** at `/mnt/ssd-storage/immich-library` (a `0 3 * * 3,6`
+  `sync-photos-nas-to-ssd.sh` cron copying the NAS photo library onto a "local
+  SSD" that doesn't exist → landed on pve-root) + ~21G unrotated backups. n8n
+  binaryData was only 1.2G. The execution-count canary stayed green (~220).
+  Fix: deleted the verified-duplicate photo copy (NAS is authoritative),
+  rotated backups, **disabled the photo-sync cron** (commented in root's
+  crontab on pve; backup at `/root/crontab.bak.20260605-ohofix`), enabled n8n
+  pruning, added the `n8n_disk_errors` symptom-canary. Photo-sync stays
+  disabled until a real LV is carved from `pve-data` (816G pool) for
+  `/mnt/ssd-storage`.
+
+**Container name:** the n8n container is `n8n-n8n-1` (compose project at
+`/opt/n8n` inside CT-202), NOT `n8n`. Use `docker exec n8n-n8n-1 …`.
+
+**Symptom canary (added 2026-06-05):** `health_check.py::check_n8n_disk_errors`
+scans recent executions for ENOSPC and FAILs if any occurred in the last 24h —
+catching a full disk regardless of which filesystem fills. A FAIL that persists
+after `df -h` shows headroom is just the 24h lag clearing to PASS.
+
+### 1. Confirm it's disk, not code
+
+The early-warning canary is wired into the health check
+([scripts/health_check.py](../scripts/health_check.py)):
+
+```bash
+set -a && source .env && set +a
+python3 scripts/health_check.py
+#   [n8n_execution_backlog]:
+#     PASS = under 1200 retained
+#     WARN = >=1200  → pruning is off; do step 3
+#     FAIL = >=2500  → disk fill imminent; do steps 2 + 3 now
+```
+
+If an error email already arrived, grep it for `ENOSPC` to confirm.
+
+### 2. Immediate relief — free disk by deleting old executions
+
+Deleting an execution via the n8n API also removes its on-disk binaryData.
+This runs from any host that can reach the n8n API (needs `N8N_API_KEY`):
+
+```bash
+set -a && source .env && set +a
+python3 - <<'PY'
+import urllib.request, json, os, datetime as dt
+KEY=os.environ['N8N_API_KEY']; BASE="http://192.168.1.121:5678/api/v1"
+H={"X-N8N-API-KEY":KEY}
+def api(m,u): return urllib.request.urlopen(urllib.request.Request(u,headers=H,method=m),timeout=20)
+CUTOFF_DAYS=3                                   # keep last N days
+cutoff=dt.datetime.now(dt.timezone.utc)-dt.timedelta(days=CUTOFF_DAYS)
+ids=[]; cursor=None
+while True:
+    u=f"{BASE}/executions?limit=250"+(f"&cursor={cursor}" if cursor else "")
+    d=json.load(api("GET",u))
+    for e in d.get('data',[]):
+        s=e.get('startedAt')
+        if s and dt.datetime.fromisoformat(s.replace('Z','+00:00'))<cutoff: ids.append(e['id'])
+    cursor=d.get('nextCursor')
+    if not cursor: break
+ok=0
+for eid in ids:
+    try: api("DELETE",f"{BASE}/executions/{eid}"); ok+=1
+    except Exception: pass
+print(f"deleted {ok}/{len(ids)} executions older than {CUTOFF_DAYS}d")
+PY
+```
+
+Verify recovery: `python3 scripts/health_check.py` → backlog drops, and the
+newest execution shows `status: success`.
+
+### 3. Permanent fix — enable pruning on CT-202 (operator)
+
+The n8n container env lives on the box, so this is a host action (same
+`ssh proxmox 'pct exec 202 …'` path as Task-Runner Recovery):
+
+```bash
+# Inspect current state:
+ssh proxmox 'pct exec 202 -- docker inspect n8n --format "{{ range .Config.Env }}{{ println . }}{{ end }}"' | grep -i EXEC
+
+# Add to the n8n service env (compose / .env on the LXC), then recreate:
+#   EXECUTIONS_DATA_PRUNE=true
+#   EXECUTIONS_DATA_MAX_AGE=168          # hours = 7 days
+#   EXECUTIONS_DATA_PRUNE_MAX_COUNT=500
+ssh proxmox 'pct exec 202 -- bash -lc "cd <compose-dir> && docker compose up -d n8n"'
+
+# Confirm it took + pruned on startup:
+ssh proxmox 'pct exec 202 -- docker inspect n8n --format "{{ range .Config.Env }}{{ println . }}{{ end }}"' | grep -i EXEC
+ssh proxmox 'pct exec 202 -- docker logs --since 5m n8n 2>&1 | grep -iE "prun|binary"'
+
+# Disk headroom check:
+ssh proxmox 'pct exec 202 -- df -h /'
+ssh proxmox 'pct exec 202 -- docker exec n8n du -sh /home/node/.n8n/binaryData'
+```
+
+After this, n8n prunes executions + their binaryData older than 7 days (cap
+500), and `[n8n_execution_backlog]` stays green. If `df -h` is still near-full
+*after* pruning, look for a second hog (Docker logs, postgres WAL).
 
 ---
 
